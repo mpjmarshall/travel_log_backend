@@ -123,7 +123,7 @@ var (
 // GOOS/GOARCH ARE THE WHOLE REASON THE DAEMON'S ARCHITECTURE IS READ FIRST: the
 // host is darwin/arm64 and the container is linux/arm64, and a probe built for
 // the host produces "exec /probe: exec format error" — measured, on the first
-// run. CGO_ENABLED=0 is set for the same reason deploy/Dockerfile sets it:
+// run. CGO_ENABLED=0 is set for the same reason the root Dockerfile sets it:
 // scratch has no libc.
 func probeImage(t *testing.T, embedTzdata bool) string {
 	t.Helper()
@@ -225,7 +225,7 @@ func TestTheContainerProcessRunsAsTheNumericUser(t *testing.T) {
 			t.Errorf("%s = 0: the container is running as root", key)
 		}
 		if n != 65532 {
-			t.Errorf("%s = %d, want 65532 (deploy/Dockerfile's USER)", key, n)
+			t.Errorf("%s = %d, want 65532 (the root Dockerfile's USER)", key, n)
 		}
 	}
 }

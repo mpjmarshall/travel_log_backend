@@ -161,7 +161,7 @@ func findRepoRoot() (string, error) {
 	return root, nil
 }
 
-// image builds deploy/Dockerfile once per test binary and returns the tag.
+// image builds the root Dockerfile once per test binary and returns the tag.
 func image(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
@@ -172,7 +172,7 @@ func image(t *testing.T) string {
 		root := repoRoot(t)
 		builtTag = imageTag
 		_, buildErr = runIn(root, buildTimeout, "docker", "build",
-			"-f", filepath.Join(root, "deploy", "Dockerfile"),
+			"-f", filepath.Join(root, "Dockerfile"),
 			"-t", imageTag, root)
 	})
 	if buildErr != nil {

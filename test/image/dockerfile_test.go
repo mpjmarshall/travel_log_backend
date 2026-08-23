@@ -1,5 +1,5 @@
 // What the runtime image IS, read off the built artefact rather than off the
-// Dockerfile's text. A grep of deploy/Dockerfile can only prove that somebody
+// Dockerfile's text. A grep of the Dockerfile can only prove that somebody
 // typed a line; these legs prove the line survived the build — which is a
 // different claim, and the one that matters when a base image, a COPY path or
 // a build flag changes underneath it.
@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// The four things `scratch` does not supply, per deploy/Dockerfile's own
+// The four things `scratch` does not supply, per the root Dockerfile's own
 // comment. These constants are the paths those compensations land at.
 const (
 	caBundlePath = "etc/ssl/certs/ca-certificates.crt"
@@ -162,7 +162,7 @@ func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 // interval overlaps probes rather than spacing them, and a probe that never
 // finishes before the next one starts turns a slow dependency into a
 // permanently pending health status. And the timeout must leave room for the
-// flag's own budget: deploy/Dockerfile documents four budgets that must nest,
+// flag's own budget: the root Dockerfile documents four budgets that must nest,
 // innermost first — /healthz's database ping < the probe's request < this
 // timeout < this interval. Only the outer two relations are checked here; the
 // inner two are constants in cmd/api, another package's to change, and a leg

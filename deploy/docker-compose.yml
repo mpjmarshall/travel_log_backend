@@ -24,7 +24,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: Dockerfile
     environment:
       # Read by internal/config from VS2. The api reaches the database over
       # the compose network by service name, never over the published port.
@@ -49,7 +49,7 @@ services:
     # actually used its allowance was SIGKILLed at exactly the boundary: the
     # graceful path's last moments are the ones that got killed, and from VS2
     # an in-flight request is a write to Postgres. 15s leaves 5s of slack.
-    # Same ordering rule as the HEALTHCHECK budgets in deploy/Dockerfile —
+    # Same ordering rule as the HEALTHCHECK budgets in the root Dockerfile —
     # whoever is being supervised gets the smaller number.
     stop_grace_period: 15s
 
@@ -109,9 +109,9 @@ services:
           "CMD-SHELL",
           "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-travellog} -d ${POSTGRES_DB:-travellog}",
         ]
-      interval: 2s
-      timeout: 3s
-      retries: 30
+      interval: 3s
+      timeout: 2s
+      retries: 20
       start_period: 5s
     restart: unless-stopped
 

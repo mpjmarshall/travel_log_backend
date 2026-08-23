@@ -2373,3 +2373,36 @@ the MISS as "the leg is weak" would have been the wrong conclusion.
   `0001_init.up.sql` out of the `CREATE TABLE` parentheses to a block above the
   table. The sheet line each foreign key implements is still beside it; it is
   now above the table rather than inside it.
+
+### Divergence 3 — the Dockerfile is at the repository root
+
+`go_backend.md` L17 names the Standard Go Project Layout. That layout puts Dockerfiles in
+`build/package/` and orchestration in `deployments/`. **Both are among its most widely
+ignored conventions** — open almost any production Go service and the Dockerfile is at the
+root — and the Go team has distanced itself from the layout generally.
+
+So: **`Dockerfile` at the repository root**, `deploy/` keeps its name, `migrations/` stays
+at root. Recorded here as a deliberate divergence rather than left as an unrecorded
+deviation, which is the point: a divergence register is only worth reading if nothing is
+missing from it, and three deviations were sitting unrecorded beside two carefully
+recorded ones.
+
+A move was queued in the opposite direction and **withdrawn before application** — it
+optimised for "matches the document the spec names" over "looks like what a person would
+do", and those genuinely conflict here.
+
+**Consequence beyond the path:** the build context already *is* the repository root, so
+`context: .` and `dockerfile: Dockerfile` both stop being relative paths pointing up and
+out of their own directory. `.dockerignore` did not move; it belongs to the context, not
+to the Dockerfile.
+
+### Fixed at the same time — the postgres healthcheck budgets did not nest
+
+`deploy/docker-compose.yml` had postgres at `timeout: 3s` against `interval: 2s` — a
+timeout **longer than the gap between probes**. That is precisely the overlap the API
+image's own test asserts against (`hc.Timeout >= hc.Interval` fails it), so the rule was
+enforced on one service and violated on the other. Now `interval: 3s`, `timeout: 2s`,
+`retries: 20` — same ~60s total grace, correctly nested.
+
+Found by the comment sweep while reading, not by any test. **Nothing guards the compose
+healthcheck budgets**; the API image's are guarded. Worth a leg in VS8's arc.
