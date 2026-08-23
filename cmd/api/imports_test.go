@@ -98,19 +98,52 @@ func pgxImports(t *testing.T) []pgxImport {
 	return found
 }
 
-func TestPgxIsImportedExactlyOnceBlankAndInMain(t *testing.T) {
+// CORRECTED AT VS4, AND THE CORRECTION IS THE INTERESTING HALF. This leg was
+// `TestPgxIsImportedExactlyOnceBlankAndInMain` and it went red against correct
+// work the moment internal/postgres/testdb opened a pool — which it must, to
+// be the test seam onto a real database. "Exactly once" was never what
+// go_backend.md L20 says: it says the driver is used SOLELY AS A BLANK IMPORT
+// DRIVER, and that claim is about HOW it is imported, not how many times.
+//
+// So the count became a NAMED LIST, asserted by EQUALITY. A third importer has
+// to be added here and argue for itself, which is the property the count was
+// standing in for; and the blank-import assertion — the one a grep cannot make
+// — now applies to every entry rather than to the only entry.
+var pgxImporters = map[string]string{
+	"cmd/api/main.go":                    "the binary: registers the driver for database/sql, and calls nothing in it",
+	"internal/postgres/testdb/testdb.go": "the test seam: opens the pool the store legs run against",
+}
+
+// TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes THE CLAIM A GREP
+// CANNOT MAKE. One matching line is equally satisfied by
+// `import pgx "…/stdlib"` followed by a direct call into the package, which is
+// exactly what spec L20 forbids.
+func TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver(t *testing.T) {
 	got := pgxImports(t)
 
-	if len(got) != 1 {
-		t.Fatalf("pgx imports = %+v (%d), want exactly 1", got, len(got))
+	seen := map[string]bool{}
+	for _, imp := range got {
+		if _, ok := pgxImporters[imp.file]; !ok {
+			t.Errorf("pgx is imported in %s, which is not on the list — "+
+				"add it with the reason, or stop importing it there", imp.file)
+			continue
+		}
+		if seen[imp.file] {
+			t.Errorf("pgx is imported twice in %s", imp.file)
+		}
+		seen[imp.file] = true
+
+		if imp.path != "github.com/jackc/pgx/v5/stdlib" {
+			t.Errorf("%s imports %q, want github.com/jackc/pgx/v5/stdlib", imp.file, imp.path)
+		}
+		if !imp.blank {
+			t.Errorf("pgx is a NAMED import in %s; spec L20 says solely as a blank import driver", imp.file)
+		}
 	}
-	if got[0].file != "cmd/api/main.go" {
-		t.Errorf("pgx imported in %q, want cmd/api/main.go", got[0].file)
-	}
-	if got[0].path != "github.com/jackc/pgx/v5/stdlib" {
-		t.Errorf("pgx import path = %q, want github.com/jackc/pgx/v5/stdlib", got[0].path)
-	}
-	if !got[0].blank {
-		t.Errorf("pgx imported as a NAMED import in %s; spec L20 says solely as a blank import driver", got[0].file)
+
+	for file, why := range pgxImporters {
+		if !seen[file] {
+			t.Errorf("%s is listed as a pgx importer (%s) and does not import it", file, why)
+		}
 	}
 }

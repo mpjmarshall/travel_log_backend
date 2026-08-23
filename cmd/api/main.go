@@ -25,6 +25,11 @@
 //   - /healthz PINGS THE DATABASE. VS1's answered a constant, so a container
 //     whose database had gone was reported healthy by Docker and kept taking
 //     traffic. Nothing else in the repository can tell those two states apart.
+//
+// go_backend.md L20 asks for pgx "solely as a blank import driver". This is the
+// only import of it in the binary and it is blank; imports_test.go asserts all
+// three of those claims by walking the AST, because a grep can see the line but
+// not the underscore.
 package main
 
 import (
@@ -41,34 +46,38 @@ import (
 	"syscall"
 	"time"
 
-	// Embeds the IANA timezone database in the binary. Load-bearing: the
-	// runtime image is `scratch` and has no /usr/share/zoneinfo.
-	_ "time/tzdata"
-
-	// go_backend.md L20: use this "solely as a blank import driver". This is
-	// the ONLY import of it in the repository and it is blank; imports_test.go
-	// asserts all three of those claims by walking the AST, because a grep can
-	// see the line but not the underscore.
 	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "time/tzdata"
 
 	"travellog/internal/config"
 	"travellog/internal/logging"
+	"travellog/internal/postgres"
+	"travellog/migrations"
 )
 
-const (
-	// The startup ping is allowed longer than the per-request one: compose
-	// gates the api on `postgres: service_healthy`, so a slow answer here is a
-	// cold database rather than a broken one.
-	startupPingTimeout = 10 * time.Second
+// startupPingTimeout is allowed longer than the per-request one: compose gates
+// the api on `postgres: service_healthy`, so a slow answer here is a cold
+// database rather than a broken one.
+const startupPingTimeout = 10 * time.Second
 
-	// /healthz's own ping. It must come in under the container HEALTHCHECK's
-	// 3s timeout, or a wedged database turns a probe that should report
-	// unhealthy into one that never answers at all.
-	healthzPingTimeout = 2 * time.Second
+// healthzPingTimeout is /healthz's own ping. It must come in under the container
+// HEALTHCHECK's 3s timeout, or a wedged database turns a probe that should
+// report unhealthy into one that never answers at all.
+const healthzPingTimeout = 2 * time.Second
 
-	shutdownTimeout = 10 * time.Second
-)
+const shutdownTimeout = 10 * time.Second
 
+// migrateTimeout bounds the WHOLE migration run, the wait for the advisory
+// lock included. Generous because that wait is legitimate — a second replica
+// booting behind the first should wait — and bounded because a lock nobody
+// releases must not become a container that hangs for ever.
+const migrateTimeout = 2 * time.Minute
+
+// main parses the two flags, loads the config and dispatches.
+//
+// A config that fails to load is written with fmt rather than through the
+// logger: the logger's level comes from the config that has just failed, so
+// there is nothing to build one from.
 func main() {
 	healthcheck := flag.Bool(
 		"healthcheck",
@@ -76,13 +85,16 @@ func main() {
 		"probe /healthz on the local server and exit 0 or 1; "+
 			"this is what the container HEALTHCHECK runs, because scratch has no shell",
 	)
+	migrateOnly := flag.Bool(
+		"migrate-only",
+		false,
+		"apply migrations and exit; the server does this at boot too, so this "+
+			"is for `make migrate` and for a deploy that wants them separated",
+	)
 	flag.Parse()
 
 	cfg, err := config.Load()
 	if err != nil {
-		// Written with fmt rather than through the logger: the logger's level
-		// comes from the config that has just failed to load, so there is
-		// nothing to build one from.
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
@@ -96,6 +108,14 @@ func main() {
 	log := logging.New(os.Stdout, cfg.LogLevel)
 	slog.SetDefault(log)
 
+	if *migrateOnly {
+		if err := migrateOnlyRun(cfg, log); err != nil {
+			log.Error("api: migrate-only failed", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(cfg, addr, log); err != nil {
 		log.Error("api: stopping", slog.String("err", err.Error()))
 		os.Exit(1)
@@ -103,6 +123,20 @@ func main() {
 }
 
 // run owns the database handle for the process's lifetime.
+//
+// TWO THINGS IT DOES BEFORE IT MIGRATES AND LISTENS, AND BOTH ARE DECISIONS:
+//
+//   - It configures the pool explicitly, which go_backend.md L21 asks for by
+//     name: "Explicitly configure connection pooling in main.go using
+//     SetMaxOpenConns() and SetMaxIdleConns()." Both values come from config,
+//     which has already refused an idle count above the open one — database/sql
+//     clamps that silently and sql.DBStats has no field that would ever report
+//     it.
+//   - It PINGS, because sql.Open does not connect. Without it the first request
+//     is where a wrong DSN is discovered, and it is discovered as a 503 rather
+//     than as a startup failure. Compose already gates this container on
+//     postgres being healthy, so a failure here is a real misconfiguration and
+//     the process should not come up pretending otherwise.
 func run(cfg config.Config, addr string, log *slog.Logger) error {
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
@@ -110,19 +144,9 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	// go_backend.md L21: "Explicitly configure connection pooling in main.go
-	// using SetMaxOpenConns() and SetMaxIdleConns()." Both values come from
-	// config, which has already refused an idle count above the open one —
-	// database/sql clamps that silently and sql.DBStats has no field that
-	// would ever report it.
 	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 
-	// sql.Open does not connect. Without this the first request is where a
-	// wrong DSN is discovered, and it is discovered as a 503 rather than as a
-	// startup failure. Compose already gates this container on postgres being
-	// healthy, so a failure here is a real misconfiguration and the process
-	// should not come up pretending otherwise.
 	pingCtx, cancel := context.WithTimeout(context.Background(), startupPingTimeout)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
@@ -133,8 +157,11 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 		slog.Int("maxIdleConns", cfg.DBMaxIdleConns),
 	)
 
-	// Migrations run here — VS4, internal/store/migrate.go. `make migrate`
-	// exits 1 today rather than exiting 0 on nothing.
+	migCtx, migCancel := context.WithTimeout(context.Background(), migrateTimeout)
+	defer migCancel()
+	if err := migrateUp(migCtx, db, log); err != nil {
+		return err
+	}
 
 	return serve(addr, newMux(db, log), log)
 }
@@ -149,6 +176,42 @@ type pinger interface {
 	PingContext(ctx context.Context) error
 }
 
+// migrateUp applies migrations/*.up.sql, at boot and behind the advisory lock.
+//
+// It is one line of work and a paragraph of reason. It runs here rather than in
+// a separate deploy step so that a container which is running is a container
+// whose schema is current — the property `docker compose up -d` has to have for
+// the slice arc to mean anything. A second replica starting at the same time
+// waits rather than racing, and a checksum mismatch is a process that refuses
+// to come up rather than one serving against a schema it does not believe in.
+func migrateUp(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+	applied, err := postgres.Migrator{Logger: log}.Migrate(ctx, db, migrations.FS)
+	if err != nil {
+		return fmt.Errorf("migrations: %w", err)
+	}
+	log.Info("migrations up to date", slog.Int("applied", len(applied)))
+	return nil
+}
+
+// migrateOnlyRun is `-migrate-only`: open, pool, ping, migrate, stop. It starts
+// no listener, so `make migrate` cannot leave a server behind.
+func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
+	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("opening the database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
+
+	ctx, cancel := context.WithTimeout(context.Background(), migrateTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("the database did not answer within %s: %w", migrateTimeout, err)
+	}
+	return migrateUp(ctx, db, log)
+}
+
 // newMux builds the server's routing table.
 //
 // EXTRACTED FROM serve AT VS1-BACKFILL because serve blocks until a signal and
@@ -157,20 +220,27 @@ type pinger interface {
 // httptest.NewServer takes.
 func newMux(db pinger, log *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthzHandler(db, log))
+	return mux
+}
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		// spec L22 — the ping is bounded. An unbounded one against a wedged
-		// server holds the handler past the HEALTHCHECK's own timeout, which
-		// turns "unhealthy" into "no answer".
+// healthzHandler answers ok, or unavailable on a ping that does not come back.
+//
+// THE PING IS BOUNDED (spec L22). An unbounded one against a wedged server
+// holds the handler past the HEALTHCHECK's own timeout, which turns "unhealthy"
+// into "no answer".
+//
+// THE DETAIL GOES TO THE LOG AND NEVER TO THE BODY. /healthz is the one route
+// reachable unauthenticated, and a driver error names hosts, ports and database
+// names to anyone who asks.
+func healthzHandler(db pinger, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), healthzPingTimeout)
 		defer cancel()
 
 		status, code := "ok", http.StatusOK
 		if err := db.PingContext(ctx); err != nil {
 			status, code = "unavailable", http.StatusServiceUnavailable
-			// The detail goes to the log and never to the body. /healthz is
-			// the one route reachable unauthenticated, and a driver error
-			// names hosts, ports and database names to anyone who asks.
 			log.Error("healthz: the database did not answer",
 				slog.String("err", err.Error()))
 		}
@@ -178,9 +248,7 @@ func newMux(db pinger, log *slog.Logger) *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		_, _ = fmt.Fprintf(w, "{%q:%q}\n", "status", status)
-	})
-
-	return mux
+	}
 }
 
 func serve(addr string, h http.Handler, log *slog.Logger) error {

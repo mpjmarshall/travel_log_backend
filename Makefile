@@ -111,13 +111,17 @@ test-db:
 	echo; \
 	echo "export TEST_DATABASE_URL=postgres://$$user:$$pass@127.0.0.1:$$port/$$db?sslmode=disable"
 
-## migrate — apply migrations against DATABASE_URL.
-## NOT IMPLEMENTED UNTIL VS4, and it fails loudly rather than exiting 0 on
-## nothing: a no-op migrate target is indistinguishable from a successful one.
+## migrate — apply migrations against the stack's database.
+##
+## The SERVER ALSO MIGRATES AT BOOT, so this target is not how migrations
+## normally run: it exists so a deploy can separate the two, and so the runner
+## can be invoked without starting a listener. It runs the SAME binary with
+## -migrate-only, inside the compose network, so DATABASE_URL and the other six
+## variables come from the compose file rather than from a second copy here —
+## the defect `make test-db` had.
 migrate:
-	@echo "make migrate: the migration runner lands in VS4 (internal/store/migrate.go)." >&2
-	@echo "Nothing to apply yet, and exiting 0 here would be a lie." >&2
-	@exit 1
+	$(COMPOSE) up -d --build --wait postgres
+	$(COMPOSE) run --rm --no-deps api -migrate-only
 
 ## slice — the whole arc against the live stack, from cold.
 ## NOT IMPLEMENTED UNTIL VS8 (scripts/slice-arc.sh), for the same reason.
