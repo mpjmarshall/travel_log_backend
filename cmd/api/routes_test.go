@@ -161,3 +161,27 @@ func TestTheMountedRegisterRouteIsTheRealHandler(t *testing.T) {
 	}
 	var _ auth.Traveller
 }
+
+// The route table is closed, so an unknown path is the FIRST thing a
+// mistyped client meets — and until VS7 it met net/http's own plain text.
+//
+// THIS IS THE WIRING LEG AND NOT THE BEHAVIOUR LEG. What MuxErrors does to a
+// 404 and a 405 is proven in internal/httpx over the same wrapper; what only
+// this package can say is whether serverChain puts it around the mux the
+// server serves.
+func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
+	log := quiet()
+	chained := httptest.NewRecorder()
+	serverChain(wiredMux(t, log), log).ServeHTTP(chained,
+		httptest.NewRequest(http.MethodGet, "/v1/nothing-here", nil))
+
+	if chained.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", chained.Code, http.StatusNotFound)
+	}
+	if got, want := chained.Body.String(), `{"code":"not_found"}`; got != want {
+		t.Errorf("body = %q, want %q — net/http's own plain text reached the client", got, want)
+	}
+	if got, want := chained.Header().Get("Content-Type"), "application/json"; got != want {
+		t.Errorf("Content-Type = %q, want %q", got, want)
+	}
+}

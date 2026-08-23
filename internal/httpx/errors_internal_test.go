@@ -12,7 +12,7 @@ import (
 // trusting them, this asserts each is BYTE-IDENTICAL to what WriteJSON writes
 // for the same payload. Change the envelope and this reddens.
 func TestThePrebuiltBodiesEqualWhatTheEncoderProduces(t *testing.T) {
-	for _, c := range []Code{CodeTimeout, CodeInternal} {
+	for _, c := range []Code{CodeTimeout, CodeInternal, CodeNotFound} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		WriteJSON(rec, req, StatusFor(c), errorPayload{Code: c})
@@ -21,8 +21,8 @@ func TestThePrebuiltBodiesEqualWhatTheEncoderProduces(t *testing.T) {
 			t.Errorf("prebuiltBody(%q) = %s, but the encoder writes %s", c, got, want)
 		}
 		if prebuiltBody(c) == "" {
-			t.Errorf("prebuiltBody(%q) is empty; the two bodies are what the "+
-				"timeout and the encoder-failure path write", c)
+			t.Errorf("prebuiltBody(%q) is empty; the three bodies are what the "+
+				"timeout, the encoder-failure path and the mux's own errors write", c)
 		}
 	}
 }

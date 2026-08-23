@@ -279,11 +279,18 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.Serv
 // here a client can reach with a body: without Recover a panicking handler
 // closes the connection with no response at all, and without RequestID the
 // detail httpx sends to the log has nothing to tie it to.
+//
+// MuxErrors IS INNERMOST AND IS NOT PART OF Base. It has to sit directly
+// around the mux, because the 404 and the 405 it exists to rewrite are written
+// by the mux itself; and it belongs inside the other three because an unknown
+// path is a request that happened and should be recovered, identified and
+// logged like any other.
 func serverChain(mux *http.ServeMux, log *slog.Logger) http.Handler {
 	return httpx.Chain(mux,
 		httpx.Recover(log),
 		httpx.RequestID(),
 		httpx.AccessLog(log),
+		httpx.MuxErrors(),
 	)
 }
 

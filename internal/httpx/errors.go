@@ -200,17 +200,21 @@ func WriteErrorFor(w http.ResponseWriter, r *http.Request, err error) {
 	WriteError(w, r, c)
 }
 
-// The two bodies that cannot come from the encoder, and why.
+// The three bodies that cannot come from the encoder, and why.
 //
 // http.TimeoutHandler takes its body as a STRING at construction time, before
-// any request exists — and the JSON encoder is confined to two functions
-// (spec L19), so a third helper marshalling this is not available either. So
-// they are literals. What keeps them honest is not care: it is
+// any request exists; WriteJSON's own encoder-failure branch cannot call the
+// encoder that has just failed; and mux.go writes its body from INSIDE
+// WriteHeader, where a marshal would be a second chance to fail with the
+// status already sent. The JSON encoder is confined to two functions
+// (spec L19), so a third helper marshalling any of them is not available
+// either. So they are literals. What keeps them honest is not care: it is
 // TestThePrebuiltBodiesEqualWhatTheEncoderProduces, which asserts each is
 // byte-identical to what WriteJSON writes for the same payload.
 const (
 	bodyTimeout  = `{"code":"timeout"}`
 	bodyInternal = `{"code":"internal"}`
+	bodyNotFound = `{"code":"not_found"}`
 )
 
 func prebuiltBody(c Code) string {
@@ -219,6 +223,8 @@ func prebuiltBody(c Code) string {
 		return bodyTimeout
 	case CodeInternal:
 		return bodyInternal
+	case CodeNotFound:
+		return bodyNotFound
 	}
 	return ""
 }
