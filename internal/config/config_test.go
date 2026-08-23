@@ -82,6 +82,9 @@ func with(key, value string) map[string]string {
 // THE LEG THE STEP NAMES. A Load that fails on the first missing variable
 // passes every other test in this file and fails this one: it is the only leg
 // that can tell "reports a problem" from "reports the problems".
+//
+// It must also NOT name the four that ARE set — an error that lists everything
+// is as useless as one that lists one thing.
 func TestLoadReportsAllThreeMissingVariablesAtOnce(t *testing.T) {
 	missing := []string{"DATABASE_URL", "DB_MAX_IDLE_CONNS", "ARGON2_MAX_CONCURRENT"}
 	setEnv(t, without(missing...))
@@ -95,8 +98,6 @@ func TestLoadReportsAllThreeMissingVariablesAtOnce(t *testing.T) {
 			t.Errorf("error does not name %s:\n%s", name, err)
 		}
 	}
-	// And it must not name the four that ARE set — an error that lists
-	// everything is as useless as one that lists one thing.
 	for _, name := range allVars {
 		if slicesContains(missing, name) {
 			continue

@@ -40,20 +40,20 @@ import (
 	"time"
 )
 
+// optInVar is the opt-in. Unset is a skip, not a failure: `go test ./...` on a
+// machine with no Docker has to stay green.
+const optInVar = "TRAVELLOG_IMAGE_TESTS"
+
+// makeTarget is the make target every skip message names.
+const makeTarget = "make test-image"
+
+// imageTag is what the image under test is built to, unless TRAVELLOG_TEST_IMAGE
+// names another. Deliberately NOT `travellog-api`, which is what a developer's
+// own `make up` produces — a test must not silently test the image somebody
+// built by hand an hour ago.
+const imageTag = "travellog-imagetest:under-test"
+
 const (
-	// The opt-in. Unset is a skip, not a failure: `go test ./...` on a machine
-	// with no Docker has to stay green.
-	optInVar = "TRAVELLOG_IMAGE_TESTS"
-
-	// The make target every skip message names.
-	makeTarget = "make test-image"
-
-	// The tag the image under test is built to, unless TRAVELLOG_TEST_IMAGE
-	// names another. Deliberately NOT `travellog-api`, which is what a
-	// developer's own `make up` produces — a test must not silently test the
-	// image somebody built by hand an hour ago.
-	imageTag = "travellog-imagetest:under-test"
-
 	buildTimeout   = 10 * time.Minute
 	composeTimeout = 5 * time.Minute
 	shortTimeout   = 60 * time.Second
@@ -78,15 +78,15 @@ var (
 )
 
 // TestMain says once, on the way in, why the tier is not running.
+//
+// Whatever the tier started it takes away, including the volumes — which is the
+// one `docker compose down` flag these tests must never aim at a developer's
+// own project. They cannot: every stack here runs under its own -p name.
 func TestMain(m *testing.M) {
 	if reason, ok := unavailable(); !ok {
 		writeNotice("/dev/tty", "travellog/test/image: "+reason)
 	}
 	code := m.Run()
-	// Whatever the tier started, it takes away — including the volumes, which
-	// is the one `docker compose down` flag these tests must never aim at a
-	// developer's own project. They cannot: every stack here runs under its
-	// own -p name.
 	tearDownStacks()
 	os.Exit(code)
 }
@@ -250,6 +250,9 @@ func composeEnv(pgPort, apiPort string) []string {
 // because the claim it defends — "a machine with no Docker is told, rather
 // than shown a silent green" — is the one claim of this file that a developer
 // with no Docker can still break.
+//
+// The last write is the other half: it must not panic or fail on a path that
+// cannot be opened, which is every machine without a controlling terminal.
 func TestSkipNoticeIsWrittenWhereGoTestCannotCaptureIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "notice")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -266,8 +269,6 @@ func TestSkipNoticeIsWrittenWhereGoTestCannotCaptureIt(t *testing.T) {
 		t.Errorf("notice = %q, want %q", got, want)
 	}
 
-	// And it must not panic or fail on a path that cannot be opened, which is
-	// every machine without a controlling terminal.
 	writeNotice(filepath.Join(t.TempDir(), "no", "such", "path"), "swallowed")
 }
 

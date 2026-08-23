@@ -68,6 +68,10 @@ func NewLimiter(perMinute int, now func() time.Time) *Limiter {
 }
 
 // Allow spends one token for key, or reports that there is none to spend.
+//
+// THE `min` CEILING ON THE REFILL IS THE WHOLE OF IT. Without it an idle hour
+// becomes an hour's worth of burst, and a quiet attacker lands 3,600 logins in
+// one second having sent nothing for an hour.
 func (l *Limiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -82,9 +86,6 @@ func (l *Limiter) Allow(key string) bool {
 		l.buckets[key] = b
 	}
 
-	// The ceiling is the whole point of `min`. Without it an idle hour becomes
-	// an hour's worth of burst, and a quiet attacker lands 3,600 logins in one
-	// second having sent nothing for an hour.
 	b.tokens = min(l.burst, b.tokens+now.Sub(b.last).Seconds()*l.perSecond)
 	b.last = now
 
@@ -124,11 +125,12 @@ func (l *Limiter) prune(now time.Time) {
 // `host:port` and the port is a new ephemeral number on every connection — so
 // keying on the raw string gives each request its own bucket, and a limiter
 // that passes every unit test limits nothing whatever in production.
+//
+// An address with no port to split falls back to the whole string rather than
+// to an empty key, which would put every such client in one shared bucket.
 func ClientKey(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		// No port to split. Better the whole string than an empty key, which
-		// would put every such client in one shared bucket.
 		return r.RemoteAddr
 	}
 	return host
@@ -136,14 +138,14 @@ func ClientKey(r *http.Request) string {
 
 // RateLimit refuses over-quota requests with the envelope, before the handler
 // runs.
+//
+// The client address goes to the log and never to the body: the body is the
+// code alone, and an address is the one detail an operator actually needs here.
 func RateLimit(l *Limiter, log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := ClientKey(r)
 			if !l.Allow(key) {
-				// The address goes to the log and never to the body: the body
-				// is the code alone, and an address is the one detail an
-				// operator actually needs to see here.
 				log.LogAttrs(r.Context(), slog.LevelWarn, "rate limited",
 					slog.String("client", key),
 					slog.String("path", r.URL.Path),

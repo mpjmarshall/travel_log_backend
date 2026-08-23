@@ -97,19 +97,9 @@ func Recover(log *slog.Logger) Middleware {
 					panic(p)
 				}
 
-				// Recover is outermost, so the request it holds predates the
-				// id. The id is read off the response header, which the
-				// request-id middleware has already set on the shared
-				// ResponseWriter — without this the one log line that matters
-				// most is the one line that cannot be correlated.
-				id := w.Header().Get(RequestIDHeader)
-				if id == "" {
-					id = RequestIDFrom(r.Context())
-				}
-
 				log.LogAttrs(r.Context(), slog.LevelError, "panic recovered",
 					slog.String("panic", fmt.Sprint(p)),
-					slog.String("requestId", id),
+					slog.String("requestId", requestIDForRecover(w, r)),
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.String("stack", string(debug.Stack())),
@@ -123,6 +113,19 @@ func Recover(log *slog.Logger) Middleware {
 			next.ServeHTTP(sw, r)
 		})
 	}
+}
+
+// requestIDForRecover reads the header first and the context second.
+//
+// Recover is outermost, so the request it holds predates the id. The id is on
+// the response header, which the request-id middleware has already set on the
+// shared ResponseWriter — without this the one log line that matters most is
+// the one line that cannot be correlated.
+func requestIDForRecover(w http.ResponseWriter, r *http.Request) string {
+	if id := w.Header().Get(RequestIDHeader); id != "" {
+		return id
+	}
+	return RequestIDFrom(r.Context())
 }
 
 // RequestID mints an id, puts it on the response and in the context.
@@ -169,14 +172,7 @@ func AccessLog(log *slog.Logger) Middleware {
 			sw := &statusWriter{ResponseWriter: w}
 
 			defer func() {
-				// A status of 0 means the handler wrote nothing — a panic on
-				// its way up, or a timeout that discarded the response. Both
-				// are worth the same attention as a 500.
-				level := slog.LevelInfo
-				if sw.status == 0 || sw.status >= http.StatusInternalServerError {
-					level = slog.LevelError
-				}
-				log.LogAttrs(r.Context(), level, "request",
+				log.LogAttrs(r.Context(), accessLevel(sw.status), "request",
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.Int("status", sw.status),
@@ -189,6 +185,18 @@ func AccessLog(log *slog.Logger) Middleware {
 			next.ServeHTTP(sw, r)
 		})
 	}
+}
+
+// accessLevel is the level one access line is written at.
+//
+// A status of 0 means the handler wrote nothing — a panic on its way up, or a
+// timeout that discarded the response. Both are worth the same attention as a
+// 500.
+func accessLevel(status int) slog.Level {
+	if status == 0 || status >= http.StatusInternalServerError {
+		return slog.LevelError
+	}
+	return slog.LevelInfo
 }
 
 // Timeout is http.TimeoutHandler, constructed with the JSON envelope as its

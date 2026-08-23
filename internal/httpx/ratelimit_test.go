@@ -59,7 +59,6 @@ func TestTheBucketRefillsOverTime(t *testing.T) {
 		t.Fatal("not exhausted")
 	}
 
-	// 60 per minute is one per second.
 	c.add(time.Second)
 	if !l.Allow("k") {
 		t.Error("a second of refill bought no request")
@@ -83,15 +82,16 @@ func TestTheBucketRefillsOverTime(t *testing.T) {
 // A bucket that fills without a ceiling turns an idle hour into an hour's worth
 // of burst — which is the shape that lets a quiet attacker land 3,600 Argon2
 // logins in one second, and the whole reason DEC-48 exists.
+//
+// THE FIRST Allow IS LOAD-BEARING AND ITS ABSENCE WAS A DEFECT IN THIS LEG.
+// Written without it, the hour passed BEFORE the bucket existed — and a bucket
+// is created full, with `last` set to the moment of creation, so there was no
+// elapsed time to accumulate and the leg passed with the ceiling removed. Found
+// by mutation M32, not by review.
 func TestIdleTimeDoesNotAccumulateBeyondTheAllowance(t *testing.T) {
 	c := newClock()
 	l := httpx.NewLimiter(5, c.now)
 
-	// THE FIRST CALL IS LOAD-BEARING AND ITS ABSENCE WAS A DEFECT IN THIS LEG.
-	// Written without it, the hour passed BEFORE the bucket existed — and a
-	// bucket is created full, with `last` set to the moment of creation, so
-	// there was no elapsed time to accumulate and the leg passed with the
-	// ceiling removed. Found by mutation M32, not by review.
 	if !l.Allow("k") {
 		t.Fatal("the first request of a fresh allowance was refused")
 	}
@@ -128,10 +128,12 @@ func TestClientKeyStripsThePortSoOneHostIsOneBucket(t *testing.T) {
 	}
 }
 
+// An address with no port at all is used whole rather than losing the key: an
+// empty key would put every such client in one shared bucket.
 func TestClientKeyHandlesIPv6AndAMissingPort(t *testing.T) {
 	cases := map[string]string{
 		"[2001:db8::1]:41235": "2001:db8::1",
-		"203.0.113.9":         "203.0.113.9", // no port at all: use it whole rather than lose the key
+		"203.0.113.9":         "203.0.113.9",
 		"":                    "",
 	}
 	for addr, want := range cases {

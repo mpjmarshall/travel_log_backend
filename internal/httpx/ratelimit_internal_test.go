@@ -28,8 +28,6 @@ func TestIdleBucketsArePrunedRatherThanKeptForever(t *testing.T) {
 		t.Fatalf("Len = %d, want 8 before any sweep", l.Len())
 	}
 
-	// A minute later every one of them has refilled to full, so all eight are
-	// indistinguishable from clients that were never seen.
 	at = at.Add(time.Minute)
 	l.Allow("a-new-client")
 
@@ -37,8 +35,6 @@ func TestIdleBucketsArePrunedRatherThanKeptForever(t *testing.T) {
 		t.Errorf("Len = %d after a sweep of eight idle buckets, want 1", got)
 	}
 
-	// And the sweep changed no answer: the pruned client still has its whole
-	// allowance, exactly as a full bucket would have given it.
 	allowed := 0
 	for range 100 {
 		if l.Allow("idle-0") {
@@ -52,6 +48,9 @@ func TestIdleBucketsArePrunedRatherThanKeptForever(t *testing.T) {
 
 // A bucket that is still spending is not swept. Pruning one would hand a client
 // back an allowance it had spent, which is the limiter failing open.
+//
+// The one second the clock advances is chosen: it buys the busy bucket one
+// token back, and leaves the idle four full.
 func TestABusyBucketSurvivesTheSweep(t *testing.T) {
 	original := limiterPruneAbove
 	limiterPruneAbove = 4
@@ -67,7 +66,7 @@ func TestABusyBucketSurvivesTheSweep(t *testing.T) {
 		l.Allow("idle-" + strconv.Itoa(i))
 	}
 
-	at = at.Add(time.Second) // one token back for busy, full for the idle four
+	at = at.Add(time.Second)
 	l.Allow("trigger-the-sweep")
 
 	if l.Allow("busy") && l.Allow("busy") {

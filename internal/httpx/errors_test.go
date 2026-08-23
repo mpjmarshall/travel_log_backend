@@ -49,10 +49,10 @@ func TestTheVocabularyIsExactlyTheTwelveCodesDEC12Names(t *testing.T) {
 	}
 }
 
+// Totality in both directions. A code with no status would answer 500 silently;
+// a status entry for a word not in the block is a vocabulary that has grown
+// without anybody saying so.
 func TestEveryCodeHasAStatusAndNoStatusIsOrphaned(t *testing.T) {
-	// Totality in both directions. A code with no status would answer 500
-	// silently; a status entry for a word not in the block is a vocabulary
-	// that has grown without anybody saying so.
 	for _, c := range httpx.Codes() {
 		if got := httpx.StatusFor(c); got < 400 || got > 599 {
 			t.Errorf("StatusFor(%q) = %d, want a 4xx or 5xx", c, got)
@@ -99,6 +99,9 @@ func TestTimeoutIsWhatTheStdlibItselfWrites(t *testing.T) {
 	}
 }
 
+// DEC-12: "no prose, ever". The key SET is the assertion, not the presence of
+// `code` — a body carrying `code` plus a `message` satisfies a contains-check
+// and is exactly what the decision forbids.
 func TestWriteErrorWritesTheCodeAndNothingElse(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
@@ -115,9 +118,6 @@ func TestWriteErrorWritesTheCodeAndNothingElse(t *testing.T) {
 		t.Errorf("body = %s, want {\"code\":\"not_found\"}", got)
 	}
 
-	// DEC-12: "no prose, ever". The key SET is the assertion, not the presence
-	// of `code` — a body carrying `code` plus a `message` satisfies a
-	// contains-check and is exactly what the decision forbids.
 	var got map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("body is not JSON: %v", err)

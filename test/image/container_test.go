@@ -108,13 +108,23 @@ func (p probeReport) get(t *testing.T, key string) string {
 	return v
 }
 
+// probeTags is keyed by embedTzdata, and holds the image tag built for each.
 var (
 	probeOnce sync.Once
-	probeTags map[bool]string // embedTzdata -> image tag
+	probeTags map[bool]string
 	probeDir  string
 )
 
 // probeImage builds (once) the probe images layered on the image under test.
+//
+// The only difference between the two binaries is the `_ "time/tzdata"` line
+// cmd/api/main.go carries, written into the probe's source verbatim.
+//
+// GOOS/GOARCH ARE THE WHOLE REASON THE DAEMON'S ARCHITECTURE IS READ FIRST: the
+// host is darwin/arm64 and the container is linux/arm64, and a probe built for
+// the host produces "exec /probe: exec format error" — measured, on the first
+// run. CGO_ENABLED=0 is set for the same reason deploy/Dockerfile sets it:
+// scratch has no libc.
 func probeImage(t *testing.T, embedTzdata bool) string {
 	t.Helper()
 	base := image(t)
@@ -139,8 +149,6 @@ func probeImage(t *testing.T, embedTzdata bool) string {
 		for _, embed := range []bool{false, true} {
 			imports := ""
 			if embed {
-				// The exact line cmd/api/main.go carries, and the only
-				// difference between the two binaries.
 				imports = "\n\t_ \"time/tzdata\"\n"
 			}
 			src := strings.Replace(probeSource, "__IMPORTS__", imports, 1)
@@ -152,12 +160,6 @@ func probeImage(t *testing.T, embedTzdata bool) string {
 				bin, tag = "probe-tz", "travellog-imagetest-probe:tz"
 			}
 
-			// GOOS/GOARCH are the whole reason the daemon's architecture is
-			// read above: the host is darwin/arm64 and the container is
-			// linux/arm64, and a probe built for the host produces
-			// "exec /probe: exec format error" — measured, on the first run.
-			// CGO_ENABLED=0 for the same reason deploy/Dockerfile sets it:
-			// scratch has no libc.
 			buildEnv := append(os.Environ(),
 				"GOOS=linux",
 				"GOARCH="+arch,

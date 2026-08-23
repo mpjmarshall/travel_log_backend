@@ -36,14 +36,13 @@ import (
 // Config is the whole of what VS2 reads. The parent plan's S03 lists fifteen
 // variables; the slice names these seven, and the rest arrive with the steps
 // that read them.
+//
+// Port is kept as a string because that is what it is used as — ":"+Port. It is
+// nonetheless parsed and range-checked by loader.port, so "http" and "65536"
+// are refused here rather than by the kernel at Listen time.
 type Config struct {
-	DatabaseURL string
-
-	// Port is kept as a string because that is what it is used as — ":"+Port.
-	// It is nonetheless parsed and range-checked below, so "http" and "65536"
-	// are refused here rather than by the kernel at Listen time.
-	Port string
-
+	DatabaseURL         string
+	Port                string
 	LogLevel            slog.Level
 	DBMaxOpenConns      int
 	DBMaxIdleConns      int
@@ -54,11 +53,12 @@ type Config struct {
 // Load reads the environment and returns either a whole Config or a single
 // error naming every variable that is missing or invalid. It never returns a
 // partly-filled Config beside an error.
+//
+// Field order in the composite literal below is evaluation order in Go, so
+// problems come out in the order deploy/.env.example lists the variables.
 func Load() (Config, error) {
 	var l loader
 
-	// Field order is evaluation order in a Go composite literal, so problems
-	// come out in the order deploy/.env.example lists the variables.
 	cfg := Config{
 		DatabaseURL:         l.required("DATABASE_URL"),
 		Port:                l.port("PORT"),
@@ -69,29 +69,35 @@ func Load() (Config, error) {
 		Argon2MaxConcurrent: l.atLeast("ARGON2_MAX_CONCURRENT", 1),
 	}
 
-	// MEASURED, in $(go env GOROOT)/src/database/sql/sql.go, SetMaxIdleConns:
-	//
-	//	if db.maxOpen > 0 && db.maxIdleConnsLocked() > db.maxOpen {
-	//		db.maxIdleCount = db.maxOpen
-	//	}
-	//
-	// The clamp is silent and UNOBSERVABLE afterwards — sql.DBStats carries
-	// MaxOpenConnections and has no idle counterpart, so nothing in the
-	// running process can report that the number it was handed was discarded.
-	// spec L21 asks for the pool to be configured EXPLICITLY, and a call whose
-	// argument the runtime quietly overrides is the opposite of that. This is
-	// the only place the disagreement can be seen, so it is refused here.
+	l.refuseSilentIdleClamp(cfg)
+
+	if err := l.err(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// refuseSilentIdleClamp rejects an idle count above the open count.
+//
+// MEASURED, in $(go env GOROOT)/src/database/sql/sql.go, SetMaxIdleConns:
+//
+//	if db.maxOpen > 0 && db.maxIdleConnsLocked() > db.maxOpen {
+//		db.maxIdleCount = db.maxOpen
+//	}
+//
+// The clamp is silent and UNOBSERVABLE afterwards — sql.DBStats carries
+// MaxOpenConnections and has no idle counterpart, so nothing in the running
+// process can report that the number it was handed was discarded. spec L21 asks
+// for the pool to be configured EXPLICITLY, and a call whose argument the
+// runtime quietly overrides is the opposite of that. This is the only place the
+// disagreement can be seen, so it is refused here.
+func (l *loader) refuseSilentIdleClamp(cfg Config) {
 	if !l.broke("DB_MAX_OPEN_CONNS") && !l.broke("DB_MAX_IDLE_CONNS") &&
 		cfg.DBMaxIdleConns > cfg.DBMaxOpenConns {
 		l.add("DB_MAX_IDLE_CONNS", fmt.Sprintf(
 			"%d exceeds DB_MAX_OPEN_CONNS=%d; database/sql would clamp it to %d in silence",
 			cfg.DBMaxIdleConns, cfg.DBMaxOpenConns, cfg.DBMaxOpenConns))
 	}
-
-	if err := l.err(); err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
 }
 
 // loader accumulates problems instead of returning on the first one.
@@ -137,6 +143,11 @@ func (l *loader) required(name string) string {
 	return v
 }
 
+// port parses a listen port and refuses anything outside 1-65535.
+//
+// Port 0 is legal to the kernel and wrong here: it asks for any free port, and
+// the container publishes a fixed one, so the API would come up listening
+// somewhere Docker is not forwarding to.
 func (l *loader) port(name string) string {
 	v := l.required(name)
 	if l.broke(name) {
@@ -147,9 +158,6 @@ func (l *loader) port(name string) string {
 		l.add(name, fmt.Sprintf("%q is not a number", v))
 		return ""
 	}
-	// Port 0 is legal to the kernel and wrong here: it asks for any free port,
-	// and the container publishes a fixed one, so the API would come up
-	// listening somewhere Docker is not forwarding to.
 	if n < 1 || n > 65535 {
 		l.add(name, fmt.Sprintf("%d is outside 1-65535", n))
 		return ""

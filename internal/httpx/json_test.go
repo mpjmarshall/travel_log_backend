@@ -51,12 +51,14 @@ func TestWriteJSONEmitsNoTrailingNewline(t *testing.T) {
 // Encoder. A value that fails half way through has, under a streaming encoder,
 // already sent an implicit 200 and some bytes — a truncated body under a
 // success status, which a client cannot tell from a short read.
+//
+// The fixture is a struct whose first field encodes fine and whose second
+// cannot: a streaming encoder writes `{"id":"kyoto",` before it discovers the
+// chan.
 func TestWriteJSONThatCannotEncodeAnswers500AndNotAPartialBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	// A struct whose first field encodes fine and whose second cannot. A
-	// streaming encoder writes `{"id":"kyoto",` before it discovers the chan.
 	bad := struct {
 		ID string   `json:"id"`
 		Ch chan int `json:"ch"`
@@ -142,7 +144,6 @@ func TestMaxBodyBytesIsOneMebibyte(t *testing.T) {
 // satisfied by a limit set anywhere below it — a 1-byte ceiling passes
 // "1 MiB + 1 is refused" and refuses every real request.
 func TestTheBodyLimitIsEnforcedAtExactlyMaxBodyBytes(t *testing.T) {
-	// `{"id":"…"}` padded so the whole body is exactly MaxBodyBytes.
 	pad := func(n int64) string {
 		const wrapper = `{"id":""}`
 		return `{"id":"` + strings.Repeat("a", int(n)-len(wrapper)) + `"}`

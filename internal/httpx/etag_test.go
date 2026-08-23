@@ -80,22 +80,22 @@ func TestParseETagAcceptsTheStrongFormItNeverEmits(t *testing.T) {
 }
 
 func TestParseETagRefusesEverythingThatIsNotBothHalves(t *testing.T) {
-	for _, s := range []string{
-		``,
-		`W/"7"`,                      // the v3 ETag: one half, and the defect DEC-49 names
-		`"7"`,                        //
-		`W/"2-"`,                     //
-		`W/"-7"`,                     //
-		`W/"a-b"`,                    // not numbers
-		`W/"2-7-9"`,                  // three halves is not two
-		`2-7`,                        // unquoted
-		`W/2-7`,                      //
-		`W/"2-7`,                     // unbalanced
-		`*`,                          // valid in If-None-Match, never a tag
-		`W/"2-99999999999999999999"`, // overflows int64, so it is not a version this server ever wrote
+	for s, why := range map[string]string{
+		``:                           "empty",
+		`W/"7"`:                      "one half — the v3 ETag, and the defect DEC-49 names",
+		`"7"`:                        "one half, in the strong spelling",
+		`W/"2-"`:                     "a missing half",
+		`W/"-7"`:                     "a missing half",
+		`W/"a-b"`:                    "not numbers",
+		`W/"2-7-9"`:                  "three halves is not two",
+		`2-7`:                        "unquoted",
+		`W/2-7`:                      "unquoted",
+		`W/"2-7`:                     "unbalanced",
+		`*`:                          "valid in If-None-Match, never a tag",
+		`W/"2-99999999999999999999"`: "overflows int64, so it is not a version this server ever wrote",
 	} {
 		if _, _, ok := httpx.ParseETag(s); ok {
-			t.Errorf("ParseETag(%q) accepted it", s)
+			t.Errorf("ParseETag(%q) accepted it — %s", s, why)
 		}
 	}
 }

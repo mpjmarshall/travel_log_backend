@@ -235,6 +235,10 @@ type wireCodeUse struct {
 // checker can be run over a synthetic source that violates it. Without that,
 // this guard is a function that has never been shown to reject anything —
 // which today, with few call sites, it would be.
+//
+// The call is matched in both of the shapes it has: a bare *ast.Ident, which is
+// WriteError(...) from inside the package, and an *ast.SelectorExpr, which is
+// httpx.WriteError(...) from outside it.
 func badWireCodes(rel string, fset *token.FileSet, file *ast.File, known map[string]bool) []wireCodeUse {
 	var bad []wireCodeUse
 
@@ -251,9 +255,9 @@ func badWireCodes(rel string, fset *token.FileSet, file *ast.File, known map[str
 
 			var name string
 			switch fun := call.Fun.(type) {
-			case *ast.Ident: // WriteError(...) from inside the package
+			case *ast.Ident:
 				name = fun.Name
-			case *ast.SelectorExpr: // httpx.WriteError(...)
+			case *ast.SelectorExpr:
 				name = fun.Sel.Name
 			}
 			if name != "WriteError" || len(call.Args) != 3 {

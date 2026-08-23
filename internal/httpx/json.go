@@ -70,7 +70,9 @@ func WriteJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 //   - It refuses TRAILING CONTENT. `{"id":"kyoto"}{"id":"osaka"}` decodes the
 //     first value and, without the second Decode below, silently discards the
 //     rest — a client sending two documents would be told its second write
-//     succeeded.
+//     succeeded. io.EOF from that second Decode is what means "the body held
+//     exactly one value"; anything else is a second value, trailing junk, or a
+//     body that only now crosses the size limit.
 //   - DisallowUnknownFields is DELIBERATELY OFF (DEC-13). Every server addition
 //     is additive-and-optional, which is a promise about BOTH directions: a
 //     client built against a later API sends a key this build has never heard
@@ -83,9 +85,6 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		return decodeError(err)
 	}
 
-	// io.EOF here means "the body held exactly one value". Anything else —
-	// a second value, trailing junk, or a body that only now crosses the size
-	// limit — is a body this route will not accept.
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return fmt.Errorf("%w: the body carries more than one JSON value", ErrInvalidBody)

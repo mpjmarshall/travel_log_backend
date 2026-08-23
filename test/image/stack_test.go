@@ -128,6 +128,12 @@ func TestTheStackComesUpAndAnswersHealthz(t *testing.T) {
 // Dockerfile comment warns about produces the SAME symptom here: a container
 // that serves traffic perfectly and never becomes healthy. Compose's
 // `depends_on: condition: service_healthy` then waits forever on it.
+//
+// The 120s deadline is derived rather than picked: interval 5s x retries 12 is
+// a 60s worst case from the first probe, and the rest leaves room for a cold
+// start. A healthy status with an EMPTY probe log would mean Docker inherited
+// health from somewhere rather than running the probe, so the log length is
+// asserted too.
 func TestDockerReportsTheContainerHealthy(t *testing.T) {
 	requireDocker(t)
 	stack(t)
@@ -139,8 +145,6 @@ func TestDockerReportsTheContainerHealthy(t *testing.T) {
 		t.Fatalf("no api container in project %s", stackProject)
 	}
 
-	// interval 5s x retries 12 is a 60s worst case from the first probe; 120s
-	// leaves room for a cold start.
 	deadline := time.Now().Add(120 * time.Second)
 	var status string
 	for time.Now().Before(deadline) {
@@ -158,8 +162,6 @@ func TestDockerReportsTheContainerHealthy(t *testing.T) {
 		t.Fatalf("health status = %q after 120s, want healthy\nhealth log:\n%s", status, run(t, shortTimeout, "docker", "inspect", "-f", "{{json .State.Health.Log}}", cid))
 	}
 
-	// A healthy status with an empty log would mean Docker inherited health
-	// from somewhere rather than running the probe.
 	log := run(t, shortTimeout, "docker", "inspect", "-f", "{{len .State.Health.Log}}", cid)
 	if strings.TrimSpace(log) == "0" {
 		t.Errorf("health status is healthy but no probe has ever run")
@@ -173,6 +175,21 @@ func TestDockerReportsTheContainerHealthy(t *testing.T) {
 // shared stack cannot be pulled out from under the other legs. That is also
 // what makes it safe beside a developer's `make up`: the volume it creates and
 // destroys is travellog-imagetest-vol_pgdata.
+//
+// Three things in the body are decisions rather than steps:
+//
+//   - The probe table is this tier's own and is dropped first, so a rerun
+//     starts clean.
+//   - THE VOLUME MUST BE NAMED, and named after the project. An anonymous
+//     volume also survives `down` on some compose versions and is garbage the
+//     moment anybody runs `docker volume prune`.
+//   - The redeploy is `down` and NOT `down -v`: the -v is the operator error
+//     this design tolerates, not the one it must survive.
+//
+// The final read is soft on purpose. When the volume is gone the database
+// comes up EMPTY rather than wrong, so psql fails with `relation
+// "volume_probe" does not exist` — and a t.Fatal carrying a psql error is a
+// worse report than the sentence that names what the failure costs.
 func TestTheNamedVolumeSurvivesDownAndUp(t *testing.T) {
 	requireDocker(t)
 
@@ -199,7 +216,6 @@ func TestTheNamedVolumeSurvivesDownAndUp(t *testing.T) {
 
 	up()
 
-	// A table of this tier's own, dropped first so a rerun starts clean.
 	psql(`DROP TABLE IF EXISTS volume_probe`)
 	psql(`CREATE TABLE volume_probe (note text)`)
 	marker := fmt.Sprintf("survives-%d", time.Now().UnixNano())
@@ -208,16 +224,11 @@ func TestTheNamedVolumeSurvivesDownAndUp(t *testing.T) {
 		t.Fatalf("the row did not even survive the insert: %q", got)
 	}
 
-	// The volume must be named, and named after the project. An anonymous
-	// volume also survives `down` on some compose versions and is garbage the
-	// moment anybody runs `docker volume prune`.
 	want := volumeProject + "_pgdata"
 	if out := run(t, shortTimeout, "docker", "volume", "ls", "--format", "{{.Name}}"); !strings.Contains(out, want) {
 		t.Errorf("no volume named %q; compose declared no named volume for postgres data:\n%s", want, out)
 	}
 
-	// This is the redeploy. `down` and not `down -v`: the -v is the operator
-	// error this design tolerates, not the one it must survive.
 	out, err := runCompose(t, composeTimeout, env, compose(t, volumeProject, "down"))
 	if err != nil {
 		t.Fatalf("taking the stack down: %v\n%s", err, out)
@@ -225,10 +236,6 @@ func TestTheNamedVolumeSurvivesDownAndUp(t *testing.T) {
 
 	up()
 
-	// Soft, deliberately. When the volume is gone the database comes up EMPTY
-	// rather than wrong, so psql fails with `relation "volume_probe" does not
-	// exist` — and a t.Fatal carrying a psql error is a worse report than the
-	// sentence below, which names what the failure costs.
 	out, err = runCompose(t, composeTimeout, env,
 		compose(t, volumeProject, "exec", "-T", "postgres",
 			"psql", "-U", "travellog", "-d", "travellog", "-tAc", `SELECT note FROM volume_probe`))

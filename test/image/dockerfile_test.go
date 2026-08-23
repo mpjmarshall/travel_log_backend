@@ -65,6 +65,12 @@ func inspectImage(t *testing.T, tag string) imageConfig {
 // cp` needs a path you already know. Note that export adds the runtime's own
 // mounts — .dockerenv, /dev, /etc/hosts, /proc, /sys — so absence assertions
 // below name specific paths rather than claiming an exact inventory.
+//
+// The returned keys are NORMALISED — directories arrive from the tar with a
+// trailing slash and files without. MEASURED, not tidied: without it the
+// absence assertions looked for "usr/share/zoneinfo" while the export held
+// "usr/share/zoneinfo/", and a mutation that COPYed the whole zone database
+// into the image left them green. The layer count is what caught it.
 func exportImage(t *testing.T, tag, want string) (map[string]*tar.Header, []byte) {
 	t.Helper()
 
@@ -97,12 +103,6 @@ func exportImage(t *testing.T, tag, want string) (map[string]*tar.Header, []byte
 		if err != nil {
 			t.Fatalf("reading the export tar: %v (stderr: %s)", err, stderr.String())
 		}
-		// Directories arrive with a trailing slash and files without, so the
-		// key is normalised. MEASURED, not tidied: without this the absence
-		// assertions below looked for "usr/share/zoneinfo" while the export
-		// held "usr/share/zoneinfo/", and a mutation that COPYed the whole
-		// zone database into the image left them green. The layer count is
-		// what caught it.
 		name := strings.TrimSuffix(strings.TrimPrefix(h.Name, "./"), "/")
 		headers[name] = h
 		if name == want {
@@ -117,6 +117,9 @@ func exportImage(t *testing.T, tag, want string) (map[string]*tar.Header, []byte
 	return headers, wanted
 }
 
+// The user must be NUMERIC on both sides of the colon. A name here resolves
+// against an /etc/passwd this image does not have.
+//
 // TestRuntimeImageRunsAsANumericNonRootUser guards the third of the four
 // scratch compensations. The NUMERIC half is the part that cannot be inferred
 // from "non-root": scratch has no /etc/passwd, so `USER nonroot` builds
@@ -132,8 +135,6 @@ func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 	if got == "root" || strings.HasPrefix(got, "0:") || got == "0" {
 		t.Fatalf("Config.User = %q, which is root", got)
 	}
-	// Numeric on both sides of the colon. A name here resolves against an
-	// /etc/passwd this image does not have.
 	uid, gid, found := strings.Cut(got, ":")
 	if !found {
 		t.Fatalf("Config.User = %q, want uid:gid — a name has no /etc/passwd here to resolve against, and a bare uid leaves the group at 0", got)
@@ -156,6 +157,16 @@ func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 // The exec form is the load-bearing half. A HEALTHCHECK written as a bare
 // string becomes ["CMD-SHELL", …] and needs /bin/sh, which scratch does not
 // have — it would build, ship, and report every container unhealthy forever.
+//
+// TWO RELATIONS BETWEEN THE DURATIONS ARE ASSERTED. A timeout at or above the
+// interval overlaps probes rather than spacing them, and a probe that never
+// finishes before the next one starts turns a slow dependency into a
+// permanently pending health status. And the timeout must leave room for the
+// flag's own budget: deploy/Dockerfile documents four budgets that must nest,
+// innermost first — /healthz's database ping < the probe's request < this
+// timeout < this interval. Only the outer two relations are checked here; the
+// inner two are constants in cmd/api, another package's to change, and a leg
+// pinning them from here would break on a correct edit.
 func TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -176,19 +187,9 @@ func TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag(t *testing.T) {
 	if hc.Interval <= 0 || hc.Timeout <= 0 || hc.Retries <= 0 {
 		t.Errorf("HEALTHCHECK interval=%s timeout=%s retries=%d: each must be set explicitly", hc.Interval, hc.Timeout, hc.Retries)
 	}
-	// A timeout at or above the interval overlaps probes rather than spacing
-	// them, and a probe that never finishes before the next one starts turns a
-	// slow dependency into a permanently pending health status.
 	if hc.Timeout >= hc.Interval {
 		t.Errorf("HEALTHCHECK timeout %s >= interval %s", hc.Timeout, hc.Interval)
 	}
-	// The flag's own budget. deploy/Dockerfile documents four budgets that
-	// must nest, innermost first: /healthz's database ping < probe's request
-	// < this timeout < this interval. Only the outer two relations are
-	// asserted here — the inner two are constants in cmd/api, another
-	// package's to change, and a leg that pins them from here would break on
-	// a correct edit. What is guarded is that this timeout leaves room for
-	// the innermost budget at all.
 	if hc.Timeout <= 2*time.Second {
 		t.Errorf("HEALTHCHECK timeout %s does not clear cmd/api's own healthz ping budget", hc.Timeout)
 	}
@@ -215,6 +216,10 @@ func TestRuntimeImageEntrypointIsTheBinary(t *testing.T) {
 // it is owned by root, and this container runs as 65532, so a 0600 bundle
 // would be invisible to the process that needs it. Whether it FUNCTIONS is a
 // separate leg, in container_test.go, and it runs the container.
+//
+// A real Debian bundle is ~220 KB. The 50 KB floor is deliberately far below
+// that and far above zero: what it rejects is a COPY that produced an empty or
+// truncated file.
 func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 	requireDocker(t)
 	files, _ := exportImage(t, image(t), "")
@@ -223,9 +228,6 @@ func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 	if !ok {
 		t.Fatalf("/%s is not in the image: `scratch` has no roots, so every outbound TLS dial fails with x509: certificate signed by unknown authority", caBundlePath)
 	}
-	// A real Debian bundle is ~220 KB. The floor is deliberately far below
-	// that and far above zero: what it rejects is a COPY that produced an
-	// empty or truncated file.
 	if h.Size < 50_000 {
 		t.Errorf("/%s is %d bytes, want a real bundle (>50 KB)", caBundlePath, h.Size)
 	}
@@ -254,6 +256,10 @@ func TestTheShippedBinaryIsReadableAndExecutableByAnyUser(t *testing.T) {
 	}
 }
 
+// The layer count is TWO — the CA bundle and the binary. Anything more means
+// stage 2 gained a base image or another COPY, which is the change that quietly
+// invalidates the absences below.
+//
 // TestRuntimeImageIsScratchAndHasNothingToFallBackOn measures the PREMISE the
 // other three compensations rest on. Every one of them is only load-bearing
 // because these paths are absent; if a base image ever supplied them, the
@@ -274,9 +280,6 @@ func TestRuntimeImageIsScratchAndHasNothingToFallBackOn(t *testing.T) {
 		}
 	}
 
-	// Two layers: the CA bundle and the binary. Anything more means stage 2
-	// gained a base image or another COPY, which is the change that quietly
-	// invalidates the absences above.
 	cfg := inspectImage(t, image(t))
 	if n := len(cfg.RootFS.Layers); n != 2 {
 		t.Errorf("the runtime image has %d layers, want 2 (the CA bundle and the binary)", n)
@@ -291,7 +294,9 @@ func TestRuntimeImageIsScratchAndHasNothingToFallBackOn(t *testing.T) {
 // stores uncompressed in both the local header and the central directory.
 // Measured on this image: "Asia/Tokyo" ×2, "America/New_York" ×2, "TZif" ×598.
 // The negative control is in container_test.go, where the SAME image is shown
-// to have no zoneinfo on disk at all.
+// to have no zoneinfo on disk at all. TZif is the magic at the head of every
+// compiled zone file: one or two could be an accident of some other string,
+// six hundred is the database.
 func TestTheShippedBinaryEmbedsTheTimezoneDatabase(t *testing.T) {
 	requireDocker(t)
 	_, binary := exportImage(t, image(t), binaryPath)
@@ -304,8 +309,6 @@ func TestTheShippedBinaryEmbedsTheTimezoneDatabase(t *testing.T) {
 			t.Errorf("the shipped binary contains no %q: the embedded IANA database is not linked in, and `scratch` has no /usr/share/zoneinfo to fall back on", zone)
 		}
 	}
-	// TZif is the magic at the head of every compiled zone file. One or two
-	// could be an accident of some other string; six hundred is the database.
 	if n := bytes.Count(binary, []byte("TZif")); n < 100 {
 		t.Errorf("the shipped binary holds %d TZif headers, want the whole database (measured: 598)", n)
 	}

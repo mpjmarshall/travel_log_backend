@@ -64,11 +64,11 @@ func New(w io.Writer, level slog.Level) *slog.Logger {
 // The decision is made on the KEY and never on the value. A redactor that
 // sniffed values would pass every leak test by replacing everything, which logs
 // nothing and looks safe.
+//
+// The group early-return is defensive: slog does not call ReplaceAttr on a
+// group attribute itself, only on its contents, and without it a group named
+// "authorization" would collapse into a string and take its members with it.
 func redact(_ []string, a slog.Attr) slog.Attr {
-	// slog does not call ReplaceAttr on a group attribute itself, only on its
-	// contents. Returning early is defensive, and it keeps a group named
-	// "authorization" from collapsing into a string and taking its members
-	// with it.
 	if a.Value.Kind() == slog.KindGroup {
 		return a
 	}

@@ -92,6 +92,8 @@ func TestChainWithNoMiddlewareIsTheHandler(t *testing.T) {
 
 // === Recover ===
 
+// The panic value is the one string in this test that must NOT travel to the
+// wire.
 func TestAPanickingHandlerAnswers500AndTheEnvelope(t *testing.T) {
 	log, _ := testLogger()
 	rec := httptest.NewRecorder()
@@ -109,12 +111,15 @@ func TestAPanickingHandlerAnswers500AndTheEnvelope(t *testing.T) {
 	if got := rec.Body.String(); got != `{"code":"internal"}` {
 		t.Errorf("body = %s, want {\"code\":\"internal\"}", got)
 	}
-	// The panic value is the one string in this test that must NOT travel.
 	if strings.Contains(rec.Body.String(), "postgres://") {
 		t.Errorf("the panic value reached the wire: %s", rec.Body.String())
 	}
 }
 
+// RECOVER IS OUTERMOST, so the request it holds predates the id. It reads the
+// id off the response header the request-id middleware has already set on the
+// shared ResponseWriter — without that, the one log line that matters most is
+// the one line that cannot be correlated.
 func TestThePanicItselfGoesToTheLogWithTheRequestID(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -141,10 +146,6 @@ func TestThePanicItselfGoesToTheLogWithTheRequestID(t *testing.T) {
 	if !strings.Contains(found["panic"].(string), "nil traveller") {
 		t.Errorf("the panic line does not carry the value: %v", found)
 	}
-	// RECOVER IS OUTERMOST, so the request it holds predates the id. It reads
-	// the id off the response header the request-id middleware has already set
-	// on the shared ResponseWriter — without that, the one log line that
-	// matters most is the one line that cannot be correlated.
 	if found["requestId"] != id {
 		t.Errorf("panic line requestId = %v, want %q", found["requestId"], id)
 	}
@@ -332,12 +333,14 @@ func TestAFailedRequestIsLoggedAtError(t *testing.T) {
 // AST sweep structurally cannot see. So the handler is constructed with the
 // envelope as its message — and the body must PARSE, not merely contain the
 // word.
+//
+// The handler sleeps for a BOUNDED time rather than waiting on a channel the
+// test closes at cleanup: with a no-op timeout — which is what a broken one
+// looks like — a handler waiting on cleanup deadlocks the test binary instead
+// of failing it.
 func TestATimedOutRequestGetsTheJSONEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	// A BOUNDED sleep rather than a channel the test closes on cleanup: with a
-	// no-op timeout — which is what a broken one looks like — a handler waiting
-	// on cleanup deadlocks the test binary instead of failing it.
 	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 	}), httpx.Timeout(10*time.Millisecond)).
@@ -393,6 +396,14 @@ func TestBaseIsTheFourMiddlewaresInTheOrderVS3Fixes(t *testing.T) {
 // access line existing AT ALL for a timed-out request proves access log is
 // above the timeout — inside it, TimeoutHandler would have returned first and
 // the line would never be written.
+//
+// MEASURED CONSEQUENCE OF RECOVER BEING OUTERMOST, and the reason the access
+// line's status is asserted to be 0: the access log's defer runs as the panic
+// unwinds — BEFORE the outer recover has written anything — so the line records
+// the status the HANDLER wrote, which is none. 0 is the honest answer and the
+// request id is what joins the two lines. Do not "fix" this by moving recover
+// inside the access log: it would then catch nothing that happens in the
+// middlewares above it.
 func TestThroughTheWholeChainAPanicIsAJSON500WithACorrelatedAccessLine(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -423,14 +434,8 @@ func TestThroughTheWholeChainAPanicIsAJSON500WithACorrelatedAccessLine(t *testin
 		t.Errorf("the two lines are not correlated: access=%v panic=%v header=%q",
 			access["requestId"], panicLine["requestId"], id)
 	}
-	// MEASURED CONSEQUENCE OF RECOVER BEING OUTERMOST. The access log's defer
-	// runs as the panic unwinds — BEFORE the outer recover has written
-	// anything — so the line records the status the HANDLER wrote, which is
-	// none. 0 is the honest answer and the request id is what joins the two
-	// lines. Do not "fix" this by moving recover inside the access log: it
-	// would then catch nothing that happens in the middlewares above it.
 	if access["status"] != float64(0) {
-		t.Errorf("access status = %v, want 0 — see the comment", access["status"])
+		t.Errorf("access status = %v, want 0 — see this test's doc comment", access["status"])
 	}
 }
 
