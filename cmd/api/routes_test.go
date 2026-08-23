@@ -185,3 +185,25 @@ func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 		t.Errorf("Content-Type = %q, want %q", got, want)
 	}
 }
+
+// The four routes VS7 leaves on the server, asserted here for the reason the
+// two auth ones are: what only this package can say is whether they reach the
+// server `docker compose up` starts. What each of them DOES is proven in
+// internal/httpapi, over the same handlers and the same middleware.
+func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
+	mux := wiredMux(t, quiet())
+
+	for _, route := range []struct{ method, path, pattern string }{
+		{http.MethodPost, "/v1/auth/register", "POST /v1/auth/register"},
+		{http.MethodPost, "/v1/auth/session", "POST /v1/auth/session"},
+		{http.MethodGet, "/v1/logbook", "GET /v1/logbook"},
+		{http.MethodPut, "/v1/trips/kyoto", "PUT /v1/trips/{id}"},
+	} {
+		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+		_, pattern := mux.Handler(req)
+		if pattern != route.pattern {
+			t.Errorf("%s %s resolves to %q, want %q — the slice arc cannot get past it",
+				route.method, route.path, pattern, route.pattern)
+		}
+	}
+}

@@ -126,10 +126,12 @@ var cheapArgon = auth.Argon2id{Params: auth.Params{
 }}
 
 type harness struct {
-	server *httptest.Server
-	store  *fakeStore
-	logs   *bytes.Buffer
-	client *http.Client
+	server  *httptest.Server
+	store   *fakeStore
+	logbook *fakeLogbook
+	deps    Deps
+	logs    *bytes.Buffer
+	client  *http.Client
 }
 
 type options struct {
@@ -167,12 +169,15 @@ func newHarness(t *testing.T, opt options) *harness {
 		},
 	}
 
-	mux := http.NewServeMux()
-	Mount(mux, Deps{
+	books := &fakeLogbook{}
+	deps := Deps{
 		Auth:      service,
+		Logbook:   books,
 		Log:       log,
 		AuthLimit: httpx.NewLimiter(opt.ratePerMin, nil),
-	})
+	}
+	mux := http.NewServeMux()
+	Mount(mux, deps)
 
 	// THE PROTECTED ROUTE IS THE TEST'S, NOT THE PACKAGE'S. VS6 builds the
 	// middleware and VS7 builds the first route that wears it, so mounting one
@@ -192,7 +197,7 @@ func newHarness(t *testing.T, opt options) *harness {
 
 	server := httptest.NewServer(httpx.Chain(mux, httpx.Base(log, 30*time.Second)...))
 	t.Cleanup(server.Close)
-	return &harness{server: server, store: store, logs: logs, client: server.Client()}
+	return &harness{server: server, store: store, logbook: books, deps: deps, logs: logs, client: server.Client()}
 }
 
 type answer struct {
@@ -206,7 +211,17 @@ func (h *harness) post(t *testing.T, path, body string) answer {
 	return h.do(t, http.MethodPost, path, body, "")
 }
 
+func (h *harness) put(t *testing.T, path, body, bearer string) answer {
+	t.Helper()
+	return h.do(t, http.MethodPut, path, body, bearer)
+}
+
 func (h *harness) do(t *testing.T, method, path, body, bearer string) answer {
+	t.Helper()
+	return h.doWithHeaders(t, method, path, body, bearer, nil)
+}
+
+func (h *harness) doWithHeaders(t *testing.T, method, path, body, bearer string, headers map[string]string) answer {
 	t.Helper()
 	req, err := http.NewRequest(method, h.server.URL+path, strings.NewReader(body))
 	if err != nil {
@@ -215,6 +230,9 @@ func (h *harness) do(t *testing.T, method, path, body, bearer string) answer {
 	req.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
 		req.Header.Set("Authorization", bearer)
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {

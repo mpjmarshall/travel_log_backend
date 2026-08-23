@@ -28,11 +28,13 @@ import (
 
 	"travellog/internal/auth"
 	"travellog/internal/httpx"
+	"travellog/internal/logbook"
 )
 
 // Deps is what the routes need. AuthLimit is not optional — see Mount.
 type Deps struct {
 	Auth      *auth.Service
+	Logbook   logbook.Store
 	Log       *slog.Logger
 	AuthLimit *httpx.Limiter
 }
@@ -77,9 +79,21 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.AuthLimit == nil {
 		panic("httpapi: the auth routes need a rate limiter (DEC-48); a nil one is not 'no limit'")
 	}
+	if deps.Logbook == nil {
+		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
+			"it is a 500 the first time somebody asks for their log")
+	}
 	limited := httpx.RateLimit(deps.AuthLimit, deps.Log)
-	mux.Handle("POST /v1/auth/register", limited(http.HandlerFunc(register(deps))))
-	mux.Handle("POST /v1/auth/session", limited(http.HandlerFunc(signIn(deps))))
+	authed := RequireTraveller(deps.Auth, deps.Log)
+	for _, route := range Routes(deps) {
+		handler := http.Handler(route.Handler)
+		if route.Auth {
+			handler = authed(handler)
+		} else {
+			handler = limited(handler)
+		}
+		mux.Handle(route.Method+" "+route.Pattern, handler)
+	}
 }
 
 func register(deps Deps) http.HandlerFunc {

@@ -262,7 +262,12 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.Serv
 	limiter := httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil)
 
 	return func(mux *http.ServeMux) {
-		httpapi.Mount(mux, httpapi.Deps{Auth: service, Log: log, AuthLimit: limiter})
+		httpapi.Mount(mux, httpapi.Deps{
+			Auth:      service,
+			Logbook:   postgres.LogbookStore{DB: db},
+			Log:       log,
+			AuthLimit: limiter,
+		})
 	}, nil
 }
 
