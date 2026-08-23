@@ -1,0 +1,27 @@
+# Build output
+/bin/
+/out/
+
+# Local environment. deploy/.env.example is checked in and is the documentation;
+# deploy/.env is the developer's own and never is.
+deploy/.env
+.env
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Go test artefacts
+*.test
+*.out
+
+# `go build ./...` — the literal first command of `make check` — writes the
+# executable for the single main package into the CURRENT DIRECTORY, so a bare
+# `make check` leaves ./api behind. Measured at VS1, caught by `git add -A`.
+# The command is kept literal because the gate is specified as those four
+# commands in that order; this line is the consequence.
+/api

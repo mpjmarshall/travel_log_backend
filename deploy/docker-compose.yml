@@ -1,0 +1,80 @@
+# The slice's stack: TWO services.
+#
+# go_backend.md L32 asks for three — the Go API, PostgreSQL with a persistent
+# volume, and a Caddy reverse proxy for automatic HTTPS. The third is DEFERRED
+# for the slice, not declined: Caddy brings TLS, the proxy hop and
+# X-Forwarded-For client resolution, none of which the slice's arc exercises,
+# and deferring it defers the limiter-behind-proxy question with it. The
+# rate limiter therefore keys on RemoteAddr, which is correct for a direct
+# connection and wrong the moment a proxy appears — recorded in CLAUDE.md as
+# unfinished rather than as a simplification.
+#
+# The parent plan's fourth service (MinIO, DEC-39) is out of scope entirely:
+# no object storage, no media routes.
+#
+# Explicit `name` so `docker compose down -v` from any directory reaches the
+# same project. The compose file lives in deploy/, so compose's own project
+# directory is deploy/ and a `.env` placed there is what it interpolates from.
+# Every variable below carries a default, so the stack comes up with no .env
+# at all; deploy/.env.example documents the overrides.
+
+name: travellog
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      # Read by internal/config from VS2. The api reaches the database over
+      # the compose network by service name, never over the published port.
+      DATABASE_URL: postgres://${POSTGRES_USER:-travellog}:${POSTGRES_PASSWORD:-travellog}@postgres:5432/${POSTGRES_DB:-travellog}?sslmode=disable
+      PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-8}
+      DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-4}
+      AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-10}
+      ARGON2_MAX_CONCURRENT: ${ARGON2_MAX_CONCURRENT:-2}
+    ports:
+      # Loopback-bound: local-only target (DEC-21). Nothing here is reachable
+      # from the network without an explicit change.
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-travellog}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travellog}
+      POSTGRES_DB: ${POSTGRES_DB:-travellog}
+    volumes:
+      # THE NAMED VOLUME IS THE POINT. It is the only thing standing between
+      # `docker compose down && up` and an empty log, and its failure stays
+      # invisible until a redeploy — which is why VS8's arc restarts the stack
+      # and reads the trip back rather than trusting this line.
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Published ONLY so the host's `go test ./internal/store/...` can reach
+      # it via TEST_DATABASE_URL (`make test-db`). Loopback-bound, and on 5434
+      # rather than 5432 because BOTH lower ports were already taken on this
+      # machine — 5432 by a developer Postgres, 5433 by an unrelated Docker
+      # container (`slab-postgres`). Measured twice: the first choice failed at
+      # `up` with EADDRINUSE. A deploy publishes nothing here.
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-travellog} -d ${POSTGRES_DB:-travellog}",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
