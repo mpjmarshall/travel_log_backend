@@ -2788,3 +2788,29 @@ checked against `config.Load`'s variable list. New at VS6:
   `X-Forwarded-For`.
 - **`internal/seed` still has no test files**, and it is a `wip` commit that
   predates this step.
+
+### The routes are NOT in the running container, and that is on the record
+
+`make check` is green and the routes are exercised over the real
+`http.ServeMux`, the real middleware chain and a real PostgreSQL — but **the
+image was not rebuilt in this session**, so `docker compose ps` shows an `api`
+container from before VS6 and `POST /v1/auth/register` against
+`127.0.0.1:8080` answers **404**. The build stops at its first step:
+
+```
+#1 [api internal] load build definition from Dockerfile   DONE 0.0s
+#2 [api] resolve image config for docker-image://docker.io/docker/dockerfile:1
+   (no progress; killed after ~15 minutes)
+```
+
+`deploy/Dockerfile`'s `# syntax=docker/dockerfile:1` line makes BuildKit fetch
+that frontend from Docker Hub on every build, and **egress to
+`registry-1.docker.io` did not answer here**. It is an environment fact rather
+than a defect in the Dockerfile, and it is written down for two reasons: the
+next worker must not read `Up (healthy)` as "the auth routes are live", and
+**VS8's arc cannot run at all until that fetch succeeds** — the arc's first
+request is `POST /v1/auth/register`. `docker compose build api` once, on a
+machine with Hub reachable, is the whole of it. If it stays unreachable,
+pinning the frontend to a digest already in the local cache — or dropping the
+`# syntax` line, which costs the heredoc and mount syntaxes the file uses — is
+the conversation.
