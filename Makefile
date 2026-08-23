@@ -78,3 +78,16 @@ slice:
 	@echo "make slice: scripts/slice-arc.sh lands in VS8." >&2
 	@echo "Its restart leg is the only proof of the named volume, so it cannot be faked." >&2
 	@exit 1
+
+## test-image — the opt-in image tier (test/image). Everything about the
+## shipped artefact that `go test ./...` cannot reach: what the scratch image
+## contains, who it runs as, whether Docker's own HEALTHCHECK goes healthy,
+## and whether the named volume survives `down` then `up`.
+##
+## DELIBERATELY NOT PART OF `make check`. The gate is four commands and stays
+## fast; this builds an image and brings two compose projects up, on their own
+## ports and under their own project names so it can run beside `make up`.
+## Without Docker, or without the variable, every leg SKIPS and says so.
+.PHONY: test-image
+test-image:
+	TRAVELLOG_IMAGE_TESTS=1 go test -v -count=1 -timeout 30m ./test/image/
