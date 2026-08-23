@@ -494,3 +494,82 @@ func TestAReaderNeverSeesATripTheVersionDoesNotCount(t *testing.T) {
 	default:
 	}
 }
+
+// FOUND AT VS6, AND IT IS A BLOCKER RATHER THAN A TIDY-UP.
+//
+// WithTravellerTx had no `defer tx.Rollback()`. Every one of its four error
+// exits — begin's lock, the bump's ErrNoRows, the bump's driver error, and the
+// body's own error — returned with the transaction still open, so the pooled
+// connection was never checked back in, the session sat `idle in transaction`
+// for the life of the process, and it kept the traveller's advisory lock and
+// every row lock the body had taken. The next write for that traveller blocks
+// for ever, which is the exact failure tx.go's own comment describes for a
+// session-scoped lock and then walks into by another door.
+//
+// THE TWO LEGS THAT ALREADY EXISTED COULD NOT SAY SO. Both of them assert
+// through a SECOND connection, and a SELECT reads the pre-commit snapshot
+// happily under MVCC, so both passed their assertions and then hung in
+// testdb's cleanup, where `DROP SCHEMA … CASCADE` waits on the stranded
+// transaction's relation lock. Measured at `62a7821`, on the committed tree:
+//
+//	$ go test ./internal/postgres/ -run TestWithTravellerTxRollsBackTheBumpWhenTheBodyFails -timeout 20s
+//	=== RUN   TestWithTravellerTxRollsBackTheBumpWhenTheBodyFails
+//	panic: test timed out after 20s
+//	goroutine 37 [chan receive]:
+//	database/sql.(*Tx).awaitDone(…)
+//
+// So this leg exists to give that failure a NAME. db.Stats().InUse is the
+// cheapest true statement about it: a helper that has returned owns no
+// connection. A guard whose only failure mode is a ten-minute timeout is a
+// guard somebody eventually deletes.
+func TestAFailedWriteChecksItsConnectionBackIn(t *testing.T) {
+	db, schema := withTravellers(t)
+	ctx := context.Background()
+	boom := errors.New("the body refused")
+
+	if _, err := WithTravellerTx(ctx, db, tid, func(context.Context, *sql.Tx) error {
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("WithTravellerTx = %v, want the body's own error", err)
+	}
+
+	if inUse := db.Stats().InUse; inUse != 0 {
+		t.Errorf("%d connection(s) still checked out after a failed write, want 0 — "+
+			"the transaction was never rolled back", inUse)
+		freeTheStrandedTransaction(t, schema)
+	}
+
+	if _, err := WithTravellerTx(ctx, db, tid, func(context.Context, *sql.Tx) error {
+		return nil
+	}); err != nil {
+		t.Errorf("the write after a failed one: %v", err)
+	}
+}
+
+func TestAWriteForATravellerWhoIsNotThereChecksItsConnectionBackIn(t *testing.T) {
+	db, schema := withTravellers(t)
+
+	if _, err := WithTravellerTx(context.Background(), db, noTraveller,
+		func(context.Context, *sql.Tx) error { return nil }); !errors.Is(err, ErrNoTraveller) {
+		t.Fatalf("WithTravellerTx = %v, want ErrNoTraveller", err)
+	}
+	if inUse := db.Stats().InUse; inUse != 0 {
+		t.Errorf("%d connection(s) still checked out after the bump found no traveller, want 0", inUse)
+		freeTheStrandedTransaction(t, schema)
+	}
+}
+
+// freeTheStrandedTransaction is called ONLY on the failing path. Without it
+// the legible failure above turns back into the timeout it was written to
+// replace: testdb's cleanup cannot drop a schema whose tables a stranded
+// transaction still holds.
+func freeTheStrandedTransaction(t *testing.T, schema string) {
+	t.Helper()
+	other := testdb.Second(t, schema)
+	if _, err := other.ExecContext(context.Background(),
+		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+		 WHERE datname = current_database() AND state = 'idle in transaction'
+		   AND pid <> pg_backend_pid()`); err != nil {
+		t.Logf("could not free the stranded transaction: %v", err)
+	}
+}

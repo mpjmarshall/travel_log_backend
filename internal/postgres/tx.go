@@ -97,6 +97,13 @@ func WithTravellerTx(ctx context.Context, db *sql.DB, travellerID string, fn fun
 	if err != nil {
 		return 0, fmt.Errorf("postgres: beginning a write for %s: %w", travellerID, err)
 	}
+	// EVERY EXIT BELOW IS AN EXIT FROM AN OPEN TRANSACTION. Without this the
+	// connection is never checked back in: the session sits `idle in
+	// transaction` for the life of the process holding this traveller's
+	// advisory lock and every row lock the body took, and the next write for
+	// that traveller blocks for ever. After a successful Commit it is a no-op
+	// (sql.ErrTxDone), which is why WithTravellerLock has always had one.
+	defer tx.Rollback()
 
 	if err := lockTraveller(ctx, tx, travellerID); err != nil {
 		return 0, err
