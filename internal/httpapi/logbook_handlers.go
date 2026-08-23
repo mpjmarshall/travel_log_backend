@@ -117,7 +117,7 @@ func putTrip(deps Deps) http.HandlerFunc {
 		// A write always leaves a version of at least 1: the bump is taken
 		// before the body runs, so there is no `tagFor` branch to take here.
 		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
-		httpx.WriteJSON(w, r, http.StatusOK, trip)
+		httpx.WriteJSON(w, r, http.StatusOK, logbook.EmitTrip(trip))
 	}
 }
 

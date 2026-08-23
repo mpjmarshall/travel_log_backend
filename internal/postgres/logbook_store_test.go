@@ -88,6 +88,12 @@ func text(s string) *string { return &s }
 func always(int64) bool { return true }
 func never(int64) bool  { return false }
 
+// THE ONE LEG IN VS7 NO MUTATION REDDENED, ARGUED RATHER THAN LEFT UNSAID.
+// It is a compile-time assertion: the way it fails is `LogbookStore does not
+// implement logbook.Store`, which is exit 1 out of the build rather than a
+// wrong answer from a test. VS6 recorded four of these and settled that it is
+// the right red for a claim about types — an interface and its only
+// implementation drifting apart is not a behaviour anything can observe.
 func TestLogbookStoreIsTheStoreTheDomainDeclared(t *testing.T) {
 	var _ logbook.Store = LogbookStore{}
 }

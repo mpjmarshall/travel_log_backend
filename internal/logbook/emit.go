@@ -76,7 +76,7 @@ func Emit(formatVersion int, doc Document) (Envelope, error) {
 	doc.Photos = orEmpty(doc.Photos)
 	doc.Walks = orEmpty(doc.Walks)
 	for i := range doc.Trips {
-		doc.Trips[i].CityIDs = orEmpty(doc.Trips[i].CityIDs)
+		doc.Trips[i] = EmitTrip(doc.Trips[i])
 	}
 	for i := range doc.Places {
 		doc.Places[i].Visits = orEmpty(doc.Places[i].Visits)
@@ -86,6 +86,28 @@ func Emit(formatVersion int, doc Document) (Envelope, error) {
 	}
 
 	return Envelope{Version: formatVersion, Logbook: doc}, nil
+}
+
+// EmitTrip is the same normalisation Emit applies to a trip inside the
+// document, for the ONE route that answers a bare entity: DEC-32's write
+// response, which the phone splices into its cached log rather than
+// re-fetching 85 KB.
+//
+// IT EXISTS BECAUSE THE WRITE PATH DOES NOT GO THROUGH Emit AND THAT COST A
+// DEFECT. Measured against the running server before the fix:
+// `PUT /v1/trips/kyoto` with an empty cityIds answered
+// `"cityIds":null`, which the client reads as `(json['cityIds'] as
+// List<dynamic>)` — non-nullable — and throws on. The GET was correct the
+// whole time, because Emit normalises; the two paths had one rule and one
+// implementation of it.
+//
+// It takes no format version, unlike Emit. The write's answer is a splice into
+// a document the client fetched at a version it has already negotiated, so
+// there is no second shape to choose between. The day a trip looks different
+// at two format versions, this grows the parameter Emit already has.
+func EmitTrip(t Trip) Trip {
+	t.CityIDs = orEmpty(t.CityIDs)
+	return t
 }
 
 // Formats is what a 406 names: every version this build can write.

@@ -350,6 +350,26 @@ func TestAFormatThisBuildCannotEmitAnswers406AndNamesWhatItCan(t *testing.T) {
 	}
 }
 
+// AND A 406 MUST NOT ASSEMBLE IT EITHER. This leg exists because the mutation
+// that removed the handler's early gate SURVIVED: Emit refuses the version on
+// its own and writeLogbookFailure maps that to the same 406 with the same
+// header, so the two paths agree on every byte the client sees. What they do
+// not agree on is the work: without the gate the read opens a snapshot and
+// builds the whole document before refusing it.
+func TestA406NeverAssemblesTheDocument(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	got := h.get(t, "/v1/logbook", token, map[string]string{formatHeader: "3"})
+	if got.status != http.StatusNotAcceptable {
+		t.Fatalf("GET with X-Logbook-Format: 3 = %d %s, want 406", got.status, got.body)
+	}
+	if n := h.logbook.assembleCount(); n != 0 {
+		t.Errorf("a refused format assembled the log %d time(s), want 0 — the check "+
+			"belongs before the snapshot, not after it", n)
+	}
+}
+
 // DEC-53: a missing header is treated as the current version, so the header is
 // additive and a client that never learned to send it is no worse off.
 func TestAMissingFormatHeaderIsTheCurrentVersion(t *testing.T) {
@@ -392,6 +412,30 @@ func TestAPutAnswers200WithTheTripAndTheNewTag(t *testing.T) {
 	emitter, data, ok := parseTag(t, got.header.Get("ETag"))
 	if !ok || emitter != logbook.EmitterVersion || data < 1 {
 		t.Errorf("ETag = %q, want the new version under this emitter", got.header.Get("ETag"))
+	}
+}
+
+// FOUND BY RUNNING IT, NOT BY A TEST. Against the real server a PUT with an
+// empty cityIds answered `"cityIds":null`, because the write path answers a
+// bare entity and does not go through Emit — which is where the nil-slice
+// normalisation lived. The client reads cityIds as `as List<dynamic>`, with no
+// null branch, so it throws. The splice leg could not see it: it appends the
+// returned trip to a document and re-emits, and Emit normalised it on the way.
+func TestATripWrittenWithNoCitiesComesBackWithAnEmptyList(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	// The body OMITS cityIds, which is what makes the slice nil. A body
+	// carrying `"cityIds":[]` decodes to an empty non-nil slice and marshals as
+	// `[]` with or without the normalisation, so a leg written that way cannot
+	// fail — measured: it survived the mutation that removed EmitTrip.
+	got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","name":"Kyoto"}`, token)
+	if got.status != http.StatusOK {
+		t.Fatalf("PUT = %d %s", got.status, got.body)
+	}
+	if !strings.Contains(string(got.body), `"cityIds":[]`) {
+		t.Errorf("the write answered %s\n    want `\"cityIds\":[]` — null is the one shape "+
+			"the client's `as List<dynamic>` throws on", got.body)
 	}
 }
 

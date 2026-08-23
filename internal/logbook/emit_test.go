@@ -210,6 +210,25 @@ func TestEveryListIsEmptyRatherThanNull(t *testing.T) {
 	}
 }
 
+// The nested lists, and the one route that answers a bare entity. `cityIds` is
+// `as List<dynamic>` on the client with no null branch, so a nil slice is the
+// single shape that throws — and the write path does not go through Emit,
+// which is how it shipped as `null` once.
+func TestATripsCityIdsAreEmptyRatherThanNull(t *testing.T) {
+	inside := emitted(t, logbook.Document{Trips: []logbook.Trip{{ID: "kyoto", Name: "Kyoto"}}})
+	if !strings.Contains(string(inside), `"cityIds":[]`) {
+		t.Errorf("inside the document: %s, want `\"cityIds\":[]`", inside)
+	}
+
+	bare, err := json.Marshal(logbook.EmitTrip(logbook.Trip{ID: "kyoto", Name: "Kyoto"}))
+	if err != nil {
+		t.Fatalf("marshalling a bare trip: %v", err)
+	}
+	if !strings.Contains(string(bare), `"cityIds":[]`) {
+		t.Errorf("the write's answer: %s, want `\"cityIds\":[]`", bare)
+	}
+}
+
 func TestAnUnnamedTravellerIsNullAndNeverAnEmptyObject(t *testing.T) {
 	var got struct {
 		Logbook map[string]json.RawMessage `json:"logbook"`
