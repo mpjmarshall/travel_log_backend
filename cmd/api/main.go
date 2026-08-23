@@ -61,7 +61,14 @@ func main() {
 	}
 }
 
-func serve(addr string) error {
+// newMux builds the server's routing table.
+//
+// EXTRACTED FROM serve AT VS1-BACKFILL, and the extraction is the whole of the
+// change: the body is byte-for-byte what serve held, and serve now calls this.
+// The reason is that serve blocks until a signal and hands its listener to
+// ListenAndServe, so there is no way to reach the handler from a test without
+// signalling the test process itself. newMux is what httptest.NewServer takes.
+func newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// VS1 PLACEHOLDER. VS2 makes this ping the database so it can answer 503.
@@ -71,9 +78,13 @@ func serve(addr string) error {
 		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
 	})
 
+	return mux
+}
+
+func serve(addr string) error {
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           newMux(),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
