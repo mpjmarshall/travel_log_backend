@@ -1,0 +1,210 @@
+{
+  "findings": [
+    {
+      "severity": "blocker",
+      "target": "migrations/0001_init.up.sql \u2014 photos.place_id and photos.visit_id foreign keys",
+      "finding": "`FOREIGN KEY (traveller_id, place_id) REFERENCES places (traveller_id, id) ON DELETE SET NULL` sets ALL columns of the referencing key to NULL, including `traveller_id`, which is NOT NULL. Deleting a place or a visit therefore raises `null value in column \"traveller_id\" of relation \"photos\" violates not-null constraint` instead of clearing the pin. D2's KEEP branch ('they lose the pin but keep their date and city') and the photos.visit_id SET NULL that IS `_repointed` are both unexecutable. This is the single most load-bearing pair of FKs in the file and neither works.",
+      "evidence": "Executed on PostgreSQL 17.11. `DELETE FROM places WHERE traveller_id=$t AND id='fushimi-inari'` \u2192 ERROR, with PostgreSQL echoing its own generated statement: `UPDATE ONLY \"public\".\"photos\" SET \"traveller_id\" = NULL, \"place_id\" = NULL WHERE $1 = \"traveller_id\" AND $2 = \"place_id\"`. The `_repointed` case reproduced separately and exactly: a photograph on `autumn-crossing` pointing at a visit belonging to `kyoto-in-may`, then `DELETE FROM trips ... id='kyoto-in-may'` \u2192 same error on `SET \"traveller_id\" = NULL, \"visit_id\" = NULL`. `pg_constraint.confdelsetcols` is empty for both constraints, confirming all-columns SET NULL. Note the D3 trip-delete leg the plan already has passes anyway, because the referencing photograph is itself cascade-deleted via photos.trip_id \u2014 so the existing test plan does not reach the defect.",
+      "fix": "Use PostgreSQL 15+'s column-list form: `ON DELETE SET NULL (place_id)` and `ON DELETE SET NULL (visit_id)`. Verified working on 17.11: after the change, deleting the place leaves `traveller_id` intact and clears `place_id` AND `visit_id` together (the visit cascades from the place, then SET NULLs the photograph) \u2014 which is exactly `Photo.copyWith(clearPlace: true)`. This puts a hard floor of PostgreSQL 15 on the schema; compose already pins `postgres:17`, but state the floor in the migration header and make `make test-db` refuse anything older, or the failure reappears on a developer's local 14.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "S15 acceptance check and its mutation proof",
+      "finding": "S15's central claim \u2014 'deleting the place FIRST clears place_id on its photographs, after which DELETE FROM photos WHERE place_id=$1 matches nothing and the photographs SURVIVE' \u2014 is correct, but only once the blocker above is fixed. Against the schema as currently specified the wrong ordering raises a NOT NULL violation rather than silently keeping the photographs. So S15's stated mutation proof ('REORDER the delete branch to drop the place first and \"the photographs are gone\" reddens') would today redden for the wrong reason, which is precisely what DEC-28 forbids.",
+      "evidence": "With the column-list SET NULL applied: place-first \u2192 `DELETE 1`, then `DELETE 0` from photos, and 1 of the 2 pinned photographs survives \u2014 the defect S15 describes. Photos-first \u2192 `DELETE 1`, `DELETE 1`, 0 pinned photographs survive. Without the fix, the same place-first sequence aborts the transaction on statement one.",
+      "fix": "Land the column-list SET NULL first, then write S15's ordering leg. Assert on the surviving row count, not merely on the error/no-error of the transaction, so the leg cannot pass on an exception.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "trips.\"end\"",
+      "finding": "`end` is a RESERVED keyword in PostgreSQL. `SELECT id, start, end FROM trips` is a syntax error. In a project constrained to `database/sql` with no ORM and no sqlc, every column list, every INSERT, every RETURNING and every UPDATE that touches this column must remember the double quotes, forever, by hand. `start` is unreserved and is fine.",
+      "evidence": "`SELECT word, catcode FROM pg_get_keywords() WHERE word='end'` \u2192 catcode `R` (reserved). `SELECT id, start, end FROM trips LIMIT 1` \u2192 `ERROR: syntax error at or near \"end\"`. The quoted form in the DDL created without complaint, so the migration compiles and the trap surfaces later, in query code.",
+      "fix": "Name the columns `started_on` and `ended_on` (or `start_date`/`end_date`). The wire shape is unaffected \u2014 the client's JSON keys stay `start` and `end`, and the emitter maps them. Do it in 0001, where it costs nothing; after data exists it is a migration plus every query.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "visits.at typed `date`",
+      "finding": "The wire carries a TIME on this field and `date` throws it away. The reference log has `\"at\": \"2027-12-06T07:05:00.000Z\"`. Two losses, both silent: (1) 07:05 is truncated to the day, and DEC-26's refile rule \u2014 'a visit created by refile takes the ordinal that keeps the place's visits in `at` DESC order' \u2014 then cannot break a tie between two visits on the same day, which is exactly the Kyoto-in-May shape the fixture is built around; (2) a `date` renders as `2027-12-06`, and the client's codec is `DateTime.parse(json['at'] as String)`, which for a date-only string returns a NON-UTC local DateTime, unlike every other date in the log. `trips.start`/`end` and `walks.recorded_on` genuinely are midnight-UTC on the wire, so `date` is lossless for those three \u2014 but the emitter must still re-render them as `T00:00:00.000Z` or the same parse asymmetry appears there.",
+      "evidence": "Fixture inspection: `visits[].at` values include `2027-12-06T07:05:00.000Z` and `2027-09-17T06:20:00.000Z`; `trips[].start` is `2027-09-17T00:00:00.000Z`; `walks[].recordedOn` is `2027-09-27T00:00:00.000Z`. Executed: `UPDATE visits SET at='2027-12-06T07:05:00Z'` then `SELECT at::text` \u2192 `2027-12-06`.",
+      "fix": "`visits.at timestamptz NOT NULL`. Keep `date` for `trips.start`/`ended_on` and `walks.recorded_on`, and add one golden-round-trip leg per date-bearing field asserting the emitted string is byte-identical to what the client sent.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "visits \u2014 missing UNIQUE (traveller_id, place_id, ordinal)",
+      "finding": "The ordinal that actually rebinds photographs is unguarded, while the one that merely orders a city list got a UNIQUE. `trip_cities` has `UNIQUE (traveller_id, trip_id, ordinal)` per DEC-64; `visits` has only `PRIMARY KEY (traveller_id, id)`. Two visits of the same place can hold ordinal 0, at which point `ORDER BY ordinal` is non-deterministic \u2014 and DEC-26 states plainly what that costs: 'emit the visits in a different order and a photograph silently rebinds to a different occasion.' The whole reason the ordinal column exists is defeated by its own missing constraint.",
+      "evidence": "Executed: inserted a second visit for `fushimi-inari` at ordinal 0; accepted. `SELECT place_id, ordinal, count(*) ... HAVING count(*)>1` \u2192 `fushimi-inari | 0 | 2`. `pg_constraint` for `visits` returns exactly one row, the primary key.",
+      "fix": "`UNIQUE (traveller_id, place_id, ordinal)`. Non-deferrable is correct given S15 writes the whole ordered visits array as delete-then-insert (see the DEC-64 finding below \u2014 the same strategy applies and the same proof covers it). Also make every read `ORDER BY ordinal, id` so a pre-existing duplicate degrades to stable rather than random.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "DEC-64 \u2014 trip_cities.city_id ON DELETE CASCADE",
+      "finding": "DEC-64 says 'both FKs CASCADE \u2014 removing a trip removes its rows, and DEC-57's city RESTRICT now has a real child to protect.' The second half does not follow from the first: CASCADE protects nothing. A city with no places, photographs or walks is deletable, and it silently disappears from every trip's ordered city list, leaving a gap in the ordinals. That directly contradicts DEC-57's own stated policy \u2014 that no user-facing sentence authorises destroying anything on a city delete \u2014 applied to the one child DEC-64 just created.",
+      "evidence": "Executed: created city `busan` with no places/photos/walks, added `trip_cities(autumn-crossing, busan, 2)`, then `DELETE FROM cities ... id='busan'` \u2192 `DELETE 1`, no error, and `SELECT city_id, ordinal FROM trip_cities WHERE trip_id='autumn-crossing'` returns only kyoto/0 and seoul/1. By contrast a city WITH children is refused: `DELETE FROM cities ... id='kyoto'` \u2192 `ERROR: ... violates foreign key constraint \"places_traveller_id_city_id_fkey\"`, confirming DEC-57 works where it applies.",
+      "fix": "Make `trip_cities.city_id` ON DELETE RESTRICT, matching the other three city FKs, so the sentence in DEC-64 becomes true. Keep `trip_cities.trip_id` CASCADE \u2014 that one is read off D3. If CASCADE is genuinely wanted here, delete the 'real child to protect' clause, because it is describing behaviour the schema does not have.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "DEC-63 \u2014 the stated proof method",
+      "finding": "DEC-63's proof \u2014 'EXPLAIN the cascade before and after and assert the plan changes from Seq Scan to Index Scan' \u2014 cannot be executed. Foreign-key checks and cascades run inside C-level RI triggers using internal SPI plans; they never appear in EXPLAIN output, not even under EXPLAIN ANALYZE. The ruling's own standard ('an index nobody proved is used is an index that may not be') is therefore currently unmeetable by the method it names.",
+      "evidence": "`EXPLAIN (ANALYZE, COSTS OFF) DELETE FROM trips WHERE ...` returns only `Delete on trips \u2192 Seq Scan on trips`. Nothing about photos, visits, walks or share_links appears. The working instrument is `pg_stat_user_indexes.idx_scan`, which DOES observe RI trigger index use: after `pg_stat_reset()` and a committed trip delete at 284 photographs, `photos_visit_idx` shows `idx_scan = 2`.",
+      "fix": "Replace the EXPLAIN assertion with a `pg_stat_reset()` / cascade / read-`pg_stat_user_indexes` harness, and read the honest-limits finding below before writing what it asserts.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "DEC-63's index list \u2014 trip_cities(traveller_id, city_id)",
+      "finding": "DEC-63 enumerates eleven child columns plus the four media columns, but predates DEC-64 and so never mentions `trip_cities`. Its PK is `(traveller_id, trip_id, city_id)`, in which `city_id` is the THIRD column and cannot serve as a leading prefix for the `(traveller_id, city_id)` foreign key to cities. So DEC-64 introduced a new unindexed FK child column in the same breath as the ruling written to eliminate that exact class \u2014 the missing-FK-index defect that survived three review passes, reappearing in its own fix.",
+      "evidence": "`pg_get_indexdef` over `trip_cities` shows `trip_cities_pkey (traveller_id, trip_id, city_id)` and `trip_cities_traveller_id_trip_id_ordinal_key (traveller_id, trip_id, ordinal)` \u2014 neither has `city_id` in a leading position. The trips-side FK IS served by the PK prefix and needs no extra index.",
+      "fix": "`CREATE INDEX trip_cities_city_idx ON trip_cities (traveller_id, city_id);` and add the row to DEC-63's list so the next re-derivation includes it. Do not also add a trips-side index \u2014 the PK covers it.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "DEC-63 \u2014 share_links(traveller_id, trip_id)",
+      "finding": "DEC-63 mandates an index on `share_links(traveller_id, trip_id)`, but that is byte-identical to the table's primary key. Applying the ruling literally creates a duplicate index on every insert and every vacuum. Same trap as above in the other direction: the rule 'every FK child column gets an index' needs the qualifier 'unless an existing index already has those columns as a leading prefix'.",
+      "evidence": "`SELECT indexrelid::regclass, indkey FROM pg_index WHERE indrelid='share_links'::regclass` \u2192 `share_links_pkey | 1 2 | unique` and `share_links_trip_idx | 1 2 | not unique`. Identical column vectors.",
+      "fix": "Drop `share_links_trip_idx`. Restate DEC-63 as 'every FK child column must be a leading prefix of some index' and re-derive the list against `pg_index.indkey` rather than against the FK list.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "DEC-63 \u2014 what the index proof can and cannot show at 284 rows",
+      "finding": "Asked for honestly: at fixture size the proof is close to vacuous. After a trip cascade over 284 photographs, exactly ONE of the mandated indexes was used; every other cascade and RESTRICT check sequential-scanned, because the planner correctly refuses an index on a table of a few hundred rows. A before/after assertion would show no change for most of the list, so a test that asserts 'the plan changed' will fail against correct work \u2014 the artefact-check failure mode DEC-28 and defect class 10 both warn about.",
+      "evidence": "284 photographs, 3 visits, 1 walk, 2 trips. After `pg_stat_reset()` and a committed `DELETE FROM trips`: `pg_stat_user_indexes` shows only `photos.photos_visit_idx = 2`. `pg_stat_user_tables` shows seq_scan on cities 281, media_objects 281, travellers 281, trips 282, photos 2, visits 1, walks 1, share_links 1, trip_cities 1. Separately, `SET enable_seqscan=off` proves the index is USABLE \u2014 `Index Scan using photos_place_idx` \u2014 so the indexes are correctly shaped even where they are not chosen.",
+      "fix": "Keep the indexes (they are correct, they cost 16 kB each, and they are right the day the log grows). But prove them the way the evidence supports: assert with `enable_seqscan=off` that each FK child column IS covered by a usable index \u2014 a structural claim that holds at any size \u2014 plus one catalog leg asserting every FK child column is a leading prefix of some index. Say in EVIDENCE.md that the planner will not choose most of them at this size and that this is expected, so nobody later 'fixes' a passing test.",
+      "matters_at": "only at scale (the indexes themselves matter only at scale; the catalog assertion matters now)"
+    },
+    {
+      "severity": "major",
+      "target": "share_links \u2014 primary key unspecified, and H1's 'New link'",
+      "finding": "Neither the class diagram nor S06 states the primary key of `share_links`, and the two candidates behave differently for a control the app has. With `PRIMARY KEY (traveller_id, trip_id)` \u2014 the natural reading of '1-to-0..1' \u2014 H1's 'New link' cannot INSERT; it must UPDATE the existing row, which overwrites `revoked_at` and destroys the record that the previous token was revoked. With a wider key allowing history, nothing enforces the '0..1 LIVE' cardinality the diagram claims: two live tokens for one trip become possible, and H1 shows one while the other still works. The diagram asserts a cardinality that neither candidate schema enforces.",
+      "evidence": "Executed with `PRIMARY KEY (traveller_id, trip_id)`: `UPDATE share_links SET revoked_at=now()` then `INSERT ... VALUES (t,'autumn-crossing','new-token-1')` \u2192 `ERROR: duplicate key value violates unique constraint \"share_links_pkey\"`. So 'Stop sharing' followed by 'New link' fails outright on the obvious implementation.",
+      "fix": "Decide it explicitly. If history is wanted: `PRIMARY KEY (traveller_id, token)` (or a surrogate), plus `CREATE UNIQUE INDEX share_links_one_live ON share_links (traveller_id, trip_id) WHERE revoked_at IS NULL` \u2014 a partial unique index, which is the only thing that actually enforces '0..1 live' and needs no extension. If history is not wanted, keep the narrow PK, say so, and make 'New link' an UPDATE that sets token and resets revoked_at to NULL in one statement.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "major",
+      "target": "S05 \u2014 migration runner, one transaction per file with no escape hatch",
+      "finding": "'Each file in its own transaction', forward-only, with no per-file opt-out permanently forbids every statement PostgreSQL refuses inside a transaction block. The one that will actually be wanted is `CREATE INDEX CONCURRENTLY`: the first index added to a database with real data will instead take an ACCESS EXCLUSIVE lock for the duration of the build. `VACUUM`, `ALTER SYSTEM`, `CREATE DATABASE` and `REINDEX CONCURRENTLY` are in the same class.",
+      "evidence": "Executed: `BEGIN; CREATE INDEX CONCURRENTLY foo_idx ON photos(caption);` \u2192 `ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block`. Same for `VACUUM` and `ALTER SYSTEM`.",
+      "fix": "Add the escape hatch now, while the runner is ~60 lines: a first-line directive such as `-- migrate:no-transaction` that makes the runner execute that file's statements outside a transaction, with a comment saying such a file is NOT atomic and must be written to be re-runnable. It is a few lines today and a runner rewrite once files exist.",
+      "matters_at": "only at scale (nothing needs it at 284 rows; the cost is that retrofitting it later is disproportionate)"
+    },
+    {
+      "severity": "major",
+      "target": "S05 / DEC-17 \u2014 the database-wide advisory lock over a database/sql pool",
+      "finding": "The boot lock is described as `pg_advisory_lock` \u2014 SESSION-scoped. `database/sql` is a pool: `db.ExecContext(ctx, \"SELECT pg_advisory_lock(...)\")` and the matching unlock can land on two different pooled connections. The unlock then does nothing, and PostgreSQL reports that only as a WARNING and a `false` return value, both of which `database/sql` discards for an Exec. The lock survives until that specific connection is closed, which with `SetMaxIdleConns` may be never \u2014 so a second replica booting later blocks forever with no error anywhere.",
+      "evidence": "Executed: `SELECT pg_advisory_unlock(99)` on a session not holding lock 99 \u2192 returns `f` and emits `WARNING: you don't own a lock of type ExclusiveLock`. No error is raised. Confirmed the lock is session-scoped via `pg_locks` (`locktype=advisory`, released on the holding session's unlock).",
+      "fix": "Take the migration lock on a single pinned `*sql.Conn` from `db.Conn(ctx)`, `defer conn.Close()`, and run every migration statement on that same conn. Or, simpler and safer: wrap the WHOLE migration run in one transaction-scoped `pg_advisory_xact_lock` on a dedicated conn and let per-file transactions be savepoints \u2014 though that conflicts with the escape hatch above, so the pinned-conn form is the one to take. Either way, if you keep the session-level form, check the boolean result of the unlock and log loudly on false.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "S05 \u2014 schema_migrations shape, and lexical ordering",
+      "finding": "Two smaller things in the same step. (1) DEC-17 describes `schema_migrations(version text primary key, applied_at timestamptz)` while S05's work field describes `schema_migrations(version, checksum, applied_at)`. The checksum column is what the 'LOUD checksum failure' acceptance check depends on, so the DEC-17 text is the wrong one. (2) 'Lexical order' over `embed.FS` is correct only while filenames are zero-padded consistently; `10_x.up.sql` sorts before `2_x.up.sql`.",
+      "evidence": "Textual comparison of DEC-17's consequence field against S05's work field in go-backend-plan-v6.json.",
+      "fix": "Correct DEC-17 to three columns. Have the runner refuse a filename not matching `^[0-9]{4}_[a-z0-9_]+\\.up\\.sql$` rather than trusting the convention, and assert the refusal in a leg.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "Missing CHECK constraints and NOT NULLs across every entity table",
+      "finding": "The schema currently accepts a large amount of data the app forbids. Each of these was inserted successfully on the real instance in one transaction: an empty city name; `country_code = 'JAPAN'` (five characters, where DEC-59 says 'ISO-3166-1 alpha-2, regexp-validated' \u2014 the regexp exists only in Go); `centre_lat = 999`, `centre_lng = -4000`; `media_objects.byte_size = -5`; `content_type = 'text/html; <script>'` despite DEC-51's stated content-type allowlist; `walks.distance_km = -1`; `walks.points = '\"not an array\"'` (valid jsonb, not a coordinate list); a photograph with `lat` set and `lng` NULL, which the client's `LatLng?` cannot represent; `accuracy_metres = -3`; a session whose `expires_at` is already in the past at creation with a one-byte `token_hash` where SHA-256 is 32; an empty `passphrase_hash`; and a trip ending before it starts.",
+      "evidence": "All twelve executed against PostgreSQL 17.11 in a single rolled-back transaction; every INSERT returned `INSERT 0 1`.",
+      "fix": "The cheap high-value set, all one-liners in 0001: `country_code ~ '^[A-Z]{2}$'`; `centre_lat BETWEEN -90 AND 90`, `centre_lng BETWEEN -180 AND 180` (and the same on places and photos); `byte_size > 0`; `content_type IN (...)` matching DEC-51's allowlist; `distance_km >= 0`; `jsonb_typeof(points) = 'array'`; `(lat IS NULL) = (lng IS NULL)` on photos; `accuracy_metres >= 0`; `octet_length(token_hash) = 32`; `expires_at > created_at`; `length(passphrase_hash) > 0`; `\"end\" IS NULL OR start IS NULL OR \"end\" >= start`; and `name <> ''` where the client requires a name. This is the DEC-58 argument applied consistently \u2014 a Go check can be bypassed by the next route added, a constraint cannot \u2014 and the plan already accepted that argument once.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "search_path, statement_timeout, idle_in_transaction_session_timeout",
+      "finding": "None of the three is set anywhere in the plan, and all three defaults are wrong for this design. `search_path` is `\"$user\", public`, which matters more than usual here because DEC-65's unique index is a FUNCTIONAL index on `lower(email)` \u2014 an unqualified function resolved through search_path. `statement_timeout = 0` and `idle_in_transaction_session_timeout = 0` mean a `WithReadSnapshot` at REPEATABLE READ that stalls mid-document holds a snapshot indefinitely and pins the xmin horizon, blocking vacuum on the `travellers` row that every write updates.",
+      "evidence": "`SELECT name, setting FROM pg_settings` on the running instance: `search_path = \"$user\", public`, `statement_timeout = 0`, `idle_in_transaction_session_timeout = 0`, `default_transaction_isolation = read committed`, `max_connections = 100`.",
+      "fix": "`ALTER ROLE <app> SET search_path = pg_catalog, public;` (or append `pg_catalog.` to the index expression and the lookups) and set a modest `statement_timeout` and `idle_in_transaction_session_timeout` on the application role in 0001. DEC-21 says the tuned numbers stay untuned and say so \u2014 that is fine, but zero is not 'untuned', it is 'no limit'.",
+      "matters_at": "this size (search_path); only at scale (the timeouts)"
+    },
+    {
+      "severity": "minor",
+      "target": "Constraint naming",
+      "finding": "Every constraint in the file is auto-named. S06's acceptance check is a catalog query over `pg_constraint` asserting the FK list and each `confdeltype`, so the test will be written against names PostgreSQL generated \u2014 `photos_traveller_id_place_id_fkey`, `trip_cities_traveller_id_trip_id_ordinal_key`. Those names are positional and change if a column is renamed or a constraint re-added in a later migration, which will red the catalog test for a reason unrelated to the schema being wrong.",
+      "evidence": "Observed auto-generated names throughout: `cities_traveller_id_cover_asset_fkey`, `share_links_pkey`, `trip_cities_traveller_id_trip_id_ordinal_key`. When I replaced two constraints during the fix probe, the new names differed from the originals.",
+      "fix": "Name every constraint explicitly in 0001 \u2014 `photos_place_fk`, `photos_visit_fk`, `visits_place_ordinal_uq` \u2014 and have the catalog test assert on those names. It also makes the error text a user sees in a 409/422 mapping stable.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "DEC-06 \u2014 the advisory lock expression's dependence on hashtextextended",
+      "finding": "The expression works, but rests on `hashtextextended`, which lives in `pg_catalog` as an internal hash-support function rather than a documented user-facing one. Its output value is not a compatibility contract across major versions. That is harmless for a transaction-scoped lock (only same-time consistency matters), but it should be a stated dependency rather than an accident. Two smaller notes: the `::text` cast is load-bearing and its omission fails at prepare time; and distinct traveller uuids can collide onto one lock key, which merges two travellers' write domains \u2014 correctness-preserving, throughput-reducing, and irrelevant at one traveller.",
+      "evidence": "`hashtextextended(text, bigint) \u2192 bigint`, `provolatile = i`. `pg_advisory_xact_lock` has overloads `(bigint)` and `(integer, integer)`; the expression resolves unambiguously to the bigint form and produced lock key 1423583330623390448, visible in `pg_locks` as `locktype=advisory, mode=ExclusiveLock`. With a bind parameter, `PREPARE lk(uuid) AS SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))` prepares and executes; without the cast, `PREPARE ... hashtextextended($1, 0)` \u2192 `ERROR: function hashtextextended(uuid, integer) does not exist`.",
+      "fix": "Keep it \u2014 it is the least-ceremony option and it works. Put the `::text` cast in a named constant or a single helper so it cannot be dropped, and add a one-line comment recording that the function is an internal catalog function chosen deliberately. If you would rather not depend on it at all, `('x' || replace(traveller_id::text,'-',''))::bit(64)::bigint` derives the key from the uuid itself with no hash function involved.",
+      "matters_at": "this size (the cast); only at scale (collisions)"
+    },
+    {
+      "severity": "minor",
+      "target": "DEC-30 / DEC-06 \u2014 what the advisory lock is actually justifying",
+      "finding": "A small correctness-of-reasoning point rather than a defect. `UPDATE travellers SET logbook_version = logbook_version + 1` is already atomic under READ COMMITTED without any lock, because PostgreSQL takes a row lock and re-evaluates the expression against the updated row. So the counter is not evidence for the lock. What the lock genuinely protects is the multi-statement work: the whole-visits-array replace, refile's read-modify-write, the two-table city+attachTo write, and DEC-02's six-way EXISTS. Citing the counter as the justification would let a future reader conclude the lock is removable once the counter is proven safe.",
+      "evidence": "Eight concurrent writers each taking `pg_advisory_xact_lock` and incrementing: final value 8 of 8. Eight concurrent writers doing an explicit SELECT-then-UPDATE read-modify-write with NO lock: final value 1 of 8 \u2014 seven lost updates, which is the shape the lock genuinely defends.",
+      "fix": "No schema change. Adjust DEC-06's wording so the justification names the multi-statement writes, which is what the measurement supports.",
+      "matters_at": "this size"
+    },
+    {
+      "severity": "minor",
+      "target": "Connection pool sizing against max_connections",
+      "finding": "`DB_MAX_OPEN_CONNS` and `DB_MAX_IDLE_CONNS` are env vars with no stated default and no stated relationship to the server's `max_connections`, which is 100 by default with 3 reserved for superusers. Nothing in compose sets `max_connections` either. For one traveller this cannot bite, but an unset or over-large default is the kind of thing that is discovered on the day a second process starts.",
+      "evidence": "`max_connections = 100`, `superuser_reserved_connections = 3` on the stock `postgres:17` image. S03 lists both vars; no default or bound is given anywhere in the plan.",
+      "fix": "Default `DB_MAX_OPEN_CONNS` to something small and honest (4\u20138 for this workload), set `SetConnMaxLifetime` (already an env var) and `SetConnMaxIdleTime`, and write one line in the README stating the arithmetic: replicas \u00d7 max_open must stay under max_connections \u2212 superuser_reserved. DEC-21 permits leaving it untuned, but it must be untuned at a stated number rather than at zero.",
+      "matters_at": "only at scale"
+    },
+    {
+      "severity": "minor",
+      "target": "travellers \u2014 a hot row by design",
+      "finding": "Every logbook write updates the same `travellers` row, producing a dead tuple each time. On a one-row-per-traveller table with a few writes per session this is invisible; autovacuum's default `autovacuum_vacuum_scale_factor` of 0.2 on a tiny table means it triggers on the threshold (50) rather than the factor, so it is handled. Worth noting only so nobody is surprised by index bloat on `travellers_pkey` in a load test.",
+      "evidence": "Design reading plus observed defaults; not reproduced, as it needs sustained write volume this app will not produce.",
+      "fix": "Nothing now. If a load test ever shows it, `ALTER TABLE travellers SET (autovacuum_vacuum_scale_factor = 0.0, autovacuum_vacuum_threshold = 20)` and/or `fillfactor = 70` to enable HOT updates. Record it as a deferred decision with 'a measured complaint' as the trigger, matching how the plan handles per-resource ETags.",
+      "matters_at": "only at scale"
+    },
+    {
+      "severity": "minor",
+      "target": "DEC-02 \u2014 cross-kind id uniqueness enforced only in Go",
+      "finding": "The schema permits a city and a trip to share an id, and `Logbook.holdsId` on the client says they must not. DEC-02 moved this to a six-way EXISTS inside the write transaction and argues it is race-free under the advisory lock, which is true. Flagging it only because DEC-58 established the opposite principle for the media reference \u2014 'a Go check can be bypassed by the next route somebody adds and nothing notices' \u2014 and this is now the one remaining reference-integrity rule living only in Go. That may well be the right call (a cross-table exclusion constraint is genuinely awkward without an extension), but it should be a stated exception rather than an unexamined survivor.",
+      "evidence": "Executed: inserted a city with id `autumn-crossing` while a trip of that id exists; accepted with no error.",
+      "fix": "No change required. Add a comment on the six-way EXISTS naming it as the one integrity rule deliberately left in Go and saying why (no extension-free way to express cross-table exclusion), so the next reader does not read the omission as an oversight \u2014 which is exactly how the missing FK indexes got there.",
+      "matters_at": "this size"
+    }
+  ],
+  "verified_correct": [
+    "DEC-65's functional unique index, on all three claims. `CREATE UNIQUE INDEX travellers_email_lower_key ON travellers (lower(email))` creates without an extension; registering `matt@example.com` after `Matt@Example.COM` fails at the database with `duplicate key value violates unique constraint \"travellers_email_lower_key\"` \u2014 DEC-60's second leg now fails in the schema rather than depending on a call site. The warning is real and measured: `EXPLAIN` shows `WHERE email = $1` is a `Seq Scan on travellers` that does NOT use the index, and against the differently-cased stored row it returns ZERO rows \u2014 so a forgotten call site does not error, it silently reports 'unknown email' and the sign-in fails with the correct-looking response. `WHERE lower(email) = lower($1)` shows `Index Scan using travellers_email_lower_key`. Dropping the plain UNIQUE causes nothing to break: no FK references travellers.email.",
+    "DEC-58's stated consequence about nullable covers. Composite FKs default to MATCH SIMPLE, so a row with `traveller_id` set and `cover_asset` NULL is accepted without any parent lookup \u2014 nothing is forced to carry a cover. A non-NULL cover_asset naming a nonexistent object is rejected: `insert or update on table \"cities\" violates foreign key constraint \"cities_traveller_id_cover_asset_fkey\"`. Both halves confirmed by execution. (Do not switch these to MATCH FULL \u2014 it would reject the NULL case.)",
+    "DEC-57's RESTRICT. `DELETE FROM cities ... id='kyoto'` with a place attached is refused with the places FK named in the error; with a photograph attached, the photos FK. Deleting a city that anything points at is genuinely impossible, which is what the ruling asked for.",
+    "Deleting a traveller works despite three RESTRICT FKs on cities and four on media_objects \u2014 this is non-obvious and worth recording, because the natural worry is that account deletion becomes impossible. `DELETE FROM travellers WHERE id=$t` on a full fixture returns `DELETE 1`. RESTRICT checks are AFTER-ROW triggers evaluated at end of statement, and the recursive CASCADE removes every referencing row before they fire. Directly confirmed by the contrast case: deleting `media_objects` rows on their own, while photos and cities still reference them, IS refused.",
+    "The D3 cascade, row by row. Deleting `kyoto-in-may` left both places standing (including the wishlist pin and `fushimi-inari`, which had visits only on that trip), removed that trip's visits and photographs, and left the other trip's photograph in place. The 'a pin whose only visits were on the deleted trip survives with zero visits' guard holds. The deliberate absence of any FK from trips to places is what does it, and it is correctly absent.",
+    "DEC-06's advisory lock, executed for the first time. `pg_advisory_xact_lock(hashtextextended(traveller_id::text, 0))` compiles, resolves to the `(bigint)` overload, and appears in `pg_locks`. Eight concurrent writers holding it produced exactly 8 increments; the same eight doing an unlocked read-modify-write produced 1. The lock serialises per-traveller writers as designed.",
+    "DEC-64's named hazard does NOT reproduce, and no deferred constraint is needed. 'Replacing an ordered set is delete-then-insert, and the ordinal UNIQUE can collide mid-transaction on a reorder' is a misdiagnosis: DELETE and INSERT are separate statements, the DELETE completes first, and `DELETE FROM trip_cities WHERE trip_id=$1` followed by `INSERT ... (seoul,0),(kyoto,1)` succeeds against the non-deferrable UNIQUE. What actually collides is UPDATE-in-place \u2014 including the set-based `UPDATE ... SET ordinal = 1-ordinal`, which fails even though its final state is unique, because a UNIQUE index checks per row during the statement. Recommendation: KEEP the UNIQUE, keep it non-deferrable, and write down delete-then-insert as the mandated write strategy with a leg proving a full reorder round-trips. DEFERRABLE INITIALLY DEFERRED does fix the UPDATE form (verified), but moves the violation to COMMIT \u2014 meaning the 422 mapping must handle an error returned from `tx.Commit()` rather than from the failing statement, which is a worse shape for a hand-rolled `database/sql` handler. Also note a live trap: `SET CONSTRAINTS ALL DEFERRED` against a non-deferrable constraint succeeds silently and changes nothing, so a worker who adds it will believe it took effect.",
+    "The type choices for the two digests, which are correctly split rather than uniform. `sessions.token_hash bytea` is right \u2014 it is compared for equality and never displayed, and bytea is half the size with no encoding question. `media_objects.id` as 64-char hex `text` is also right, despite being the same SHA-256, because it is the bucket key, appears in the JSON payload as `asset`, and is carried in the client's `String` field; storing it as bytea would force hex encoding at every boundary. The `CHECK (id ~ '^[0-9a-f]{64}$')` pins the encoding, which is what DEC-38's v5 amendment about hex-versus-base64 needs.",
+    "`text` primary keys holding slugs, with composite `(traveller_id, id)` carried into every FK. Correct for this app and I would not change it. The ids are the client's own and must round-trip (`kyoto` appears in the fixture with lengths 4\u20136); a surrogate key would add a lookup or a join to every one of the six queries that assemble an 85 KB document read as one unit, to save nothing. `CHECK (length(id) BETWEEN 1 AND 64)` plus `CHECK (id ~ '^[a-z0-9-]+$')` is permissive enough for all 43 fixture ids, and the refusal of `char(n)` is right \u2014 blank padding would make `'kyoto     '` compare equal to `'kyoto'`. Carrying `traveller_id` into every FK is what makes cross-traveller reference impossible by construction rather than by a WHERE clause somebody has to remember.",
+    "`double precision` for coordinates. Correct \u2014 these are GPS readings, not money; `numeric` would cost arithmetic speed and buy exactness nobody needs. The fixture's 4-decimal values are far inside float64's exact range.",
+    "Flattening country and LatLng into columns rather than tables (DEC-59). At 12 cities a lookup table would be a permanent join for two strings that no screen queries by.",
+    "Visits as rows rather than JSON. The D2 and D3 cascades need them to be rows, and the schema delivers exactly that \u2014 verified by execution of both sheets.",
+    "The REPEATABLE READ read snapshot. A read-only RR transaction in PostgreSQL cannot hit a serialization failure, so DEC-06's claim that it costs a held snapshot and nothing else is correct, and computing the ETag inside it is the right call."
+  ],
+  "questions_for_human": [
+    "share_links: is a revoked link meant to be KEPT as history, or overwritten? The answer changes the primary key and it is currently unspecified in both the plan and the class diagram. If history is kept, you also need the partial unique index to enforce the '0..1 live' cardinality the diagram already claims \u2014 nothing enforces it today.",
+    "visits.at: the wire carries a real time of day (07:05), not midnight. Is that time meaningful, or is it fixture noise? If meaningful, the column must be timestamptz. If not, the fixture should be normalised to midnight and the truncation documented \u2014 but silently truncating on write while the client keeps sending 07:05 is the one option that is wrong either way.",
+    "DEC-64 says trip_cities.city_id CASCADE gives DEC-57's RESTRICT 'a real child to protect'. It does the opposite. Should that FK be RESTRICT (consistent with the other three city FKs and with the ruling's own reasoning), or should the sentence be withdrawn?",
+    "trips.\"end\" \u2014 renaming the column to ended_on is free now and awkward later. Is there a reason to keep the reserved word that I have not seen? The wire key stays \"end\" either way.",
+    "The schema will require PostgreSQL 15 or later once the column-list SET NULL fix lands. Compose already pins postgres:17, but is there any deployment target \u2014 a developer's local instance, a managed provider \u2014 where 14 or earlier is in play?"
+  ],
+  "unverifiable": [
+    "Everything Go-side. No code exists yet, so I could not check how the two transaction helpers acquire the lock, whether the migration runner pins a connection, or whether a constraint violation returned from tx.Commit() is mapped to a 422. The findings above state what the SQL semantics require; whether the code meets them is a review for after S05 and S08 land.",
+    "Whether the emitter renders date and timestamptz columns back as the client's exact `2027-09-17T00:00:00.000Z` form. This is the other half of the visits.at finding and it lives in S13's emitter, which does not exist. A golden round-trip leg per date-bearing field is the only thing that will catch it.",
+    "The behaviour of `ON DELETE SET NULL (col)` on PostgreSQL 14 and earlier. I verified it works on 17.11 and it is documented as added in 15; I did not pull an older image to watch it fail, so treat 'PG 15 floor' as read from the documentation and confirmed on 17 rather than bisected.",
+    "DEC-51's content-type allowlist \u2014 the plan names it but does not enumerate it, so I could not write the CHECK constraint I recommend. The values need to come from S11/S12.",
+    "Real-world index behaviour. Everything I measured was at fixture scale (284 photographs). I can say the indexes are correctly shaped and usable (proven with enable_seqscan=off) and that the planner declines nearly all of them at this size (proven with pg_stat_user_indexes). I cannot say which of them would earn their keep at 100x, and nothing at this size can.",
+    "Whether the reference fixture is the only shape the schema will see. My missing-constraint findings come from inserting data the app forbids; I could not check whether any real client path can actually produce, say, a photograph with lat and no lng. The constraints are cheap enough that I would add them regardless."
+  ]
+}

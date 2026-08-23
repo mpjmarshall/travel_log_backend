@@ -1,0 +1,347 @@
+{
+ "plan_version": "3.0-lite",
+ "plan_id": "travellog-api-vertical-slice",
+ "spec": "/Users/mattmarshall/Desktop/go_backend.md",
+ "revision": "Slice 1 of the travellog API, under DEC-55 (agent-graph-spec-V4 §1). This artefact REPLACES 'execute the 23 steps of go-backend-plan-v6.json'. When it is checked in and running, the remainder is RE-PLANNED with the slice as `entry_state` — not resumed.",
+ "goal": "Get one authenticated traveller writing one trip to Postgres through the real HTTP stack in Docker, reading it back through the one conditional read, and STILL HAVING IT AFTER THE STACK RESTARTS. Eight steps, four tables, five routes. Everything else in v6 waits.",
+ "parent_plan": {
+  "path": "scratchpad/go-backend-plan-v6.json",
+  "decisions": 61,
+  "steps": 23,
+  "routes": 24,
+  "relationship": "The slice implements a vertical cut of that plan and invents no decisions of its own. Every DEC id here refers to it. GATE-L12 is CLEARED (2026-08-22) with recorded scope, so nothing here is gated."
+ },
+ "what_a_slice_is_not": [
+  "a scaffold with no behaviour",
+  "a schema with no query",
+  "anything whose acceptance check is 'the file exists'",
+  "anything exercising a mock where the real thing was available — the slice runs against real Postgres in real Docker, not an in-memory store"
+ ],
+ "definition_of_done": [
+  "THE ARC, run end to end and pasted into docs/EVIDENCE.md: `docker compose up -d` -> `POST /v1/auth/register {email, passphrase}` -> 201, no token (DEC-61) -> `POST /v1/auth/session` -> an opaque token -> `PUT /v1/trips/kyoto` -> 200 with the trip and an ETag -> `GET /v1/logbook` -> the trip comes back -> `docker compose down && docker compose up -d` -> `GET /v1/logbook` -> THE TRIP IS STILL THERE. That last leg is the only thing that proves the named volume, and it is the failure that stays invisible until a redeploy.",
+  "THE CONDITIONAL READ WORKS IN REAL USE: `GET /v1/logbook` with `If-None-Match` returns 304 and an EMPTY BODY, and the 304 path does not assemble the document (counted through an instrumented store). A cache that never returns 304 was a real defect (V3-B4) and the slice is where it first becomes visible.",
+  "THE BUMP/NO-BUMP SPLIT IS PROVEN, and this is the leg the slice exists for: authenticate, GET (200 + ETag), AUTHENTICATE AGAIN so `last_used_at` is genuinely written, GET with If-None-Match, ASSERT 304. Sessions take `WithTravellerLock`; the trip write takes `WithTravellerTx`. Mutation proof: route the session update through `WithTravellerTx` and watch it redden.",
+  "`PUT /v1/trips/kyoto` SUCCEEDS — a slug id, not a 12-char generated one (DEC-02). The id rule that four revisions nearly got wrong is exercised by the arc itself rather than by a unit test.",
+  "THE EMITTED DOCUMENT IS DECODABLE BY THE REAL CLIENT: six keys — trips, cities, places, photos, walks, traveller — with the four unimplemented lists EMPTY rather than absent, `\"version\": 2`, and `traveller: null` while the name is unset. Asserted against `client_sample_log.json`'s key set.",
+  "`make check` green: `go build ./... && go vet ./... && gofmt -l .` (silent) `&& go test ./...`. Store tests skip without TEST_DATABASE_URL and SAY so.",
+  "docs/EVIDENCE.md carries every mutation proof RUN, at a stated commit, each recording the diff. CLAUDE.md exists and every step appended to it in its own commit (DEC-23)."
+ ],
+ "decisions_exercised": [
+  {
+   "id": "DEC-50",
+   "what": "The two transaction helpers and their two membership lists. THE PRIMARY REASON THE SLICE IS SHAPED THIS WAY — the bump/no-bump split was one of the worst defects found, it is invisible with one request, and it needs a second authenticated call to surface."
+  },
+  {
+   "id": "DEC-30",
+   "what": "`travellers.logbook_version`, bumped by one line of Go at the end of `WithTravellerTx`. Not a trigger."
+  },
+  {
+   "id": "DEC-49",
+   "what": "ETag `W/\"<emitterVersion>-<logbookVersion>\"`, weak, with the emitter constant asserted in the ETag; and the lifecycle rule that the ETag is stored inside the cached document and discarded with it."
+  },
+  {
+   "id": "DEC-06",
+   "what": "`WithTravellerTx` (advisory lock + bump) and `WithReadSnapshot` (repeatable read, cursor read INSIDE the snapshot). First time the lock key expression runs against a real server."
+  },
+  {
+   "id": "DEC-31",
+   "what": "One whole-log read, no per-screen and no per-resource endpoints."
+  },
+  {
+   "id": "DEC-32",
+   "what": "A non-cascading write returns the affected entity plus the new ETag. The splice comparison (V4-B1) runs here on trips."
+  },
+  {
+   "id": "DEC-02",
+   "what": "Slug ids: `id text`, permissive charset, never `char(n)`. Exercised by `PUT /v1/trips/kyoto` in the arc."
+  },
+  {
+   "id": "DEC-60 / DEC-61",
+   "what": "Email `text` lowercased at exactly two sites, unique index; register takes {email, passphrase}, mints no session, leaves name NULL."
+  },
+  {
+   "id": "DEC-48",
+   "what": "Auth rate limit plus the Argon2 concurrency semaphore, rejecting with 429 rather than queueing."
+  },
+  {
+   "id": "DEC-08 / DEC-27",
+   "what": "Argon2id via x/crypto, and the `go 1.25.0` floor written literally."
+  },
+  {
+   "id": "DEC-12",
+   "what": "The closed error vocabulary and its AST sweep. THE FULL TWELVE-CODE BLOCK SHIPS IN THE SLICE even though the slice uses ten — the sweep is one-directional, and growing the block later is how it went wrong before."
+  },
+  {
+   "id": "DEC-13 / DEC-40 / DEC-53",
+   "what": "`\"version\": 2` from one emitter, and `X-Logbook-Format` answered with `406 unsupported_format`."
+  },
+  {
+   "id": "DEC-58",
+   "what": "Partially, and cheaply: `media_objects` ships as an EMPTY table so the FK from `trips.cover_asset` exists and is satisfied by NULL — which is the exact consequence the ruling asks to be stated rather than assumed."
+  },
+  {
+   "id": "DEC-17 / DEC-16 / DEC-21 / DEC-23 / DEC-28 / DEC-33",
+   "what": "Migration runner over embed.FS; two test seams; local-only; CLAUDE.md per step; route descriptor slice; natural idempotency via client-minted ids."
+  }
+ ],
+ "decisions_deferred": [
+  {
+   "ids": "DEC-36, 37, 38, 41, 43, 44, 47, 51, 52",
+   "what": "Object storage and every media route. No MinIO, no fourth compose service, no presigning."
+  },
+  {
+   "ids": "DEC-10, 11, 19, 24",
+   "what": "The public share path and its allowlist envelope."
+  },
+  {
+   "ids": "DEC-05, 57",
+   "what": "The cascades and the city RESTRICT FKs — no places, photos, walks or visits tables exist yet."
+  },
+  {
+   "ids": "DEC-26, 46, 59",
+   "what": "Ordered child collections, cover objects, the flattened country columns — no cities table in the slice."
+  },
+  {
+   "ids": "DEC-01, 42, 39",
+   "what": "The full write-verb mapping, the bucket address seam, the fourth service."
+  },
+  {
+   "ids": "DEC-35, 45, 56",
+   "what": "All client-side work. The slice is backend only."
+  },
+  {
+   "ids": "Caddy",
+   "what": "Two services only: api and postgres. TLS, the proxy hop and `X-Forwarded-For` client resolution wait — which also defers the B10 limiter-behind-proxy question."
+  }
+ ],
+ "expected_to_contradict": [
+  {
+   "target": "DEC-50's session half",
+   "what_might_break": "`last_used_at` is written on every authenticated request, and the slice is the first place that cost is visible. It may turn out the cheapest correct answer is not to write it at all — a write per read, under an advisory lock, for a column nothing currently reads.",
+   "how_we_will_know": "The bump/no-bump leg forces a second authenticated call; if that write is doing work nobody wants, it shows up there first."
+  },
+  {
+   "target": "DEC-49's ETag composition",
+   "what_might_break": "`W/\"<emitterVersion>-<logbookVersion>\"` has never been round-tripped through real `If-None-Match` handling. Weak-comparison semantics and Go's header parsing may make the composite awkward, or may want it opaque.",
+   "how_we_will_know": "The 304 leg either passes byte-for-byte or it does not."
+  },
+  {
+   "target": "DEC-06's lock key",
+   "what_might_break": "`pg_advisory_xact_lock(hashtextextended(traveller_id::text, 0))` is written and never run. Signature, argument type or availability may differ on the pinned Postgres.",
+   "how_we_will_know": "It runs in the slice or it errors on the first write."
+  },
+  {
+   "target": "DEC-32 + V4-B1's splice guarantee",
+   "what_might_break": "The claim is that a returned entity spliced into a cached document decodes identically to a fresh read. It has never been executed. Ordering, null-vs-absent keys and time rendering are all candidates.",
+   "how_we_will_know": "The splice leg compares through the same emitter; a difference is the finding."
+  },
+  {
+   "target": "DEC-27's floor attribution",
+   "what_might_break": "Without minio-go, `go mod tidy` may settle the directive differently — the slice's only external modules are pgx and x/crypto, so the floor may be forced by x/crypto alone here.",
+   "how_we_will_know": "`grep '^go ' go.mod` after tidy, recorded at the commit."
+  },
+  {
+   "target": "The emitter's `traveller: null`",
+   "what_might_break": "The client's codec casts `json['name'] as String`, non-nullable, so a nameless traveller must serialise as `null` and never `{}`. First real encounter.",
+   "how_we_will_know": "The key-set assertion against client_sample_log.json."
+  },
+  {
+   "target": "DEC-31's whole-log read",
+   "what_might_break": "Nothing, at one trip — and that is the honest statement. The slice CANNOT test the size argument; it can only prove the shape. The 85,422-byte measurement stands on its own and the re-plan must not treat the slice as evidence for it."
+  }
+ ],
+ "out_of_scope": [
+  "Any change to the Flutter client — read-only, as in the parent plan.",
+  "Object storage, media, the public share path, the cascades, Caddy, and everything else in `decisions_deferred`.",
+  "Performance work of any kind. The slice proves the arc runs, not that it is fast.",
+  "Any decision the slice does not need. It invents none; it exercises, defers, or contradicts what v6 already ruled."
+ ],
+ "steps": [
+  {
+   "id": "VS1",
+   "title": "Repo, module, Makefile, and a two-service compose that comes up",
+   "size": "small",
+   "files": [
+    "go.mod",
+    "Makefile",
+    ".gitignore",
+    "CLAUDE.md",
+    "deploy/docker-compose.yml",
+    "deploy/Dockerfile",
+    "deploy/.env.example",
+    "cmd/api/.keep"
+   ],
+   "work": "`go mod init travellog`, directive written LITERALLY as `go 1.25.0` (DEC-27 — `go 1.25` is measured to fail both build and vet). Makefile: build, run, check, test-db, migrate, slice (the arc). TWO SERVICES ONLY — api and postgres:17 with named volume `pgdata`. No Caddy, no MinIO. Dockerfile multi-stage into `scratch` with the four things scratch lacks: CA bundle, `time/tzdata`, numeric `USER 65532:65532`, and a `-healthcheck` flag because there is no shell. Start CLAUDE.md with the gate, the divergences and why vet is mandatory.",
+   "acceptance_check": "`grep '^go ' go.mod` prints exactly `go 1.25.0`. `docker compose config` parses and shows exactly two services with `pgdata` named. `docker compose up -d && curl -sf localhost:8080/healthz` — RUNS, rather than 'the file exists'.",
+   "verified_by": "The compose up and the healthz curl, pasted. This step is mostly artefact and says so — its one substantive check is that the stack starts.",
+   "commit": "chore: the module at 1.25.0, and a two-service stack that comes up"
+  },
+  {
+   "id": "VS2",
+   "title": "config, slog, and a main.go that pools, serves and stops",
+   "size": "small",
+   "files": [
+    "internal/config/config.go",
+    "internal/logging/logging.go",
+    "cmd/api/main.go",
+    "internal/config/config_test.go"
+   ],
+   "work": "config.Load reads every var via `os.Getenv` and returns ONE error naming every missing one: DATABASE_URL, PORT, LOG_LEVEL, DB_MAX_OPEN_CONNS, DB_MAX_IDLE_CONNS, AUTH_RATE_LIMIT_PER_MIN, ARGON2_MAX_CONCURRENT. slog JSON with the attr redactor (token, passphrase, authorization). main.go: the blank `_ \"github.com/jackc/pgx/v5/stdlib\"` import ONCE, `SetMaxOpenConns` and `SetMaxIdleConns` called EXPLICITLY (spec L21), Ping with a context timeout, run migrations, serve, graceful shutdown on SIGTERM. `/healthz` pings the database rather than returning a constant.",
+   "acceptance_check": "`grep -rn 'os.Getenv' --include='*.go' .` returns internal/config only. `grep -rn 'jackc/pgx'` returns exactly one line. `/healthz` returns 503 when Postgres is stopped and 200 when it is up — the difference is the check.",
+   "verified_by": "config_test.go table-driven, asserting a three-missing-var case reports all three. The healthz 503/200 pair run against the real stack. Mutation proof: make healthz return a constant and the 503 leg reddens.",
+   "commit": "feat(config,logging): os.Getenv only, an explicit pool, and a healthz that means something"
+  },
+  {
+   "id": "VS3",
+   "title": "httpx: the envelope, the full twelve-code vocabulary, the middleware chain, the ETag helpers",
+   "size": "medium",
+   "files": [
+    "internal/httpx/json.go",
+    "internal/httpx/errors.go",
+    "internal/httpx/etag.go",
+    "internal/httpx/middleware.go",
+    "internal/httpx/context.go",
+    "internal/httpx/ratelimit.go",
+    "+ tests"
+   ],
+   "work": "`WriteJSON`/`DecodeJSON` the only importers of encoding/json, behind `http.MaxBytesReader` (1 MiB), `DisallowUnknownFields` OFF (DEC-13). errors.go ships THE FULL TWELVE-CODE BLOCK even though the slice uses ten — the AST sweep is one-directional, and growing the block later is exactly how v5 left an eleven-code block against a twelve-code decision. etag.go formats AND parses `W/\"<emitterVersion>-<logbookVersion>\"` (DEC-49), weak comparison per RFC, and cannot be called with one half. Middleware outermost-first: recover, request id, slog access log, `http.TimeoutHandler` CONSTRUCTED WITH THE JSON ENVELOPE AS ITS MESSAGE (it writes its own body — the one response the sweep cannot see). ratelimit.go: in-memory token bucket keyed on `RemoteAddr`; the `X-Forwarded-For` resolution waits for Caddy and its absence is recorded rather than forgotten.",
+   "acceptance_check": "`grep -rln 'encoding/json' internal/ cmd/` returns only internal/httpx/json.go and _test files. The const block holds twelve codes, and the count is derived by `grep -c` from the block rather than from prose.",
+   "verified_by": "An AST walk collecting every literal passed to `WriteError`, asserting each is in the block — mechanism, not discipline. A panicking handler yields 500 `{\"code\":\"internal\"}`. THE TIMEOUT LEG asserts the body PARSES as `{\"code\":\"timeout\"}` with `Content-Type: application/json`. Mutation proof: drop a code from the block and the sweep reddens.",
+   "commit": "feat(httpx): a closed twelve-code vocabulary, and an ETag with both halves"
+  },
+  {
+   "id": "VS4",
+   "title": "Migration runner, and slice migration 0001 — four tables",
+   "size": "medium",
+   "files": [
+    "internal/store/migrate.go",
+    "internal/store/testdb/testdb.go",
+    "migrations/0001_slice.up.sql",
+    "migrations/0001_slice.down.sql",
+    "+ tests"
+   ],
+   "work": "embed.FS runner, lexical order, one transaction per file, behind a database-wide advisory lock, LOUD checksum failure on a file edited after it was applied. `testdb.Open(t)` skips on unset TEST_DATABASE_URL with a message naming `make test-db` — and the message is asserted.\n\nFOUR TABLES, not twelve. `travellers(id uuid PK, email text NOT NULL UNIQUE (lowercased on write, DEC-60), passphrase_hash text, name text NULL, logbook_version bigint NOT NULL DEFAULT 0, created_at)`. `sessions(token_hash bytea UNIQUE, traveller_id, created_at, last_used_at, expires_at, revoked_at)`. `trips(traveller_id, id text, name, city_ids jsonb, start, end, summary, cover_asset text NULL, share cols, created_at)` with composite PK `(traveller_id, id)`, `CHECK (length(id) BETWEEN 1 AND 64)` and `CHECK (id ~ '^[a-z0-9-]+$')` — PERMISSIVE (DEC-02), never `char(n)`. `media_objects` SHIPS EMPTY so the FK from `trips.cover_asset` exists and is satisfied by NULL — the exact consequence DEC-58 asks to be stated rather than assumed. NO `updated_at` anywhere (deleted as over-engineered #3).",
+   "acceptance_check": "EVERY CHECK HERE RUNS AGAINST A LIVE POSTGRES — none of them is 'the file exists'. The runner applied twice applies each file exactly once, and a file edited after it was applied fails LOUDLY on a checksum mismatch. A catalog query over `information_schema` and `pg_constraint` asserts the four tables and the `trips.cover_asset` FK with its expected `confdeltype` — a query, not a `pg_dump` byte comparison, which false-reds on a minor version and cannot see a schema dumped from itself. And the schema is exercised rather than merely inspected: the INSERT legs below must run.",
+   "verified_by": "Real Postgres. `INSERT` a trip with `cover_asset NULL` and it succeeds — the DEC-58 nullable-FK leg. `INSERT` one naming a nonexistent object and the DATABASE refuses it. A trip whose id is `kyoto` round-trips (DEC-02). Mutation proofs: tighten the id CHECK to the 12-char alphabet and the `kyoto` leg reddens; drop the FK and the nonexistent-object leg reddens.",
+   "commit": "feat(store): the runner, four tables, and an FK that NULL satisfies"
+  },
+  {
+   "id": "VS5",
+   "title": "THE TWO TRANSACTION HELPERS, the read snapshot, and the traveller/session store",
+   "size": "LARGE — the reason the slice is shaped this way",
+   "files": [
+    "internal/store/tx.go",
+    "internal/store/read_tx.go",
+    "internal/store/traveller.go",
+    "internal/store/session.go",
+    "+ tests"
+   ],
+   "work": "`WithTravellerTx` = per-traveller advisory lock + `UPDATE travellers SET logbook_version = logbook_version + 1`, in the SAME transaction so the number and the data commit together. `WithTravellerLock` = the lock, NO bump. BOTH MEMBERSHIP LISTS GO INTO CLAUDE.md IN THIS COMMIT AND THEY ARE THE SPEC (DEC-50): BUMPS — trips, and the traveller row itself; DOES NOT BUMP — sessions (create, `last_used_at`, revoke) and media_objects; NEITHER — `POST /v1/auth/register`, which inserts the traveller row the lock is keyed on and so can take neither. `read_tx.go`: `WithReadSnapshot` at `sql.LevelRepeatableRead`, AND THE VERSION IS READ INSIDE THAT SNAPSHOT — otherwise the phone caches a body under a version that does not describe it, which is the one cache bug that never self-corrects.",
+   "acceptance_check": "An AST walk over `*sql.DB` call expressions catching BOTH `BeginTx` and `Begin`, against the allowlist {tx.go, read_tx.go, migrate.go}, with `register` allowlisted explicitly as the one write outside both helpers.",
+   "verified_by": "THE LEG THE SLICE EXISTS FOR: a session write does NOT move `logbook_version`; a trip write DOES. Then end to end — authenticate, GET, AUTHENTICATE AGAIN so `last_used_at` is genuinely written, GET with `If-None-Match`, ASSERT 304. MUTATION PROOF: route the session update through `WithTravellerTx` and watch it redden. Plus the writer-ordering leg (two concurrent writes, commit order equals version order) run at `-count=50` with the FAILURE RATE recorded, not a single red run.",
+   "commit": "feat(store): one lock that bumps, one that does not, and a snapshot for the reader"
+  },
+  {
+   "id": "VS6",
+   "title": "Auth: Argon2id, opaque tokens, register and sign-in",
+   "size": "medium",
+   "files": [
+    "internal/auth/token.go",
+    "internal/auth/hasher.go",
+    "internal/auth/middleware.go",
+    "internal/api/auth_handlers.go",
+    "+ tests"
+   ],
+   "work": "crypto/rand 32 bytes -> base64.RawURLEncoding (43 chars) -> sha256 of the RAW bytes stored as bytea, compared with `subtle.ConstantTimeCompare` (spec L24). `Hasher` interface with one argon2.IDKey implementation, per-user 16-byte salt, encoded so the parameters travel with the hash — UNTUNED at 64 MiB/t=1/p=4 and labelled so (DEC-21). `POST /v1/auth/register` takes `{email, passphrase}` ONLY, returns 201 with the traveller and NO TOKEN, leaves `name` NULL (DEC-61). `POST /v1/auth/session` returns the token. EXACTLY TWO SITES LOWERCASE THE EMAIL — register and the sign-in lookup — both named here (DEC-60). `AUTH_RATE_LIMIT_PER_MIN` on both routes plus a buffered-channel semaphore around `argon2.IDKey`, REJECTING 429 rather than queueing (DEC-48).",
+   "acceptance_check": "After `go mod tidy` the directive is still `go 1.25.0` and build and vet both exit 0. `go list -m all | wc -l` recorded at the commit — a number, not 'exactly two'. The plaintext token appears in one response body, no log line and no column.",
+   "verified_by": "No enumeration oracle: a wrong passphrase and an unknown email produce an IDENTICAL body and status — write this leg first. DEC-60's two legs, AND THE SECOND IS THE ONE THAT MATTERS: register `A@B.com`, sign in as `a@b.com`, assert it resolves; register twice with different casing, assert 409 — that is what fails when a future write site forgets the rule. DEC-48: the N+1th CONCURRENT login is REFUSED with 429, asserted on the response, not a timer. Mutation proofs: differentiate the two auth failure branches (oracle leg reddens); remove the semaphore (ceiling leg reddens).",
+   "commit": "feat(auth): Argon2id, opaque tokens, and a register that mints no session"
+  },
+  {
+   "id": "VS7",
+   "title": "The read and the write: GET /v1/logbook with 304, and PUT /v1/trips/{id}",
+   "size": "LARGE",
+   "files": [
+    "internal/api/routes.go",
+    "internal/api/logbook_handlers.go",
+    "internal/api/trip_handlers.go",
+    "internal/logbook/types.go",
+    "internal/logbook/validate.go",
+    "internal/api/testdata/logbook_keys.golden",
+    "+ tests"
+   ],
+   "work": "routes.go declares `[]Route{{Method, Pattern, Handler, Auth, Mutating}}` and registers the ServeMux FROM the slice — ServeMux still does all matching, so spec L18 is untouched (DEC-28). THE READ emits SIX KEYS — trips, cities, places, photos, walks, traveller — WITH THE FOUR UNIMPLEMENTED LISTS EMPTY RATHER THAN ABSENT, so the emitted shape is FINAL and the client's codec decodes the slice unchanged; `emitterVersion` starts at 1 and the re-plan inherits it without a bump. `\"version\": 2` (DEC-40) from one emitter taking the version as a parameter. `traveller` is `null` while the name is unset, NEVER `{\"name\": \"\"}` — the client casts `json['name'] as String`, non-nullable. THE VERSION IS READ FIRST, one indexed SELECT, and a matching `If-None-Match` returns 304 WITHOUT ASSEMBLING THE DOCUMENT. `X-Logbook-Format` mismatches answer `406 unsupported_format` (DEC-53). THE WRITE owns exactly {id, name, cityIds, start, end, summary, coverAsset} and never the four sharing fields (SF6), validates with compiled regexps only (spec L23), and returns 200 with the trip plus the new ETag (DEC-32).",
+   "acceptance_check": "The golden key file matches the emitted bytes and its key set matches `client_sample_log.json`'s. `PUT /v1/trips/kyoto` succeeds. A PUT body carrying `shareCoordinates: true` leaves the stored flag UNCHANGED.",
+   "verified_by": "(1) 200 carries an ETag containing the emitter constant — asserted on the constant so it cannot be dropped. (2) `If-None-Match` returns 304 AND AN EMPTY BODY. (3) THE 304 DOES NOT ASSEMBLE THE DOCUMENT — counted through an instrumented store. (4) a write between reads yields 200 with a new ETag. (5) BUMPING THE EMITTER CONSTANT ALONE, WITH NO WRITE, INVALIDATES A CACHED CLIENT (DEC-49). (6) THE SPLICE LEG (V4-B1): PUT, splice the returned trip into the previously-cached document, `GET /v1/logbook`, assert the two DECODE TO THE SAME DOCUMENT through the same emitter — not raw bytes, since DEC-30 disclaims byte stability; mutation proof returns the request body instead of the re-read row. (7) two consecutive reads with no write are byte-identical and no payload value matches `^https?://` — the URL-leak guard, deterministic here because the slice mints no URLs.",
+   "commit": "feat(api): one conditional read, one trip write, and a shape the client can already decode"
+  },
+  {
+   "id": "VS8",
+   "title": "The arc: the smoke script, the restart leg, and the evidence",
+   "size": "small",
+   "files": [
+    "scripts/slice-arc.sh",
+    "docs/EVIDENCE.md",
+    "CLAUDE.md",
+    "README.md"
+   ],
+   "work": "`scripts/slice-arc.sh` runs the whole arc with curl against the live stack and exits non-zero on any step. THE RESTART LEG IS THE POINT AND IS NOT DECORATION: `docker compose down && docker compose up -d`, wait for healthz, `GET /v1/logbook`, and assert the trip is still there. That is the only thing that proves the named volume, and it is the failure that stays invisible until a redeploy. EVIDENCE.md is filled in with every mutation proof from VS2-VS7, each at a stated commit and each recording the DIFF — a mutation that does not change the file is a green suite proving nothing.",
+   "acceptance_check": "`make slice` runs the arc from a cold `docker compose down -v` and exits 0. `make check` is green with no database, and the store tests report that they SKIPPED, naming their target.",
+   "verified_by": "The pasted transcript of `make slice` including the restart, and of `make check`. Any guard withdrawn during the slice is recorded in EVIDENCE.md with its reason rather than quietly dropped.",
+   "commit": "chore: the arc, the restart that proves the volume, and the proofs behind it"
+  }
+ ],
+ "base": {
+  "new_repo": "/Users/mattmarshall/Documents/Go/travellog (module `travellog`; GOMX untouched)",
+  "client_repo": "/Users/mattmarshall/Documents/Flutter/Travel Log — READ-ONLY, and the slice touches nothing in it",
+  "inherited_measurements": "Every measurement is inherited from go-backend-plan-v6.json's `base` and is not re-derived here. The four the slice actually leans on: the `go 1.25.0` directive is required literally (`go 1.25` fails both build and vet); the client's log is 85,422 bytes / 85,421 characters; the fixture's 43 ids are slugs including `kyoto`; and `http.ServeMux` has no pattern enumeration, which is why routes register from a descriptor slice.",
+  "gate": "GATE-L12 CLEARED 2026-08-22 with recorded scope and artefact hash. Nothing in the slice is gated. If the diagrams change materially the clearance does not carry over — re-approve."
+ },
+ "sequencing": {
+  "route_table": [
+   "GET    /healthz                 — liveness AND a database ping, so it can answer 503",
+   "POST   /v1/auth/register        — {email, passphrase} -> 201, the traveller, NO token (DEC-61)",
+   "POST   /v1/auth/session         — {email, passphrase} -> the opaque token",
+   "PUT    /v1/trips/{id}           — seven fields, never the sharing group -> 200 + trip + ETag (DEC-32)",
+   "GET    /v1/logbook              — the one read; If-None-Match -> 304, empty body (DEC-31, DEC-49)"
+  ],
+  "notes": [
+   "FIVE ROUTES OF THE PARENT PLAN'S TWENTY-FOUR, and four tables of its twelve. Counted from the table above, not carried.",
+   "ORDER IS FORCED IN ONE PLACE ONLY: VS5 must precede VS6 and VS7, because both helpers and the read snapshot are what those steps write through. VS1-VS4 are otherwise a straight line and VS3 could be reviewed in parallel with VS4.",
+   "VS5 IS THE ONLY LARGE-BY-IMPORTANCE STEP RATHER THAN LARGE-BY-VOLUME. It is small in lines and it is where the defect the slice exists to catch lives.",
+   "NO STEP HERE HAS AN ACCEPTANCE CHECK OF THE FORM 'the file exists'. VS1 comes closest and is answered by the stack starting."
+  ]
+ },
+ "risks": [
+  {
+   "risk": "The slice proves the SHAPE of DEC-31's whole-log read and cannot prove its SIZE argument — one trip is not 85 KB.",
+   "mitigation": "Stated in `expected_to_contradict` rather than left for the re-plan to assume. The 85,422-byte measurement stands on its own evidence and the slice must not be cited for it."
+  },
+  {
+   "risk": "Two concurrency legs — the writer ordering and the reader snapshot — are races that can pass with the fix removed if the timing does not interleave.",
+   "mitigation": "Run each mutation proof at `-count=50` and record the FAILURE RATE, not a single red run. A guard whose proof is 1-in-50 is worth strengthening, and knowing that beats a green tick."
+  },
+  {
+   "risk": "Deferring Caddy defers the `X-Forwarded-For` client-address resolution with it, so the rate limiter in the slice keys on `RemoteAddr` — which is correct for a direct connection and wrong the moment a proxy appears.",
+   "mitigation": "Recorded in VS3's work text as a deferral rather than a simplification, and it is the first thing the re-plan inherits as unfinished. The limiter-behind-proxy leg (two different `X-Forwarded-For` values, same `RemoteAddr`, separate buckets) belongs to the step that adds Caddy."
+  },
+  {
+   "risk": "`media_objects` ships empty purely to give `trips.cover_asset` an FK, which is a table with no rows and no route — the shape of thing this plan has deleted four times as over-engineering.",
+   "mitigation": "It earns its place by testing DEC-58's stated consequence — a nullable FK satisfied by NULL — which is otherwise an assertion nobody checks until media lands. It is one CREATE TABLE and two legs. If the re-plan finds it idle, delete it there."
+  },
+  {
+   "risk": "The slice may contradict a ruled decision, which is its job and is still disruptive.",
+   "mitigation": "`expected_to_contradict` names seven candidates with how each would announce itself, so a contradiction arrives as a prediction met rather than a surprise. Anything it contradicts is STRUCK in the re-plan with the contradiction recorded — not quietly adjusted."
+  }
+ ],
+ "execution": {
+  "mode": "fresh subagent per step, mutation-verified, reviewed between steps",
+  "boundary": "WHEN VS8 IS GREEN AND CHECKED IN, STOP. The remaining nineteen steps of go-backend-plan-v6.json are RE-PLANNED with the slice as `entry_state` — they are NOT resumed. Anything the slice contradicts is struck and the contradiction recorded; anything it validates is inherited.",
+  "entry_state_for_the_re_plan": [
+   "What RUNS: two-service compose, config/slog/main, httpx with the full twelve-code vocabulary and both ETag halves, the migration runner, four tables, both transaction helpers, the read snapshot, Argon2id auth with the rate limit and semaphore, one conditional read and one trip write.",
+   "What is PROVEN rather than asserted: the bump/no-bump split, the 304 in real use, the splice equivalence, the advisory-lock expression, slug ids through a real route, and the named volume surviving a restart.",
+   "What is INHERITED UNFINISHED: `X-Forwarded-For` resolution (deferred with Caddy), the emitter's four empty lists (shape final, content pending), and `media_objects` as an empty table.",
+   "What the re-plan MUST re-derive rather than carry: the route count, the FK count, the step count and the error-code count — every one of them from the artefact, with the command. Four counts have gone wrong in this plan's history by being carried."
+  ]
+ }
+}

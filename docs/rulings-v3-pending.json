@@ -1,0 +1,208 @@
+{
+  "note": "Ruled by the human 22 Aug 2026, AFTER plan v3 was written and WHILE the v3 critique was running. Merge into v4. Held in a separate file deliberately: the critic is reading go-backend-plan-v3.json and must not see it change under them.",
+  "rulings": [
+    {
+      "id": "DEC-43",
+      "title": "RULED \u2014 S3 access goes through minio-go; the hand-rolled SigV4 presigner is withdrawn",
+      "reasoning": "Signing is the one place a bug can pass locally and fail, or sign wrongly, in production: MinIO is a more forgiving verifier than real S3, so a hand-rolled canonical request can look correct for the whole of development. This is the THIRD dependency conversation (after the original six, and Argon2id). The spec's prohibitions name routers, ORMs, JSON and validation libraries \u2014 a storage client is not in that class, and the argument is the same one that admitted pgx.",
+      "consequence": "S17 changes shape: the deliverable is no longer ~150 lines of crypto/hmac but a thin wrapper over minio-go behind the same interface. CARRY FORWARD UNCHANGED: the config seam for the public bucket address (a presigned signature still covers the host, so this is unchanged by the swap), content-addressed hex ids, and the client-supplied SHA-256 checksum enforced at the storage layer so a lying client cannot poison the address space. VERIFY BEFORE ADOPTING, because this exact class already bit once: minio-go's own `go` directive against the DEC-27 floor of `go 1.25.0` \u2014 x/crypto silently moved the main module's directive and broke both build and vet. Measure, do not assume.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-44",
+      "title": "RULED \u2014 a short presign expiry, and H1's copy is corrected to match",
+      "reasoning": "'Stop sharing' stops new mints at once, but a URL already issued lives until it expires, and H1 says plainly that the link stops working. Rather than hedge the copy to cover a 15-minute gap, the gap shrinks until the plain sentence is true enough to keep.",
+      "consequence": "Expiry drops to roughly two minutes, configurable. H1's wording is adjusted so the screen does not overstate. THIS IS CLIENT COPY WORK \u2014 record it in CLIENT-PREREQUISITES.md beside the three sheets whose 'so nothing was deleted' no longer holds for a network write; it is the same class and should be done in one pass. CHECK: the phone caches image BYTES BY OBJECT ID, not by URL, so a short expiry must not evict a cached image \u2014 if it does, the cache design is wrong, not the expiry.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-45",
+      "title": "RULED \u2014 the session token lives in platform secure storage, not in a file",
+      "reasoning": "Phase 6 deliberately put the app's documents directory into Files.app so a user could reach their own log. That makes anything stored there readable by anyone holding the phone \u2014 and a session token is a credential, not a preference. The alternatives were the first native platform code in a project whose entire footprint is a five-line MainActivity.kt, or plaintext with a pre-deploy blocker.",
+      "consequence": "Keychain on iOS, Keystore on Android, through one package: the SEVENTH dependency, and it gets the conversation the first six had \u2014 recorded here rather than assumed. preferences.json holds settings and never the token. Anything in the plan or in CLIENT-PREREQUISITES.md that assumed a token in preferences.json is now stale. NOTE the pleasing consequence of the earlier reversal: with no device registry (withdrawn with the replication model), the token is the ONLY credential on the device, so this is one decision and not a pattern to repeat.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-46",
+      "title": "RULED \u2014 coverAsset on Trip, City and Place becomes an object id, like Photo.asset",
+      "reasoning": "One field carrying two meanings is how a cleanup job deletes live data. It also closes four of the five AssetImage accessors the client's TODO has open, rather than one.",
+      "consequence": "Extend the media liveness query to FOUR columns (photos.asset, trips.coverAsset, cities.coverAsset, places.coverAsset) or -sweep-media deletes objects that are live (V3-B6). Extend S12/S13 validation to reject an uncommitted coverAsset exactly as S14 rejects asset. DEC-40's format bump now describes four fields, not one \u2014 say so. The fixture's cover paths need the same rewrite as its photo assets (V3-B7).",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-47",
+      "title": "RULED \u2014 two presign lifetimes: short private, longer public",
+      "reasoning": "The short window is the revocation knob and belongs on the phone, which re-fetches constantly and caches bytes by object id. The public envelope embeds URLs directly with nothing to re-mint them, so the same window makes a shared page unreadable after two minutes.",
+      "consequence": "S3_PRESIGN_TTL_PRIVATE and S3_PRESIGN_TTL_PUBLIC, both from config. THE PUBLIC ONE IS THE HONEST REVOCATION WINDOW and must be what D3's and H1's copy is written against \u2014 not the private one. Add POST /v1/media/mint taking a list of ids so a twelve-photo grid is one round trip, not twelve (V3-SF2). Promote 'ImageProvider keyed by object id' in CLIENT-PREREQUISITES from a note to REQUIRED, with the reason: NetworkImage's equality is (url, scale), so a re-mint is a different cache key and Flutter's ImageCache misses every time.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-48",
+      "title": "RULED \u2014 the auth routes get a rate limit and an Argon2 concurrency cap in v1, at S10",
+      "reasoning": "Ten lines, and the limiter plus client-IP resolution already exist from S04. The 64 MiB-per-login ceiling is the plan's most-repeated measurement and it currently guards nothing.",
+      "consequence": "AUTH_RATE_LIMIT_PER_MIN per client address on register and session, plus a buffered-channel semaphore capping concurrent argon2.IDKey calls. REJECT with 429 rather than queueing \u2014 queueing converts memory exhaustion into timeout exhaustion. One leg: the N+1th concurrent login is refused, not made to wait.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-55",
+      "title": "RULED \u2014 V4 \u00a71 applies to this plan: a vertical slice is built BEFORE the remaining steps are executed",
+      "reasoning": "agent-graph-spec-V4 \u00a71 says a plan over eight steps is planned to the first running thing, then re-planned. This plan is 23 steps and is the run that produced that rule. Declining to apply it here would be the clearest possible evidence the rule will not be followed anywhere.",
+      "consequence": "THE SLICE IS A VERTICAL CUT, NOT THE FIRST N STEPS. V4 \u00a71: 'a scaffold with no behaviour' does not count, nor does 'a schema with no query', nor anything whose acceptance check is 'the file exists'. It must RUN, be checked in, and exercise the real stack rather than a mock. Target arc: docker compose up -> register -> sign in -> PUT one trip -> GET /v1/logbook -> the trip comes back -> restart the stack -> it is still there. That last leg is the one that proves the volume, and it is the failure that hides until a redeploy. It therefore takes PARTS of S01, S03, S05, S06 (a few tables, not twelve), S08 (including both transaction helpers, because the slice is where the bump/no-bump split is first testable), S09, S10, S13 (trips only) and S22 (api + postgres; no bucket, no Caddy). WHAT THE SLICE DELIBERATELY OMITS, and each is a decision the slice is expected to inform rather than settle: object storage and all media routes, the public share path, the cascades, and the ETag/304 machinery beyond the version counter existing. AFTER THE SLICE the remaining plan is RE-PLANNED with the slice as entry_state \u2014 it is not resumed. Anything the slice contradicts is struck with the contradiction recorded; anything it validates is inherited.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-56",
+      "title": "RULED \u2014 the four client copy sentences are deferred to the client phase, not fixed now",
+      "reasoning": "The replacement wording should be written against failure modes that exist rather than guessed at and revised. The four are D1, D2 and D3's 'so nothing was deleted/removed/changed' and D3's 'the shared link stops working'.",
+      "consequence": "Stays in CLIENT-PREREQUISITES as one item covering all four, with the note that D3's is the consequential one \u2014 it sits on the sheet where the user types a trip name to destroy it. Not scheduled into any backend step.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-57",
+      "title": "RULED \u2014 the three city foreign keys are ON DELETE RESTRICT",
+      "reasoning": "`places.city_id`, `photos.city_id` and `walks.city_id` had no settled delete action because the client has no delete-a-city control, so no sheet copy exists to derive one from. Three arguments, in order of weight. (1) THE FAILURE MODES ARE NOT SYMMETRIC: RESTRICT -> CASCADE later is a one-line migration; CASCADE -> RESTRICT after it has silently destroyed photographs is not recoverable. (2) A cascade here would be the LARGEST destructive act in the app \u2014 every place in the city, every photograph taken there across every trip, every walk \u2014 against a trip deletion that itemises four consequences and makes the user type the trip's name. Nothing authorises it. (3) It makes the missing decision visible at the right moment: whoever adds a delete-a-city control is stopped by the database exactly when they should be writing the sheet copy.",
+      "consequence": "Three FKs at `ON DELETE RESTRICT` in migration 0001, each carrying a comment saying it is restrictive BECAUSE no user-facing sentence authorises a cascade \u2014 so the next reader knows it is a decision rather than a default. RESTRICT rather than NO ACTION: it checks immediately and states the intent. This closes the first of the diagram's flagged items and removes UNSETTLED from the relationship table. It is consistent with the app's existing instinct \u2014 deleting a trip already KEEPS its places and its cities. TRIGGER for revisiting: a delete-a-city control, at which point the sheet copy is written first and the FK follows it, which is the order every other cascade in this app was decided in.",
+      "status": "ruled"
+    },
+    {
+      "id": "DEC-58",
+      "status": "ruled",
+      "title": "RULED \u2014 the media reference is a real FOREIGN KEY on all four columns, not a Go check",
+      "reasoning": "A Go check can be bypassed by the next route somebody adds and nothing notices; a database constraint cannot. This is the same argument the plan already makes for the delete cascades \u2014 the schema is the specification \u2014 applied to the one reference that was going to be the exception.",
+      "consequence": "FKs from `photos.asset`, `trips.cover_asset`, `cities.cover_asset` and `places.cover_asset` to `media_objects(traveller_id, id)`, composite on traveller_id. The three cover columns are NULLable and an FK on a nullable column is satisfied by NULL, so nothing is forced to carry a cover. ORDERING FALLS OUT OF THIS and must be stated: an object must be COMMITTED before any row can reference it, which the upload flow already does (begin -> PUT -> commit -> reference) \u2014 but it means S16's committed-asset validation is now enforced twice, in Go for the 422 message and in the schema as the guarantee. Keep both: the Go check exists to produce `422 invalid_field`, not to be the guard. The sweep is UNAFFECTED \u2014 its grace window covers objects uploaded but not yet referenced, and an FK never blocked those; what it now blocks is deleting an object something still points at, which is what the sweep was hand-rolling a liveness query to avoid. Re-derive the FK count; do not increment it."
+    },
+    {
+      "id": "DEC-59",
+      "status": "ruled",
+      "title": "RULED \u2014 country stays flattened into `cities`; there is no `countries` table",
+      "reasoning": "The client has no country concept \u2014 no input, no screen, no list \u2014 and derives it from the city. A lookup table would invent an entity nothing asks for. Same instinct that refused to invent a cascade for city deletion (DEC-57): this app does not add what no surface authorises.",
+      "consequence": "`cities.country_code` (ISO-3166-1 alpha-2, regexp-validated) and `cities.country_name` stay as two columns. TRIGGER for revisiting: a country-level feature \u2014 browsing by country, counting them, a flag or a map. Normalising later is one migration and a join; inventing the table now is a permanent join for two strings."
+    },
+    {
+      "id": "DEC-60",
+      "status": "ruled",
+      "title": "RULED \u2014 email is `text`, lowercased on write, with a unique index; NOT `citext`",
+      "reasoning": "`citext` needs a Postgres extension, which in this project is a dependency decision of the same class as adding a library \u2014 and the type is increasingly discouraged in favour of collation-based approaches. Lowercase-on-write is explicit rather than magic.",
+      "consequence": "`email text NOT NULL` with `UNIQUE`. Exactly TWO write sites lowercase it \u2014 register and sign-in lookup \u2014 and both are named so the rule cannot be applied at one and forgotten at the other. Add the leg: register `A@B.com`, sign in as `a@b.com`, and assert it resolves; and register twice with different casing and assert the second answers 409. That second leg is the one that fails if a future write site forgets."
+    },
+    {
+      "id": "DEC-61",
+      "status": "ruled",
+      "title": "RULED \u2014 register takes {email, passphrase} only, and does NOT mint a session",
+      "reasoning": "One route, one job. Putting `name` on register creates a second way to set a name beside `PATCH /v1/me`, and two writers of one field drift. Not auto-signing-in keeps the sign-in path exercised from the very first launch rather than making it a branch only reached on the second \u2014 which is exactly the code that breaks quietly.",
+      "consequence": "`POST /v1/auth/register` body `{email, passphrase}` -> 201 with the traveller, no token. `POST /v1/auth/session` body `{email, passphrase}` -> the opaque token. `traveller.name` is NULL until `PATCH /v1/me` sets it \u2014 which the client's own model already tolerates: `sample_log.dart` says a missing `traveller` key 'reads as a log nobody has named yet'. CLIENT CONSEQUENCE, record it in CLIENT-PREREQUISITES: the sign-up flow is two requests, and the first screen after registering must handle a traveller with no name \u2014 which is a state U1 can already render. The wrong-passphrase and unknown-email responses stay byte-identical (no enumeration oracle); that leg already exists and is unaffected."
+    },
+    {
+      "id": "DEC-62",
+      "status": "ruled",
+      "title": "RULED \u2014 adopt the layering from 'Building a Clean REST API in Go, no frameworks': a Service type between handlers and the store",
+      "reasoning": "The human first proposed amitshekhariitbhu/go-backend-clean-architecture and, on being shown that its stack violates four spec constraints by name (Gin at L18, MongoDB at L20, JWT at L24, Viper at L30), rejected it and supplied this instead. This reference is stdlib-only over `http.ServeMux` and fights nothing in the spec. The plan was ALREADY most of this shape \u2014 the article's central inversion, 'the business logic owns the contract and the storage implementation satisfies it', is exactly what `internal/logbook/store.go` declaring the Store interface already does.",
+      "consequence": "ONE REAL ADDITION: a `Service` type owning business rules, so handlers translate HTTP and nothing more. Take the ARTICLE'S form, not the Clean Architecture repo's \u2014 a struct beside the model, NOT a fifth directory. That is the seam without the ceremony, and the ceremony is the standard criticism of the heavier form. IT MUST EARN ITS PLACE PER OPERATION. Most of the 24 routes are plain CRUD where a service method forwards to the repository and returns \u2014 that file is noise. The three operations that genuinely need it are the compound ones: `refilePhoto` (moves a pin AND creates-or-reuses an occasion, one transaction, four documented rules), `removePlace` (two branches, and a statement ORDER that silently inverts D2's promise if reversed), and the media commit flow. Write the service for those; let simple CRUD go handler->store directly, and say so rather than adding empty forwarding methods for symmetry. TYPED SENTINEL ERRORS mapped centrally to status codes is the article's error idiom and it COMPOSES with DEC-12's closed code vocabulary rather than replacing it: the sentinel is the domain's word, the code is the wire's. One mapping function, and DEC-12's AST sweep still polices the wire side. UNCHANGED: `http.ServeMux`, `database/sql`, PostgreSQL, opaque tokens, os.Getenv, and every other spec constraint. NOTHING already built is invalidated \u2014 VS1 and VS2 stand."
+    },
+    {
+      "id": "DEC-63",
+      "status": "ruled",
+      "title": "RULED \u2014 every foreign key's CHILD column gets an index",
+      "reasoning": "PostgreSQL does not index the child side of an FK automatically. Every ON DELETE CASCADE and every RESTRICT check therefore sequentially scans the child table. This is the most common real-world Postgres omission and it was in the schema by silence, not by decision.",
+      "consequence": "Indexes on: visits(traveller_id, place_id), visits(traveller_id, trip_id), photos(traveller_id, trip_id), photos(traveller_id, place_id), photos(traveller_id, visit_id), photos(traveller_id, city_id), walks(traveller_id, trip_id), walks(traveller_id, city_id), places(traveller_id, city_id), share_links(traveller_id, trip_id), sessions(traveller_id), and the four media reference columns (DEC-58). LEAD WITH traveller_id: every query is tenant-scoped, so a composite starting with it serves both the FK check and the ordinary read. HOW IT IS PROVEN, and this is the part that makes it more than a hunch: EXPLAIN the cascade before and after and assert the plan changes from Seq Scan to Index Scan. An index nobody proved is used is an index that may not be."
+    },
+    {
+      "id": "DEC-64",
+      "status": "ruled",
+      "title": "RULED \u2014 `trips.city_ids` becomes a JOIN TABLE; DEC-26's jsonb choice is REVERSED",
+      "reasoning": "DEC-26 chose jsonb to avoid Postgres array support through `database/sql`. That reason does not survive scrutiny: A JOIN TABLE NEEDS NO ARRAY SUPPORT AT ALL \u2014 every column is a plain scalar. So jsonb bought nothing and cost referential integrity, which had to be re-implemented in Go with its own 422, its own leg and its own mutation proof. It also cost the reverse lookup (which trips include this city), which the client's 'Third visit' and P1 year rows lean on.",
+      "consequence": "`trip_cities(traveller_id, trip_id, city_id, ordinal)` with real FKs to trips and cities, PK (traveller_id, trip_id, city_id), and a UNIQUE on (traveller_id, trip_id, ordinal) so the order cannot silently duplicate. ORDERING IS PRESERVED AND IT IS LOAD-BEARING \u2014 the client's cityIds is an ordered list in travel order; emit `ORDER BY ordinal`, never natural order. DELETES: both FKs CASCADE \u2014 removing a trip removes its rows, and DEC-57's city RESTRICT now has a real child to protect. WHAT THIS DELETES: the Go referential check for city_ids, its 422 and its mutation proof all go \u2014 the schema does that job now. Say so rather than leaving dead guards. The wire shape is UNCHANGED: the client still sends and receives `cityIds` as an ordered JSON array; only the storage changes."
+    },
+    {
+      "id": "DEC-65",
+      "status": "ruled",
+      "title": "RULED \u2014 a UNIQUE index on lower(email); SUPERSEDES DEC-60's lowercase-on-write rule",
+      "reasoning": "DEC-60 correctly refused citext (a Postgres extension is a dependency decision in this project) but settled on an application rule enforced at two call sites. A functional unique index needs no extension AND is enforced by the database, so it is strictly better than both options that were offered. My omission, not the human's.",
+      "consequence": "`CREATE UNIQUE INDEX travellers_email_lower_key ON travellers (lower(email))`, and the plain UNIQUE on the column is DROPPED \u2014 keeping both means a case variant fails on the wrong constraint with the wrong message. Lookups MUST use `WHERE lower(email) = lower($1)` or the index is not used \u2014 assert that with EXPLAIN, not by reading. STORE THE ADDRESS AS THE USER TYPED IT: the index makes lowercasing on write unnecessary, and the local-part of an email address is case-sensitive per RFC 5321 even though no real provider treats it so. DEC-60's SECOND LEG SURVIVES AND IS NOW STRONGER: register twice with different casing and assert 409 \u2014 it now fails at the database rather than depending on a call site remembering."
+    },
+    {
+      "id": "DEC-66",
+      "status": "ruled",
+      "title": "BLOCKER FIX \u2014 composite ON DELETE SET NULL must name its columns; PostgreSQL 15 becomes a hard floor",
+      "reasoning": "EXECUTED on PostgreSQL 17.11: a composite FK's `ON DELETE SET NULL` nulls EVERY column of the referencing key, including `traveller_id`, which is NOT NULL. Postgres echoed its own generated statement: `UPDATE ONLY photos SET traveller_id = NULL, place_id = NULL`. So D2's keep branch and `_repointed` \u2014 two of the seven cascades the schema exists to implement \u2014 abort rather than clearing a pin. THREE REVIEW PASSES MISSED IT because the D3 leg passes over the defect: in that path the photograph is cascade-deleted by photos.trip_id before the broken FK fires.",
+      "consequence": "`ON DELETE SET NULL (place_id)` and `ON DELETE SET NULL (visit_id)` \u2014 the column-list form, PostgreSQL 15+. Verified on 17.11: traveller_id survives and place_id AND visit_id clear together, which is exactly `Photo.copyWith(clearPlace: true)`. POSTGRESQL 15 IS NOW A HARD FLOOR. State it in the migration header AND make `make test-db` REFUSE an older server \u2014 compose pins 17, but a developer's local 14 would reproduce the blocker with no clue why. S15's ordering leg must land AFTER this fix: today the wrong order raises a NOT NULL violation rather than silently keeping the photographs, so the mutation proof would redden for the wrong reason, which DEC-28 forbids. Assert on the SURVIVING ROW COUNT, never on error/no-error."
+    },
+    {
+      "id": "DEC-67",
+      "status": "ruled",
+      "title": "RULED \u2014 share links keep their history, with a PARTIAL UNIQUE INDEX enforcing one live link",
+      "reasoning": "The PK was never specified and the two candidates behave differently. EXECUTED: with `PRIMARY KEY (traveller_id, trip_id)`, H1's 'Stop sharing' then 'New link' fails outright \u2014 `duplicate key value violates unique constraint`. And the class diagram asserts '0..1 LIVE' which NEITHER candidate enforces.",
+      "consequence": "`PRIMARY KEY (traveller_id, token)`, plus `CREATE UNIQUE INDEX share_links_one_live ON share_links (traveller_id, trip_id) WHERE revoked_at IS NULL`. The partial index is the ONLY thing that enforces the cardinality the diagram already claims, and it needs no extension. 'New link' becomes: revoke the current row, insert a new one \u2014 same transaction. The revocation record survives, which matters because DEC-10 stores the token in plaintext: history now shows which token was live when."
+    },
+    {
+      "id": "DEC-68",
+      "status": "ruled",
+      "title": "RULED \u2014 `visits.at` is `timestamptz`, not `date`",
+      "reasoning": "The wire carries a real time (`2027-12-06T07:05:00.000Z`) and `date` truncates it silently. Two losses: DEC-26's refile ordinal rule cannot break a tie between two visits on the same day \u2014 the exact Kyoto-in-May shape the fixture is built around \u2014 and a date-only string makes the client's `DateTime.parse` return a NON-UTC local time, unlike every other date in the log.",
+      "consequence": "`visits.at timestamptz NOT NULL`. `trips.start`, `trips.ended_on` and `walks.recorded_on` stay `date` \u2014 those genuinely are midnight-UTC on the wire and `date` is lossless. BUT THE EMITTER MUST RE-RENDER THEM as `T00:00:00.000Z` or the same parse asymmetry appears there instead. One golden round-trip leg PER DATE-BEARING FIELD, asserting the emitted string is byte-identical to what the client sent."
+    },
+    {
+      "id": "DEC-69",
+      "status": "ruled",
+      "title": "RULED \u2014 `trips.end` is renamed `ended_on`; `trip_cities.city_id` becomes RESTRICT",
+      "reasoning": "`end` is a RESERVED PostgreSQL keyword \u2014 `SELECT id, start, end FROM trips` is a syntax error, and in a project with no ORM every hand-written query must remember the quotes forever. And DEC-64 claimed CASCADE on trip_cities.city_id gave DEC-57's RESTRICT 'a real child to protect'; EXECUTED, it does the opposite \u2014 a city with no places or photos deletes silently and vanishes from every trip's list, leaving an ordinal gap.",
+      "consequence": "`started_on` and `ended_on` in the schema; THE WIRE KEYS STAY `start` AND `end` and the emitter maps them, so nothing in the client or the approved diagrams changes. Free now, a migration plus every query later. `trip_cities.city_id` -> RESTRICT, consistent with the other three city FKs. `trip_cities.trip_id` STAYS CASCADE \u2014 that one is read off D3. DEC-64's 'a real child to protect' sentence is now TRUE rather than aspirational."
+    },
+    {
+      "id": "DEC-70",
+      "status": "ruled",
+      "title": "CORRECTION to DEC-63 \u2014 the rule is 'a LEADING PREFIX of some index', derived from the catalog",
+      "reasoning": "DEC-63 said 'every FK child column gets an index' and, applied literally, did two wrong things at once: it MISSED `trip_cities(traveller_id, city_id)` \u2014 DEC-64's new table, where city_id is third in the PK and cannot serve the FK \u2014 and it DUPLICATED `share_links_pkey` exactly. The missing-index class reappeared inside the ruling written to eliminate it.",
+      "consequence": "RESTATED: every FK child column must be a LEADING PREFIX of some index. Derive the list from `pg_index.indkey`, never from the FK list. Add `trip_cities_city_idx`; drop the `share_links` duplicate. AND THE PROOF METHOD FROM DEC-63 IS WITHDRAWN \u2014 it cannot work. RI checks run in C-level triggers using internal SPI plans and NEVER appear in EXPLAIN, not even under ANALYZE. Replace with: (a) a CATALOG leg asserting every FK child column is a leading prefix of some index \u2014 true at any size, and the one that matters now; (b) `SET enable_seqscan=off` proving each index is USABLE. RECORD THE HONEST LIMIT in EVIDENCE.md: at 284 rows the planner correctly declines almost all of these \u2014 measured, exactly one index was chosen during a full trip cascade \u2014 so nobody later 'fixes' a passing test by deleting an index that is right for the day the log grows."
+    },
+    {
+      "id": "DEC-71",
+      "status": "ruled",
+      "title": "RULED \u2014 three package renames: internal/api -> internal/rest, internal/store -> internal/postgres, internal/objects -> internal/media",
+      "reasoning": "Three naming problems, one of them a real collision. (1) `cmd/api` is the BINARY (the Go convention) and `internal/api` was the HTTP handlers \u2014 two different things sharing one word, so 'the api package' is ambiguous in every import and every conversation. (2) `store.Store` STUTTERS, which Go's style guide calls out because the package name is part of the identifier \u2014 and it is worse here than usual, because the interface it implements is declared in `internal/logbook` and is ALSO called `Store`, so `logbook.Store` and `store.Store` would sit side by side meaning interface and implementation. (3) `objects` is S3's vocabulary; `media` is the domain's own word and matches the `media_objects` table.",
+      "consequence": "`internal/rest` (handlers and routes), `internal/postgres` (the database implementation), `internal/media` (photograph storage). `internal/httpx` is DELIBERATELY UNCHANGED \u2014 the `x` suffix is a recognised Go idiom for plumbing extensions and it draws a real boundary: httpx is envelope, errors and middleware; rest is handlers. TIMING: ruled while VS4 was mid-flight creating `internal/store`; the rename was sent to that worker to apply in place rather than land as a follow-up commit. The other two packages do not exist yet, so both are free. NOTHING ELSE MOVES: no table names, no wire keys, no behaviour. The database naming was reviewed at the same time and is correct as it stands \u2014 plural snake_case tables, snake_case columns with the camelCase wire mapped in the emitter, and explicit constraint names with `_fk`/`_uq` suffixes so catalog tests assert on stable names rather than PostgreSQL's positional ones."
+    },
+    {
+      "id": "DEC-72",
+      "status": "WITHDRAWN \u2014 superseded by DEC-73",
+      "title": "WITHDRAWN \u2014 the Standard-Go-Project-Layout move (deploy/ -> deployments/, Dockerfile -> build/package/). Never applied.",
+      "reasoning": "go_backend.md L17 names the Standard Go Project Layout explicitly. We deviated from it in three places and recorded NONE of them as a divergence \u2014 unlike the golang:1.26 build stage and the fourth compose service, which both are. That inconsistency is the defect: the divergence register is only trustworthy if it is complete. HONEST COUNTER-ARGUMENT, recorded so nobody re-litigates it later: that layout is a community repository, not an official Go standard, and the Go team has distanced itself from it. A flatter shape is common in production Go. So this is 'diverges from the document the spec named', not 'wrong'. The human chose to follow the named document, which makes the register complete without needing a new entry.",
+      "consequence": "Withdrawn before application, on the human's question 'does that sound like normal human naming?'. It does not. `build/package/Dockerfile` and `deployments/` are among the MOST WIDELY IGNORED parts of that layout \u2014 open almost any real Go service and the Dockerfile is at the repo root. DEC-72 optimised for 'matches the document the spec named' at the cost of 'looks like what a person would do', and I recommended it without flagging that those conflict here. Superseded by DEC-73."
+    },
+    {
+      "id": "DEC-73",
+      "status": "ruled",
+      "title": "RULED \u2014 the Dockerfile moves to the REPO ROOT; deploy/ keeps its name; recorded as a deliberate divergence from the layout the spec names",
+      "reasoning": "go_backend.md L17 names the Standard Go Project Layout. Its `build/package/` and `deployments/` conventions are widely ignored in practice, and following them literally reads as over-application of a document the Go team itself has distanced from. The project's other divergences (the golang:1.26 build stage, the fourth compose service) are recorded rather than hidden, so this becomes the THIRD recorded divergence rather than an unrecorded deviation \u2014 which is what made the register untrustworthy in the first place.",
+      "consequence": "`Dockerfile` at the REPO ROOT \u2014 where a Go developer looks first, and where the build context already is, so `build.context: .` and `dockerfile: Dockerfile` both simplify. `deploy/` KEEPS ITS NAME (compose, .env.example). `migrations/` stays at root. `.dockerignore` was ALREADY at the repo root and does not move \u2014 it belongs to the context, not to the Dockerfile. RECORD IT: a third entry in DIVERGENCES.md naming L17, what was done instead, and why. STILL TOUCHES the Makefile, compose's `build` keys, and the `test/image` legs that name the Dockerfile path literally. Apply once VS4 and the sweep worker are clear; verify with `make check` AND `make test-image`, and confirm the shipped image is unchanged \u2014 two layers, binary plus CA bundle."
+    },
+    {
+      "id": "DEC-74",
+      "status": "ruled",
+      "title": "RULED \u2014 the handlers package is `internal/httpapi`, not `internal/rest`",
+      "reasoning": "`rest` names an architectural style rather than the contents, which is slightly unusual as a Go package name. `httpapi` is what the reference article the human chose (DEC-62) actually uses, and it is plain. Supersedes the `internal/rest` half of DEC-71; the other two renames in DEC-71 (`postgres`, `media`) stand.",
+      "consequence": "`internal/httpapi` \u2014 handlers and routes, imports the domain. `internal/httpx` UNCHANGED and the boundary is unchanged: httpx is envelope, error vocabulary, middleware and rate limiting, and imports NO domain; httpapi knows what a trip is. Two HTTP packages with one clear line between them. The package does not exist yet, so this costs nothing. It lands at VS7."
+    },
+    {
+      "id": "DEC-75",
+      "status": "ruled",
+      "title": "RULED \u2014 the backend is seeded by `make seed` from the captured client fixture; the client ships with NO mock data",
+      "reasoning": "The human is deleting `sample_log.dart` and `assets/imagery/` from the Flutter app entirely \u2014 'No mock files. Kill them.' \u2014 so the app's empty states become the real first-run experience rather than a branch nobody could reach. That leaves the backend with nothing to work against, and leaves every Go round-trip test with no reference document. CAUGHT IN TIME: the 85,422-byte encoded fixture existed ONLY in a scratch directory. The Go repo had never captured it, and `internal/logbook/` does not exist yet. Once the Dart source is deleted it can never be regenerated. Copied to `internal/logbook/testdata/client_sample_log.json`, sha256 03e88872\u2026 matching the figure the fix verifier recorded independently.",
+      "consequence": "`make seed` loads that document into Postgres. It is the right seed BECAUSE it is a real logbook shape rather than three rows of foo: 7 trips, 12 cities, 17 places, 49 visits, 284 photographs, 2 walks \u2014 and it carries the edge cases the schema was designed around. Kyoto visited three times (the ordinal tie DEC-68 needed timestamptz for), a wishlist place with no visits (which D3 promises survives a trip deletion), 28 visits dated before the trip that names them, and only TWO distinct asset locators across all 284 photographs \u2014 which is what makes content-addressed storage collapse the whole library to two objects. AS-IS, NOT ANONYMISED: the edge cases are the value, and rewriting the names would risk flattening exactly the shapes that found defects. IT IS A DEV COMMAND AND MUST SAY SO \u2014 never run at boot, never in production, and the target refuses against a non-empty log rather than merging. NOTE THE ASYMMETRY AND KEEP IT: mock data on the SERVER, run deliberately by a developer, is not the same thing as an app that ships fake trips baked in. The first is a fixture; the second is the 'stranger's data' objection the client's own record makes."
+    }
+  ],
+  "gate_l12": {
+    "status": "CLEARED",
+    "cleared_on": "2026-08-22",
+    "cleared_by": "the human, in response to an explicit approval request",
+    "what_was_approved": "The Phase 1 deliverables of go_backend.md L9-L10, as rendered and read: the class diagram (11 entities, the full relationship table with ON DELETE behaviour and the delete-sheet sentence each implements, and the fields the backend needs that the client lacks) and six sequence diagrams (register, sign in, cold start and revalidation, a write, a photograph end to end, the public share read), each with trigger, request payload, expected response and error states.",
+    "artefact_sha256": "f5dab13de264fbf246d7c1746fa08ce334545eadbf70bd1d361ef7706b8b647f",
+    "approved_with_these_known_open": [
+      "media_objects referenced without a foreign key, validated in Go",
+      "country flattened into cities rather than a lookup table",
+      "citext for the email column, which needs a Postgres extension",
+      "the register and sign-in request bodies, which the spec does not specify"
+    ],
+    "note": "Recorded with its date, its scope and the artefact's hash BECAUSE the incident this gate exists for was a plan describing artefacts as 'approved' that no human had seen. An approval with no scope is the same defect wearing a tick. If the diagrams change materially, this clearance does not carry over \u2014 re-approve."
+  }
+}
