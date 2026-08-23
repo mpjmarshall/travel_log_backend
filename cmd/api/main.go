@@ -49,7 +49,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "time/tzdata"
 
+	"travellog/internal/auth"
 	"travellog/internal/config"
+	"travellog/internal/httpapi"
+	"travellog/internal/httpx"
 	"travellog/internal/logging"
 	"travellog/internal/postgres"
 	"travellog/migrations"
@@ -163,7 +166,11 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 		return err
 	}
 
-	return serve(addr, newMux(db, log), log)
+	mount, err := apiRoutes(cfg, db, log)
+	if err != nil {
+		return err
+	}
+	return serve(addr, serverChain(newMux(db, log, mount), log), log)
 }
 
 // pinger is the half of *sql.DB that /healthz needs.
@@ -218,10 +225,66 @@ func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
 // hands its listener to ListenAndServe, so there is no way to reach the handler
 // from a test without signalling the test process itself. newMux is what
 // httptest.NewServer takes.
-func newMux(db pinger, log *slog.Logger) *http.ServeMux {
+// THE VARIADIC IS WHAT KEPT TWELVE LEGS FROM BEING REWRITTEN. newMux is called
+// from a dozen places in this package's tests, every one of them about
+// /healthz and none of them about auth; a second required parameter would have
+// edited all twelve to pass a nil they do not care about, and an edit that
+// large across legs it does not concern is how a leg gets changed by accident.
+func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler(db, log))
+	for _, mount := range mounts {
+		mount(mux)
+	}
 	return mux
+}
+
+// apiRoutes builds the auth service from the config and answers something that
+// mounts its routes.
+//
+// IT REFUSES A CEILING BELOW ONE RATHER THAN CARRYING ON. config.Load already
+// floors ARGON2_MAX_CONCURRENT at 1, so this is unreachable through main —
+// which is exactly why it is here: the guard that only exists in the caller is
+// the guard the second caller does not get.
+//
+// THE ARGON2 PARAMETERS ARE DEC-08's UNTUNED 64 MiB / t=1 / p=4 (DEC-21). What
+// bounds the memory is not the parameters, it is the two guards around them:
+// AUTH_RATE_LIMIT_PER_MIN counts callers per address and the gate counts calls.
+func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.ServeMux), error) {
+	gate, err := auth.NewGate(cfg.Argon2MaxConcurrent)
+	if err != nil {
+		return nil, fmt.Errorf("ARGON2_MAX_CONCURRENT: %w", err)
+	}
+	service := &auth.Service{
+		Store:  postgres.AuthStore{DB: db},
+		Hasher: auth.Capped{Hasher: auth.Argon2id{Params: auth.DefaultParams}, Gate: gate},
+	}
+	limiter := httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil)
+
+	return func(mux *http.ServeMux) {
+		httpapi.Mount(mux, httpapi.Deps{Auth: service, Log: log, AuthLimit: limiter})
+	}, nil
+}
+
+// serverChain is httpx.Base MINUS Timeout, and the subtraction is stated
+// rather than silent.
+//
+// httpx.Base is Recover, RequestID, AccessLog, Timeout — and Timeout takes a
+// duration this build cannot read: there is no REQUEST_TIMEOUT in
+// internal/config, and inventing one here would be a configuration value
+// nobody chose, silently in force, which is the thing config.Load exists to
+// refuse. It belongs to the step that adds the variable.
+//
+// The other three are wired now because the auth routes are the first thing
+// here a client can reach with a body: without Recover a panicking handler
+// closes the connection with no response at all, and without RequestID the
+// detail httpx sends to the log has nothing to tie it to.
+func serverChain(mux *http.ServeMux, log *slog.Logger) http.Handler {
+	return httpx.Chain(mux,
+		httpx.Recover(log),
+		httpx.RequestID(),
+		httpx.AccessLog(log),
+	)
 }
 
 // healthzHandler answers ok, or unavailable on a ping that does not come back.
