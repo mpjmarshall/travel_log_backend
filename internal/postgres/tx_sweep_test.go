@@ -43,9 +43,24 @@ var transactionAllowlist = map[string]string{
 	"internal/postgres/tx.go":      "WithTravellerTx and WithTravellerLock — the two helpers themselves",
 	"internal/postgres/read_tx.go": "WithReadSnapshot — the repeatable-read snapshot the reader runs in",
 	"internal/postgres/migrate.go": "the migration runner, which predates the helpers and is not traveller-scoped",
-	"internal/rest/auth_handlers.go": "DEC-50's ONE exception: POST /v1/auth/register inserts the traveller " +
-		"row the lock is keyed on, so it can take neither helper (arrives at VS6)",
 }
+
+// DEC-50's ONE EXCEPTION IS NOT AN ALLOWLIST ENTRY, AND VS6 IS WHERE THAT WAS
+// SETTLED. VS5 wrote one for `internal/rest/auth_handlers.go`, predicting that
+// POST /v1/auth/register would open a transaction it could not hand to either
+// helper. Two things about that prediction turned out wrong, and the second
+// one is the interesting one:
+//
+//   - the package is `internal/httpapi`, not `internal/rest` (DEC-74), so the
+//     entry named a path nothing would ever occupy; and
+//   - register's write is ONE INSERT, which is already atomic, so it opens no
+//     transaction at all. An allowlist entry grants an exemption; an exemption
+//     nothing uses is a hole with a comment over it, and TestNoAllowlistEntryIsStale
+//     exists precisely to say so.
+//
+// So the entry is gone and TestRegisterTakesNeitherHelperAndOpensNoTransaction
+// below replaces it. That is a strictly stronger check: the old one could only
+// fail if somebody edited the map, and this one fails if the CODE changes.
 
 // transactionOpeners answers the module's non-test files that call Begin or
 // BeginTx, and the files it walked.
@@ -159,22 +174,91 @@ func TestNoAllowlistEntryIsStale(t *testing.T) {
 	}
 }
 
-// An ARTEFACT CHECK, and labelled as one: it can only fail if somebody edits
-// the map above, never because the code is wrong. It is here because DEC-50's
-// own text says the register exemption must be allowlisted EXPLICITLY rather
-// than left as the one exception a worker discovers, and the cheapest way for
-// that instruction to be quietly undone is for the entry to be deleted while
-// the file that needs it does not exist yet.
-func TestTheRegisterExemptionIsWrittenDown(t *testing.T) {
-	for file, reason := range transactionAllowlist {
-		if strings.Contains(file, "auth_handlers.go") {
-			if !strings.Contains(reason, "register") {
-				t.Errorf("%s is allowlisted but its reason does not name register: %q", file, reason)
-			}
-			return
+// The membership split of DEC-50, as a walk over the file that implements it.
+//
+// IT IS SYNTACTIC, like the sweep above and for the same reason: proving a
+// receiver's type needs go/types and therefore golang.org/x/tools, which this
+// project has not had the dependency conversation for. Matching on the NAME
+// over-reports, and an over-report is a comment away from resolved while an
+// under-report is a silent hole.
+//
+// WHAT IT ADDS OVER THE BEHAVIOURAL LEG. auth_store_test.go asserts that a
+// session write moves logbook_version by zero, which is the evidence. This
+// asserts the RULE — that the session writes go through WithTravellerLock and
+// never WithTravellerTx — so a future session write that happens not to be
+// counted by an existing leg still cannot take the bumping helper.
+func TestTheSessionWritesTakeTheLockingHelperAndNotTheBumpingOne(t *testing.T) {
+	calls := callsByFunction(t, "internal/postgres/auth_store.go")
+
+	for _, method := range []string{"CreateSession", "TouchSession"} {
+		made, defined := calls[method]
+		if !defined {
+			t.Errorf("AuthStore.%s is not in auth_store.go", method)
+			continue
+		}
+		if !made["WithTravellerLock"] {
+			t.Errorf("AuthStore.%s does not call WithTravellerLock.\n"+
+				"    DEC-50: a session write is traveller-scoped and must hold the advisory\n"+
+				"    lock, so it cannot go straight to the pool.", method)
+		}
+		if made["WithTravellerTx"] {
+			t.Errorf("AuthStore.%s calls WithTravellerTx, which BUMPS logbook_version.\n"+
+				"    `last_used_at` is written on EVERY authenticated request, so counting it\n"+
+				"    invalidates the phone's whole 85 KB cached log every time it asks and\n"+
+				"    GET /v1/logbook never once answers 304 in real use.", method)
 		}
 	}
-	t.Errorf("DEC-50's one exception — POST /v1/auth/register — is not in transactionAllowlist.\n" +
-		"    It inserts the traveller row the per-traveller lock is keyed on, so it can take\n" +
-		"    neither helper. Deleting the entry does not make it stop being the exception.")
+}
+
+// DEC-50's one exception, asserted about the code rather than about a map.
+func TestRegisterTakesNeitherHelperAndOpensNoTransaction(t *testing.T) {
+	made := callsByFunction(t, "internal/postgres/auth_store.go")["CreateTraveller"]
+	if made == nil {
+		t.Fatalf("AuthStore.CreateTraveller is not in auth_store.go")
+	}
+	for _, banned := range []string{"WithTravellerTx", "WithTravellerLock", "Begin", "BeginTx"} {
+		if made[banned] {
+			t.Errorf("AuthStore.CreateTraveller calls %s.\n"+
+				"    It INSERTs the traveller row the per-traveller advisory lock is KEYED ON,\n"+
+				"    so there is nothing to lock yet — it is the only write in the system\n"+
+				"    outside both helpers. One INSERT is already atomic and needs no\n"+
+				"    transaction of its own; if that stops being true, this needs a design\n"+
+				"    decision and not an allowlist entry.", banned)
+		}
+	}
+}
+
+// callsByFunction answers, per top-level function or method in one file, the
+// set of selector call names its body makes.
+func callsByFunction(t *testing.T, rel string) map[string]map[string]bool {
+	t.Helper()
+	path := filepath.Join(moduleRootFrom(t), filepath.FromSlash(rel))
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", rel, err)
+	}
+
+	out := map[string]map[string]bool{}
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		made := map[string]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch fun := call.Fun.(type) {
+			case *ast.Ident:
+				made[fun.Name] = true
+			case *ast.SelectorExpr:
+				made[fun.Sel.Name] = true
+			}
+			return true
+		})
+		out[fn.Name.Name] = made
+	}
+	return out
 }
