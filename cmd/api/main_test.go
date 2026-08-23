@@ -38,7 +38,7 @@ func portOf(t *testing.T, rawURL string) string {
 
 func TestHealthzAnswers200(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newMux(&stubPinger{}, quiet()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -47,7 +47,7 @@ func TestHealthzAnswers200(t *testing.T) {
 
 func TestHealthzAnswersJSONContentType(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newMux(&stubPinger{}, quiet()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", got, "application/json")
@@ -59,7 +59,7 @@ func TestHealthzAnswersJSONContentType(t *testing.T) {
 // ping and this leg is what says the envelope survived that.
 func TestHealthzBodyDecodesToStatusOK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newMux(&stubPinger{}, quiet()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	var body struct {
 		Status string `json:"status"`
@@ -78,7 +78,7 @@ func TestHealthzBodyDecodesToStatusOK(t *testing.T) {
 // pattern rather than the probe.
 func TestHealthzRejectsNonGET(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/healthz", nil))
+	newMux(&stubPinger{}, quiet()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/healthz", nil))
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /healthz = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
@@ -87,7 +87,7 @@ func TestHealthzRejectsNonGET(t *testing.T) {
 
 func TestUnknownPathIs404(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	newMux(&stubPinger{}, quiet()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET / = %d, want %d", rec.Code, http.StatusNotFound)
@@ -181,7 +181,7 @@ func TestProbeRequestsGETHealthz(t *testing.T) {
 // correct in isolation and disagree here — a probe on the wrong path, or a route
 // that lost its method pattern, shows up in this leg and in no other.
 func TestProbeAgreesWithTheRealMux(t *testing.T) {
-	srv := httptest.NewServer(newMux())
+	srv := httptest.NewServer(newMux(&stubPinger{}, quiet()))
 	defer srv.Close()
 
 	if code := probe(portOf(t, srv.URL)); code != 0 {
