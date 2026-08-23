@@ -43,8 +43,28 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # THE INNER SHUTDOWN BUDGET MUST STAY STRICTLY BELOW THE OUTER ONE.
+    # serve() shuts down with a 10s context (cmd/api/main.go, shutdownTimeout)
+    # and Docker's default stop timeout is also 10s, so a shutdown that
+    # actually used its allowance was SIGKILLed at exactly the boundary: the
+    # graceful path's last moments are the ones that got killed, and from VS2
+    # an in-flight request is a write to Postgres. 15s leaves 5s of slack.
+    # Same ordering rule as the HEALTHCHECK budgets in deploy/Dockerfile —
+    # whoever is being supervised gets the smaller number.
+    stop_grace_period: 15s
 
   postgres:
+    # PINNED, AND A BUMP IS NOT A ONE-CHARACTER CHANGE. postgres:18 moved the
+    # image's default PGDATA to /var/lib/postgresql/18/docker; the mount below
+    # is /var/lib/postgresql/data, which is exactly where 17 puts it. Bumping
+    # the tag alone would leave the named volume mounted over a directory the
+    # server no longer uses — initdb runs into the image's own filesystem, the
+    # stack comes up looking fine, and the data is gone at the next `down`.
+    # That is the failure the named volume exists to prevent, so a bump goes
+    # with either a PGDATA environment variable or a changed mount path, plus
+    # a dump/restore for any volume already written by 17. Not tested here:
+    # flagged by the VS1 review as a latent trap and left to VS8's restart arc,
+    # which is the leg that would catch it.
     image: postgres:17
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-travellog}
@@ -65,10 +85,29 @@ services:
       # `up` with EADDRINUSE. A deploy publishes nothing here.
       - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
     healthcheck:
+      # `-h 127.0.0.1` IS THE WHOLE POINT OF THIS LINE, AND IT IS NOT TIDINESS.
+      # Without it pg_isready probes the UNIX SOCKET. The official postgres
+      # entrypoint runs a bootstrap server with listen_addresses='' — socket
+      # only — to finish initdb and run /docker-entrypoint-initdb.d/*, then
+      # shuts it down and starts the real server on TCP. Through that whole
+      # phase the socket answers and TCP refuses, so the healthcheck passed
+      # while the port was dead and `depends_on: service_healthy` released the
+      # api against nothing. The api reaches Postgres over TCP at
+      # postgres:5432 and never over the socket, so the probe must use the
+      # transport the dependent actually uses.
+      #
+      # Measured (VS1 review, 3 cold starts with an empty initdb): the
+      # socket-OK-while-TCP-dead window was 0.33s, 0.28s and 0.31s against a
+      # 2s interval. VS4's migrations widen it — one pg_sleep(20) init script
+      # held `docker_health=healthy` against `real_TCP=REFUSED` for 7
+      # consecutive samples.
+      #
+      # RAISING start_period WOULD NOT HAVE FIXED IT: a check that passes
+      # during the start period marks the container healthy immediately.
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-travellog} -d ${POSTGRES_DB:-travellog}",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-travellog} -d ${POSTGRES_DB:-travellog}",
         ]
       interval: 2s
       timeout: 3s

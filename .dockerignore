@@ -1,0 +1,48 @@
+# WHERE THIS FILE HAS TO LIVE, AND WHY IT IS NOT IN deploy/.
+#
+# deploy/docker-compose.yml builds the api with `context: ..`, so the build
+# context is the REPOSITORY ROOT. Docker reads .dockerignore from the context
+# root and nowhere else: a copy beside the Dockerfile in deploy/ is read by
+# nothing, silently. Before this file existed BuildKit reported
+# `load .dockerignore / transferring context: 2B` — the empty default.
+#
+# WHAT IT IS FOR. deploy/Dockerfile stage 1 does `COPY . .`, so without this
+# every git-ignored file in the tree lands in the BUILD stage — including
+# deploy/.env, the file .gitignore exists to keep out of the repository and
+# .env.example tells developers to create. Measured: a canary
+# `POSTGRES_PASSWORD=` line written into deploy/.env came back out of
+# `docker run --entrypoint /bin/cat <buildstage> /src/deploy/.env`.
+#
+# The SHIPPED image is unaffected either way — stage 2 is scratch and copies
+# exactly two paths — so this is intermediate-image and build-cache exposure,
+# not a leak in what ships. It is also a cache fix: `.git` (5.1 MB) and the
+# stray `./api` binary (9.2 MB) invalidated `COPY . .` on every commit.
+#
+# Nothing the build needs may be added here: go.mod, go.sum, cmd/ and internal/
+# are what stage 1 compiles.
+
+# Secrets and local environment. deploy/.env.example is checked in and IS
+# wanted in the context (it documents the knobs); deploy/.env never is.
+deploy/.env
+.env
+
+# Version control and its history.
+.git
+.gitignore
+.dockerignore
+
+# Build output. `/api` is what `go build ./...` — the first command of
+# `make check` — leaves in the current directory on every run.
+/api
+/bin/
+/out/
+
+# Go test artefacts.
+*.test
+*.out
+
+# Editor and OS noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp

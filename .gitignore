@@ -4,6 +4,20 @@
 
 # Local environment. deploy/.env.example is checked in and is the documentation;
 # deploy/.env is the developer's own and never is.
+#
+# ONLY deploy/.env IS READ BY COMPOSE. Compose's project directory is the
+# directory holding the compose file — deploy/ — so a `.env` at the repository
+# root is interpolated by NOTHING: no warning, no error, every variable falls
+# back to its default and the stack comes up looking correct. Measured: a root
+# .env with POSTGRES_PORT=6001 resolved `published: "5434"`; the same line in
+# deploy/.env resolved `published: "6001"`.
+#
+# The bare `.env` line below is therefore NOT an invitation to put one there.
+# It is kept — rather than dropped, which was the other option — because a
+# stray root .env is exactly the file that must not reach the repository if
+# somebody writes one anyway, and a git-ignored dud is better than a committed
+# one. Both paths are excluded from the Docker build context too; see
+# .dockerignore.
 deploy/.env
 .env
 

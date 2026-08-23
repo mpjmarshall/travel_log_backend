@@ -8,9 +8,23 @@
 # enforces the language floor independently of whether the build happened to
 # be cached. Dropping it from this target silently removes that enforcement.
 #
-# `gofmt -l .` is in the chain and MUST PRINT NOTHING. gofmt exits 0 whether or
-# not it lists files, so the target inspects its output rather than its status;
-# a plain `gofmt -l .` in a && chain is a check that cannot fail.
+# `gofmt -l .` is in the chain and MUST PRINT NOTHING, so the target inspects
+# its output — a plain `gofmt -l .` in a && chain is a check that cannot fail.
+#
+# CORRECTION (VS1-FIXES). This comment used to justify inspecting the output by
+# saying "gofmt exits 0 whether or not it lists files". That premise holds ONLY
+# for input gofmt can parse. On a SYNTAX ERROR gofmt exits **2** and writes to
+# **stderr**, so stdout is empty, `[ -n "$out" ]` is false, and the recipe line
+# succeeded — `make check` exited **0** with an unparseable .go file in the
+# tree. Measured at ee543b9 on a copy: `.tools/broken.go`, a hidden directory
+# that `./...` does not match and that internal/config's AST sweep skips, gave
+# `gofmt exit=2` and `MAKE EXIT=0`. So the status is now captured as well as
+# the output, and both are checked, in that order.
+#
+# THE LESSON, which is worth more than the fix: VS1 proved this step with ONE
+# mutation (a badly formatted but parseable file) and recorded the class as
+# closed. That mutation still reddens. A guard proven once against one mutation
+# is proven against that mutation, not against its class.
 
 SHELL := /bin/bash
 
@@ -31,7 +45,13 @@ run:
 check:
 	go build ./...
 	go vet ./...
-	@out="$$(gofmt -l .)"; \
+	@out="$$(gofmt -l . 2>&1)"; st=$$?; \
+	if [ $$st -ne 0 ]; then \
+		echo "gofmt itself failed (exit $$st) — this is a file it cannot PARSE,"; \
+		echo "not a file it would reformat:"; \
+		echo "$$out"; \
+		exit $$st; \
+	fi; \
 	if [ -n "$$out" ]; then \
 		echo "gofmt -l reported unformatted files:"; \
 		echo "$$out"; \
@@ -59,10 +79,37 @@ logs:
 ## test-db — the database the internal/store tests run against.
 ## Brings up ONLY postgres, then prints the URL to export. The store tests skip
 ## without TEST_DATABASE_URL and say so, naming this target.
+##
+## EVERY FIELD IS DERIVED FROM THE RUNNING CONTAINER, NOT RESTATED.
+## This target used to print a hardcoded URL — port 5434, user/password/database
+## all literal `travellog` — while compose resolves all four from deploy/.env,
+## which .env.example explicitly invites you to change ("it is a fact about one
+## machine"). Measured at ee543b9: with deploy/.env setting POSTGRES_PORT=5999,
+## POSTGRES_USER=alice, POSTGRES_DB=otherdb, `docker compose config` resolved
+## every one of them and this target still printed 127.0.0.1:5434/travellog.
+##
+## THE CONSEQUENCE IS WORSE THAN A URL THAT WILL NOT CONNECT. On this machine
+## 5432 is a developer's own Postgres and 5433 is an unrelated container, so a
+## stale printed URL can point host-run internal/store tests — which create and
+## drop tables — at a database that is not the stack's.
+##
+## `compose port` answers for the container that is actually running, and the
+## three environment values are read out of it, so the print and the stack
+## cannot drift apart: there is only one source left.
 test-db:
 	$(COMPOSE) up -d --wait postgres
-	@echo
-	@echo "export TEST_DATABASE_URL=postgres://travellog:travellog@127.0.0.1:5434/travellog?sslmode=disable"
+	@port="$$($(COMPOSE) port postgres 5432 | sed 's/.*://')"; \
+	user="$$($(COMPOSE) exec -T postgres printenv POSTGRES_USER)"; \
+	pass="$$($(COMPOSE) exec -T postgres printenv POSTGRES_PASSWORD)"; \
+	db="$$($(COMPOSE) exec -T postgres printenv POSTGRES_DB)"; \
+	if [ -z "$$port" ] || [ -z "$$user" ] || [ -z "$$db" ]; then \
+		echo "make test-db: postgres is up but did not answer for its own" >&2; \
+		echo "published port, user or database — refusing to print a URL" >&2; \
+		echo "that would be a guess. Try: $(COMPOSE) ps postgres" >&2; \
+		exit 1; \
+	fi; \
+	echo; \
+	echo "export TEST_DATABASE_URL=postgres://$$user:$$pass@127.0.0.1:$$port/$$db?sslmode=disable"
 
 ## migrate — apply migrations against DATABASE_URL.
 ## NOT IMPLEMENTED UNTIL VS4, and it fails loudly rather than exiting 0 on

@@ -13,7 +13,19 @@
 #      from different compilers, runtimes and std sources;
 #   2. go.mod's directive is `go 1.25.0` (DEC-27), so a golang:1.22 stage
 #      could not compile this module at all — it is not a preference.
-# Recorded in three places by DEC-09: here, docs/DIVERGENCES.md, and README.md.
+# Recorded in TWO places: here, and CLAUDE.md's divergence table ("The spec,
+# and the divergences from it", divergence 1).
+#
+# CORRECTION (VS1-FIXES). This line used to say "three places by DEC-09: here,
+# docs/DIVERGENCES.md, and README.md". NEITHER OF THOSE FILES HAS EVER
+# EXISTED — checked three ways rather than assumed: `ls docs` is absent;
+# `git show f6705e6 --name-only` lists only CLAUDE.md, cmd/api/main.go and
+# cmd/api/main_test.go; and `git log --all --diff-filter=A --name-only |
+# grep -iE 'divergence|readme'` matches nothing in the whole history. They are
+# not deferred either — CLAUDE.md's Layout block plans `docs/EVIDENCE.md`
+# (VS8) and no other docs file. A reader chasing a divergence to a file that
+# never existed cannot tell whether it was lost or never written, which is
+# worse than a smaller claim honestly made.
 # ---------------------------------------------------------------------------
 FROM golang:1.26 AS build
 
@@ -49,9 +61,32 @@ COPY --from=build /out/api /api
 
 USER 65532:65532
 
+# DOCUMENTATION ONLY, and it is not the port the server listens on. That is
+# PORT, read by internal/config (VS2) and defaulted in the compose file; this
+# line publishes nothing and configures nothing. If PORT moves, this and
+# compose's container-side port move with it — but neither of them makes it
+# happen. Kept because `docker inspect` and `docker run -P` read it.
 EXPOSE 8080
 
-HEALTHCHECK --interval=5s --timeout=3s --start-period=3s --retries=12 \
+# --timeout MUST STAY STRICTLY ABOVE THE PROBE'S OWN DEADLINE, and it did not.
+# probe() gives itself context.WithTimeout(3s) (cmd/api/main.go) and this was
+# --timeout=3s, so a probe that actually reached its own deadline raced
+# Docker's kill: the health log recorded a killed check with empty output
+# instead of the `healthcheck: Get ...: context deadline exceeded` line the
+# code exists to print. The diagnostic could never win. 4s gives it 1s to land.
+#
+# The three budgets now nest, innermost first, and each must stay below the
+# next: /healthz's own database ping 2s < probe's request 3s < this timeout 4s
+# < the 5s interval.
+#
+# THE PROBE TAKES NO PORT ARGUMENT, AND THAT IS DELIBERATE (VS2). It used to
+# rely on a `-addr` flag defaulting to :8080 while the server's port was a
+# separate knob — run the image with any other port and the container served
+# correctly and was reported unhealthy forever, which `make up --wait` turns
+# into a failed deploy. VS2 deleted the flag: the probe loads the same config
+# the server does, so there is one source for the port and nothing left to
+# pass. Do not reintroduce an address argument here.
+HEALTHCHECK --interval=5s --timeout=4s --start-period=3s --retries=12 \
     CMD ["/api", "-healthcheck"]
 
 ENTRYPOINT ["/api"]
