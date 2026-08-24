@@ -210,6 +210,20 @@
       "title": "RULED \u2014 the compose service is `postgres`; media before seed",
       "reasoning": "CLAUDE.md flagged that the slice plan said `postgres` and the old plan said `db`, and asked the re-plan to settle it. `postgres` is what is running and what `DATABASE_URL` names. Separately, the re-plan flagged its own media-before-seed ordering as its most challengeable call; confirmed, because the seed needs media rows to point at and stub references would have to be rewritten.",
       "consequence": "`postgres` everywhere. Order stands: R2 media, R3 media routes, R4 seed."
+    },
+    {
+      "id": "DEC-82",
+      "status": "ruled",
+      "title": "RULED \u2014 migration 0002 BACKFILLS the share flags on trips written before it",
+      "reasoning": "EXECUTED by the database lens: after the two ALTERs, pre-existing rows stay f|f|f while every new row reads t|t|f, and nothing can distinguish 'written before 0002' from 'the user turned sharing off'. The server wrote a default the CLIENT NEVER HAD \u2014 the client's own defaults are true/true/false \u2014 so those rows are wrong data rather than a choice.",
+      "consequence": "0002 carries `UPDATE trips SET share_photos = true, share_notes = true` with the reasoning in the file. `share_coordinates` is NOT touched: false is correct on both sides. THE DOWN FILE IS NOT AN INVERSE and must say so \u2014 putting everything back to false would leave post-0002 rows wrong in the other direction. ADD THE LEG THE PLAN LACKS: create a trip, apply 0002, read it back. R4's seed makes this moot for seeded rows \u2014 it writes the values from the client document and refuses a non-empty database \u2014 which is why this only bites the trips the slice arc already wrote."
+    },
+    {
+      "id": "DEC-83",
+      "status": "ruled",
+      "title": "RULED \u2014 photos.place_id / photos.visit_id coherence stays a Go rule, with a comment naming it",
+      "reasoning": "EXECUTED: a photograph can name place P while naming a visit belonging to a different place, and the schema accepts it. Every route assumes the pair is coherent. The schema-level fix is a composite FK to `visits (traveller_id, place_id, id)`, but that CHANGES WHAT A VISIT DELETION DOES TO place_id \u2014 which is delete behaviour, and delete behaviour is decided by what the app's sheets promise, not by a DBA.",
+      "consequence": "No schema change. A comment on the two columns in 0001 naming this as the SECOND integrity rule deliberately left in Go \u2014 DEC-02's cross-kind id uniqueness is the first \u2014 so the next reader does not read the omission as an oversight, which is exactly how the missing FK indexes got there. TRIGGER for revisiting: a sheet that says what happens to a photograph's pin when its occasion is deleted. Until such a sentence exists there is nothing to implement."
     }
   ],
   "gate_l12": {
