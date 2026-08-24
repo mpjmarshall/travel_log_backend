@@ -41,7 +41,14 @@ never counted as evidence about code.
 
 ---
 
-## VS8 — run at `cbb467a`, on this machine
+## VS8 — mutations run at `cbb467a`, green control at `a7040d5`
+
+Every mutation table below was run at **`cbb467a`**, and `make slice` was run
+green end to end at **`a7040d5`** — **exit 0, 76 assertions, 1m26s** on a warm
+image cache. The two commits are named separately on purpose: a mutation result
+belongs to the tree it was applied to, and the commits between them are the
+record corrections the mutations produced.
+
 
 Go 1.26.5 darwin/arm64, Docker 27.4.0, Compose 2.31.0-desktop.2, PostgreSQL 17.
 
