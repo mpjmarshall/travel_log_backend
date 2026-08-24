@@ -3,9 +3,11 @@
 // behaves the way it will in production.
 //
 // IT IS A DEVELOPER COMMAND AND MUST NEVER RUN IN PRODUCTION OR AT BOOT.
-// Nothing in cmd/api imports this package; the only entry point is cmd/seed,
-// which takes its DSN as an explicit flag rather than from the environment so
-// that an ambient DATABASE_URL cannot aim it at a real database by accident.
+// Nothing in cmd/api imports this package. IT HAS NO ENTRY POINT YET: the
+// command that runs it is DEC-75's `make seed`, and neither the target nor a
+// cmd/ package for it exists. When one lands it takes its DSN as an explicit
+// flag rather than from the environment, so that an ambient DATABASE_URL
+// cannot aim it at a real database by accident.
 //
 // WHY IT EXISTS, WHICH IS NOT "IT LOOKS REALISTIC". The catalog leg in
 // internal/postgres proves every foreign key's child columns lead some index —
@@ -65,7 +67,7 @@ type Options struct {
 	Seed       uint64
 }
 
-// DefaultOptions is what cmd/seed runs with when no flag is given.
+// DefaultOptions is what the seed command will run with when no flag is given.
 func DefaultOptions() Options {
 	return Options{
 		Photos:     DefaultPhotos,

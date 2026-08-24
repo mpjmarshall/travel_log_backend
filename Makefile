@@ -31,6 +31,13 @@ SHELL := /bin/bash
 COMPOSE := docker compose -f deploy/docker-compose.yml
 BIN     := bin/api
 
+# SLICE is a variable so the wiring can be tested without recursion: the arc's
+# own record phase runs `make slice SLICE=<stub>` and asserts the exit code
+# comes back out. A target that exits 0 having done nothing is indistinguishable
+# from one that succeeded (VS1-FIXES finding 7), and that is the class it
+# guards.
+SLICE   := scripts/slice-arc.sh
+
 .PHONY: build run check fmt up down logs test-db migrate slice
 
 ## build — compile the server to bin/api
@@ -123,12 +130,21 @@ migrate:
 	$(COMPOSE) up -d --build --wait postgres
 	$(COMPOSE) run --rm --no-deps api -migrate-only
 
-## slice — the whole arc against the live stack, from cold.
-## NOT IMPLEMENTED UNTIL VS8 (scripts/slice-arc.sh), for the same reason.
+## slice — the whole arc against the live stack, from cold, plus the four
+## standing legs that need something `make check` deliberately does not have.
+##
+## IT DESTROYS THE NAMED VOLUME. `docker compose down -v` is its first step, on
+## purpose: a 201 against a database that already held the row proves nothing.
+## Run it against the local stack and expect to lose whatever is in it.
+##
+## NOT PART OF `make check`, for the reason `test-image` is not: the gate is
+## four commands and stays fast (4.4s measured at d7a6da9), and this builds an
+## image and brings three compose projects up.
+##
+## `scripts/slice-arc.sh record` / `gate` / `arc` / `testdb` / `healthcheck`
+## runs one phase; no argument runs all five.
 slice:
-	@echo "make slice: scripts/slice-arc.sh lands in VS8." >&2
-	@echo "Its restart leg is the only proof of the named volume, so it cannot be faked." >&2
-	@exit 1
+	@$(SLICE)
 
 ## test-image — the opt-in image tier (test/image). Everything about the
 ## shipped artefact that `go test ./...` cannot reach: what the scratch image
