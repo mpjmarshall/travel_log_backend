@@ -43,6 +43,11 @@ COMPOSE=(docker compose -f "$REPO/deploy/docker-compose.yml")
 ARC_EMAIL="arc@travellog.test"
 ARC_PASS="correct-horse-battery-staple"
 ARC_TRIP="kyoto"
+JSON_CT="Content-Type: application/json"
+
+# The trip body is a single-quoted literal because it carries no variable, and
+# it carries shareCoordinates:true on purpose — see A8.
+TRIP_BODY='{"name":"Kyoto in May","start":"2027-05-12T00:00:00.000Z","end":"2027-05-19T00:00:00.000Z","shareCoordinates":true}'
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/travellog-slice.XXXXXX")"
 FAILED=0
@@ -90,8 +95,22 @@ assert_contains() {
 # req writes the body to $WORK/body and the headers to $WORK/head and echoes
 # the status. --fail is deliberately NOT passed: a 4xx is an answer this script
 # asserts on, not an error it aborts at.
+#
+# THE rm IS THE LEG, NOT HOUSEKEEPING. `curl -o` does not create or truncate the
+# file when the response has no body — measured here: the 304 leg read 333 bytes
+# and they were the PREVIOUS request's document, so "the 304 answers an empty
+# body" passed as "the 304 answers the whole log". An absence assertion is the
+# easiest kind to write so that it cannot fail.
 req() {
+	rm -f "$WORK/body" "$WORK/head"
 	curl -sS -o "$WORK/body" -D "$WORK/head" -w '%{http_code}' "$@"
+}
+
+# body_bytes counts a file curl never created as zero, which is the answer it
+# gives for a bodiless response.
+body_bytes() {
+	[ -e "$WORK/body" ] || { printf 0; return; }
+	wc -c <"$WORK/body" | tr -d ' '
 }
 
 header() {
@@ -104,7 +123,7 @@ header() {
 }
 
 body()   { cat "$WORK/body"; }
-jqbody() { jq -r "$1" <"$WORK/body"; }
+jqbody() { jq -r "$@" <"$WORK/body"; }
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is not on PATH, and this script cannot assert without it"
@@ -265,6 +284,64 @@ phase_gate() {
 # PHASE: arc
 ########################################################################
 
+# THE BUILD HUNG FOR TEN MINUTES AND HUB WAS NOT THE REASON — VS6's diagnosis is
+# corrected here rather than inherited. VS6 recorded `docker compose build api`
+# stalling at "resolve image config for docker-image://docker.io/docker/dockerfile:1"
+# and concluded egress to registry-1.docker.io did not answer. Measured at VS8 on
+# the same machine: registry-1.docker.io answers 401 in 0.17s, which is correct
+# for an unauthenticated request, and what hangs is `docker-credential-desktop
+# get` — indefinitely, with no output. Killed at 15s, exit 143. With `credsStore`
+# removed from a COPY of ~/.docker, the same build finishes in 8.6s.
+#
+# A HELPER THAT EXITS NON-ZERO HAS ANSWERED. "credentials not found" is exit 1
+# and is a perfectly good reply; only the deadline is a failure, so the exit code
+# is deliberately not looked at.
+cred_helper_answers() {
+	local store="$1" pid waited=0
+	printf 'https://index.docker.io/v1/\n' | "docker-credential-$store" get >/dev/null 2>&1 &
+	pid=$!
+	while kill -0 "$pid" 2>/dev/null; do
+		if [ "$waited" -ge 10 ]; then
+			kill -TERM "$pid" 2>/dev/null || true
+			wait "$pid" 2>/dev/null || true
+			return 1
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	wait "$pid" 2>/dev/null || true
+	return 0
+}
+
+# docker_preflight changes NOTHING on a machine whose credential helper answers.
+# On one whose helper hangs it says so, in full, and moves this run onto a copy
+# of the docker config with `credsStore` deleted — every image this project pulls
+# is public, so nothing here needs a credential at all.
+docker_preflight() {
+	local config_dir="${DOCKER_CONFIG:-$HOME/.docker}" store
+	store="$(jq -r '.credsStore // empty' "$config_dir/config.json" 2>/dev/null || true)"
+	[ -n "$store" ] || return 0
+	command -v "docker-credential-$store" >/dev/null 2>&1 || return 0
+
+	if cred_helper_answers "$store"; then
+		ok "docker-credential-$store answers"
+		return 0
+	fi
+
+	printf '\033[33m     docker-credential-%s did not answer in 10s.\033[0m\n' "$store" >&2
+	printf '     Hub itself: registry-1.docker.io/v2/ -> %s in %ss (401 is correct unauthenticated).\n' \
+		"$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://registry-1.docker.io/v2/ || echo unreachable)" \
+		"$(curl -sS -o /dev/null -w '%{time_total}' --max-time 10 https://registry-1.docker.io/v2/ || echo '?')" >&2
+	printf '     So the stall is the CREDENTIAL HELPER and not egress, which is what\n' >&2
+	printf '     CLAUDE.md recorded at VS6. This run continues against a copy of\n' >&2
+	printf '     %s with credsStore removed; restart Docker Desktop to fix it properly.\n' "$config_dir" >&2
+
+	cp -R "$config_dir" "$WORK/docker" 2>/dev/null || true
+	mkdir -p "$WORK/docker"
+	jq 'del(.credsStore)' "$config_dir/config.json" >"$WORK/docker/config.json"
+	export DOCKER_CONFIG="$WORK/docker"
+}
+
 api_base() {
 	local published
 	published="$("${COMPOSE[@]}" port api 8080 2>/dev/null)" || true
@@ -279,22 +356,37 @@ in_psql() {
 	"${COMPOSE[@]}" exec -T postgres psql -U travellog -d travellog -tAc "$1"
 }
 
+# THE REQUEST BODIES ARE BUILT BY jq AND NEVER WRITTEN INLINE, AND THAT IS A
+# MEASUREMENT RATHER THAN A STYLE. The first draft wrote
+# `assert_eq 201 "$(req … -d "{\"email\":\"$ARC_EMAIL\",\"passphrase\":…}")" "…"`.
+# Inside a command substitution that is itself inside a quoted ARGUMENT, bash
+# does not keep the inner double quotes: the braces reached the shell unquoted
+# and BRACE-EXPANDED, so `req` ran TWICE — once with `{"email":…}` and once with
+# `{"passphrase":…}` — the server answered 400 invalid_body to both, and the leg
+# reported one failure with the wrong label. The identical line as the right-hand
+# side of an ASSIGNMENT parses correctly, which is what made it look like a
+# server defect. Every status is assigned to a variable first for the same
+# reason.
+body_json() { jq -cn "$@"; }
+
 phase_arc() {
 	phase "arc — register, sign in, write, read, revalidate, restart, read again"
 	need curl
 	need jq
+
+	local code base token auth_header shouty traveller_id
 
 	step "A0: docker compose down -v — the volume goes, so what follows is real"
 	"${COMPOSE[@]}" down -v
 	ok "cold: no pgdata"
 
 	step "A1: docker compose build api"
-	# VS6 recorded this failing for ~15 minutes at the BuildKit frontend fetch
-	# (`# syntax=docker/dockerfile:1` pulls from Hub on every build). It is an
-	# environment fact, not a defect, but the arc cannot run without it, so it
-	# gets its own step and its own message.
+	# `# syntax=docker/dockerfile:1` makes BuildKit resolve that frontend from
+	# Hub on every build, which is where both recorded stalls happened. The
+	# preflight is what turns a ten-minute silence into a sentence.
+	docker_preflight
 	if ! "${COMPOSE[@]}" build api; then
-		fail "docker compose build api failed. If it hung at 'resolve image config for docker-image://docker.io/docker/dockerfile:1', Docker Hub is unreachable — see CLAUDE.md, VS6."
+		fail "docker compose build api failed — the output above is the reason."
 	fi
 	ok "the image is built from this tree"
 
@@ -303,11 +395,12 @@ phase_arc() {
 	assert_eq healthy "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}" ps -q postgres)")" "postgres health"
 	assert_eq healthy "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}" ps -q api)")" "api health"
 
-	local base; base="$(api_base)"
+	base="$(api_base)"
 	ok "api published at $base"
 
 	step "A3: GET /healthz"
-	assert_eq 200 "$(req "$base/healthz")" "GET /healthz"
+	code="$(req "$base/healthz")"
+	assert_eq 200 "$code" "GET /healthz"
 	assert_eq ok "$(jqbody .status)" "healthz status"
 
 	# THE FOUR ROUTES ARE IN THE RUNNING CONTAINER. VS6 and VS7 both recorded
@@ -315,39 +408,41 @@ phase_arc() {
 	# image was never rebuilt. A1 is what closes that, and this is what proves
 	# A1 closed it — a 404 here means an image from before VS6.
 	step "A4: POST /v1/auth/register"
-	assert_eq 201 "$(req -X POST "$base/v1/auth/register" \
-		-H 'Content-Type: application/json' \
-		-d "{\"email\":\"$ARC_EMAIL\",\"passphrase\":\"$ARC_PASS\"}")" "POST /v1/auth/register"
+	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
+		-d "$(body_json --arg e "$ARC_EMAIL" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+	assert_eq 201 "$code" "POST /v1/auth/register"
 	assert_eq "$ARC_EMAIL" "$(jqbody .email)" "the registered email"
 	assert_eq null "$(jqbody .name)" "name — null, not absent (the client casts it)"
-	local traveller_id; traveller_id="$(jqbody .id)"
+	traveller_id="$(jqbody .id)"
 	[ -n "$traveller_id" ] && [ "$traveller_id" != null ] || fail "register returned no id"
 	ok "traveller id $traveller_id"
 
 	# DEC-65: the unique index is on lower(email) and every lookup says
-	# `lower(email) = lower($1)`. THIS IS THE ONLY STEP IN THE ARC THAT PROVES
-	# IT. Register the same address in a different case and the index — not any
-	# Go code — is what refuses it; sign in in a different case and the
-	# functional lookup is what finds it. Lowercase either request and both
-	# steps pass against a plain b-tree on `email`, so the case is the assertion.
-	local shouty; shouty="$(printf '%s' "$ARC_EMAIL" | tr 'a-z' 'A-Z')"
+	# `lower(email) = lower($1)`. THESE TWO STEPS ARE THE ONLY PLACE IN THE ARC
+	# THAT PROVES IT. Register the same address in a different case and the
+	# INDEX — not any Go code — is what refuses it; sign in in a different case
+	# and the functional LOOKUP is what finds it. Lowercase either request and
+	# both steps pass against a plain b-tree on `email`, so the case is the
+	# assertion and not decoration.
+	shouty="$(printf '%s' "$ARC_EMAIL" | tr 'a-z' 'A-Z')"
 	step "A5: POST /v1/auth/register, SAME address UPPERCASED — the index refuses it"
-	assert_eq 409 "$(req -X POST "$base/v1/auth/register" \
-		-H 'Content-Type: application/json' \
-		-d "{\"email\":\"$shouty\",\"passphrase\":\"$ARC_PASS\"}")" "register $shouty"
+	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
+		-d "$(body_json --arg e "$shouty" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+	assert_eq 409 "$code" "register $shouty"
 	assert_eq conflict "$(jqbody .code)" "the code"
 
 	step "A6: POST /v1/auth/session, address UPPERCASED — the functional lookup finds it"
-	assert_eq 201 "$(req -X POST "$base/v1/auth/session" \
-		-H 'Content-Type: application/json' \
-		-d "{\"email\":\"$shouty\",\"passphrase\":\"$ARC_PASS\"}")" "POST /v1/auth/session"
-	local token; token="$(jqbody .token)"
+	code="$(req -X POST "$base/v1/auth/session" -H "$JSON_CT" \
+		-d "$(body_json --arg e "$shouty" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+	assert_eq 201 "$code" "POST /v1/auth/session"
+	token="$(jqbody .token)"
 	[ -n "$token" ] && [ "$token" != null ] || fail "sign-in returned no token"
 	ok "token issued, ${#token} characters"
-	local auth_header="Authorization: Bearer $token"
+	auth_header="Authorization: Bearer $token"
 
 	step "A7: GET /v1/logbook before any write — 200 and NO ETag"
-	assert_eq 200 "$(req -H "$auth_header" "$base/v1/logbook")" "GET /v1/logbook at version 0"
+	code="$(req -H "$auth_header" "$base/v1/logbook")"
+	assert_eq 200 "$code" "GET /v1/logbook at version 0"
 	assert_eq "" "$(header ETag)" "ETag at logbook_version 0 (W/\"1-0\" is the tag DEC-49 exists to prevent)"
 	assert_eq 0 "$(jqbody '.logbook.trips | length')" "trips"
 	assert_eq "[]" "$(jqbody -c '.logbook.cities')" "cities — [] and not null"
@@ -356,46 +451,60 @@ phase_arc() {
 	# (SF6). DEC-13 keeps unknown fields tolerated, so it is not refused — it is
 	# simply not heard, and A10 reads the stored flags back to prove it.
 	step "A8: PUT /v1/trips/$ARC_TRIP"
-	assert_eq 200 "$(req -X PUT "$base/v1/trips/$ARC_TRIP" \
-		-H "$auth_header" -H 'Content-Type: application/json' \
-		-d '{"name":"Kyoto in May","start":"2027-05-12T00:00:00.000Z","end":"2027-05-19T00:00:00.000Z","shareCoordinates":true}')" "PUT /v1/trips/$ARC_TRIP"
+	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP" -H "$auth_header" -H "$JSON_CT" -d "$TRIP_BODY")"
+	assert_eq 200 "$code" "PUT /v1/trips/$ARC_TRIP"
 	assert_eq 'W/"1-1"' "$(header ETag)" "the write's ETag"
 	assert_eq "$ARC_TRIP" "$(jqbody .id)" "the written id"
 	# THE DEFECT VS7 FOUND BY RUNNING THE BINARY, AND THE REASON THIS LINE IS
-	# NOT `jq .cityIds | length`. A nil Go slice marshals to `null`, and
+	# NOT `jq '.cityIds | length'`. A nil Go slice marshals to `null`, and
 	# trip.g.dart reads `(json['cityIds'] as List<dynamic>)` with no null
 	# branch, so the client threw on the answer to its own write. `length` is 0
-	# for both null and []; only the raw value separates them.
+	# for both null and [], so only the raw value separates them.
 	assert_eq "[]" "$(jqbody -c .cityIds)" "cityIds on the WRITE's answer"
-	assert_eq "2027-05-12T00:00:00.000Z" "$(jqbody -r .start)" "start — a date column, rendered with milliseconds"
+	assert_eq "2027-05-12T00:00:00.000Z" "$(jqbody .start)" "start — a date column, rendered with milliseconds"
 
 	step "A9: GET /v1/logbook — the trip is there"
-	assert_eq 200 "$(req -H "$auth_header" "$base/v1/logbook")" "GET /v1/logbook"
+	code="$(req -H "$auth_header" "$base/v1/logbook")"
+	assert_eq 200 "$code" "GET /v1/logbook"
 	assert_eq 'W/"1-1"' "$(header ETag)" "the read's ETag"
 	assert_eq "Kyoto in May" "$(jqbody '.logbook.trips[0].name')" "the trip's name"
 	assert_eq "[]" "$(jqbody -c '.logbook.trips[0].cityIds')" "cityIds on the READ"
 	assert_eq 2 "$(jqbody .version)" "the document's format version"
 
+	# `false|false|false` and not `f|f|f`: VS7's record quotes psql's COLUMN
+	# display of a bare boolean, and `boolean || text` casts through
+	# `boolean::text`, which is the whole word.
 	step "A10: the three sharing flags stayed at their defaults (SF6)"
-	assert_eq "f|f|f" "$(in_psql "select share_photos||'|'||share_notes||'|'||share_coordinates from trips where id='$ARC_TRIP'" | tr -d '[:space:]')" \
+	assert_eq "false|false|false" \
+		"$(in_psql "select share_photos||'|'||share_notes||'|'||share_coordinates from trips where id='$ARC_TRIP'" | tr -d '[:space:]')" \
 		"share_photos|share_notes|share_coordinates after a body that asked for true"
 
 	step "A11: GET /v1/logbook with If-None-Match — 304 and a ZERO-BYTE body"
-	assert_eq 304 "$(req -H "$auth_header" -H 'If-None-Match: W/"1-1"' "$base/v1/logbook")" "conditional GET"
+	code="$(req -H "$auth_header" -H 'If-None-Match: W/"1-1"' "$base/v1/logbook")"
+	assert_eq 304 "$code" "conditional GET"
 	assert_eq 'W/"1-1"' "$(header ETag)" "the 304's ETag"
-	assert_eq 0 "$(wc -c <"$WORK/body" | tr -d ' ')" "bytes in the 304's body"
+	# VS7 measured that this half is net/http's guarantee (bodyAllowedForStatus)
+	# rather than this handler's, so it is recorded as the arc confirming the
+	# stack end to end and NOT as a guard on internal/httpapi.
+	assert_eq 0 "$(body_bytes)" "bytes in the 304's body"
+	[ -e "$WORK/body" ] || ok "curl created no output file at all"
 
 	step "A12: a tag from another EMITTER does not revalidate"
-	assert_eq 200 "$(req -H "$auth_header" -H 'If-None-Match: W/"99-1"' "$base/v1/logbook")" "If-None-Match: W/\"99-1\""
+	code="$(req -H "$auth_header" -H 'If-None-Match: W/"99-1"' "$base/v1/logbook")"
+	assert_eq 200 "$code" "If-None-Match: W/\"99-1\""
 
 	step "A13: the four answers only the running container can give"
-	assert_eq 404 "$(req -H "$auth_header" "$base/v1/nope")" "GET /v1/nope"
+	code="$(req -H "$auth_header" "$base/v1/nope")"
+	assert_eq 404 "$code" "GET /v1/nope"
 	assert_eq 'application/json' "$(header Content-Type)" "  its Content-Type — the mux's own 404, brought inside the envelope"
 	assert_eq not_found "$(jqbody .code)" "  its code"
-	assert_eq 405 "$(req -X POST -H "$auth_header" "$base/v1/logbook")" "POST /v1/logbook"
+	code="$(req -X POST -H "$auth_header" "$base/v1/logbook")"
+	assert_eq 405 "$code" "POST /v1/logbook"
 	assert_contains "$(header Allow)" GET "  its Allow header"
-	assert_eq 401 "$(req "$base/v1/logbook")" "GET /v1/logbook with no credential"
-	assert_eq 406 "$(req -H "$auth_header" -H 'X-Logbook-Format: 3' "$base/v1/logbook")" "GET with an unwritable format"
+	code="$(req "$base/v1/logbook")"
+	assert_eq 401 "$code" "GET /v1/logbook with no credential"
+	code="$(req -H "$auth_header" -H 'X-Logbook-Format: 3' "$base/v1/logbook")"
+	assert_eq 406 "$code" "GET with an unwritable format"
 	assert_eq 2 "$(header X-Logbook-Format)" "  the formats this build can write"
 
 	########################################################################
@@ -403,7 +512,7 @@ phase_arc() {
 	# above proves the API; only this proves pgdata, and its failure mode is
 	# invisible until a redeploy destroys somebody's log.
 	########################################################################
-	step "A14: make down && make up — the stack is torn down and rebuilt"
+	step "A14: make down && make up — the stack is torn down and brought back"
 	( cd "$REPO" && make down )
 	[ -z "$("${COMPOSE[@]}" ps -q 2>/dev/null)" ] || fail "containers survived make down"
 	ok "no containers"
@@ -415,7 +524,8 @@ phase_arc() {
 	step "A15: GET /v1/logbook after the restart — the SAME token, the SAME trip"
 	# The token is not re-issued: sessions live in Postgres too, so a 401 here
 	# would mean the sessions table did not survive either.
-	assert_eq 200 "$(req -H "$auth_header" "$base/v1/logbook")" "GET /v1/logbook after restart"
+	code="$(req -H "$auth_header" "$base/v1/logbook")"
+	assert_eq 200 "$code" "GET /v1/logbook after restart"
 	assert_eq "Kyoto in May" "$(jqbody '.logbook.trips[0].name')" "the trip's name, after a full teardown"
 	assert_eq 'W/"1-1"' "$(header ETag)" "the ETag — the version counter survived too"
 	assert_eq "[]" "$(jqbody -c '.logbook.trips[0].cityIds')" "cityIds"
