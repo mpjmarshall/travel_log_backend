@@ -81,11 +81,22 @@ docs/             the plan, the rulings, the reviews, HANDOFF.md
 ## Configuration
 
 `DATABASE_URL` · `PORT` · `LOG_LEVEL` · `DB_MAX_OPEN_CONNS` · `DB_MAX_IDLE_CONNS` ·
-`AUTH_RATE_LIMIT_PER_MIN`
+`AUTH_RATE_LIMIT_PER_MIN` · `TRAVELLER_RATE_LIMIT_PER_MIN` · `ARGON2_MAX_CONCURRENT`
 
-`deploy/.env.example` is the template, and a test asserts it lists everything the
-config package reads. Compose reads `deploy/.env` and **only** that one — a `.env` at
-the repository root is silently ignored.
+The two rate limits are **two ceilings on two different things**: the first bounds
+unauthenticated Argon2 work per client address and is deliberately low, the second
+bounds a stolen token per traveller and is set so no honest client meets it.
+
+`deploy/.env.example` is the template. **This paragraph used to say a test asserted it
+lists everything the config package reads, and no such test existed** — measured with
+`grep -rn 'env.example' --include='*_test.go' .`, which matched three comments and
+nothing executable. The claim was not true as written either: `DATABASE_URL` and `PORT`
+are read by the config package and are deliberately absent from the template, because
+compose composes the first out of the `POSTGRES_*` variables and pins the second to the
+port the container publishes. Two tests now assert the two halves that *are* true —
+compose sets every variable the config package reads, and the template documents every
+variable compose takes from the environment. Compose reads `deploy/.env` and **only**
+that one — a `.env` at the repository root is silently ignored.
 
 ## Status
 

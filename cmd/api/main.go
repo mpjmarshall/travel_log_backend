@@ -259,16 +259,31 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.Serv
 		Store:  postgres.AuthStore{DB: db},
 		Hasher: auth.Capped{Hasher: auth.Argon2id{Params: auth.DefaultParams}, Gate: gate},
 	}
-	limiter := httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil)
+	credential, traveller := limiters(cfg)
 
 	return func(mux *http.ServeMux) {
 		httpapi.Mount(mux, httpapi.Deps{
-			Auth:      service,
-			Logbook:   postgres.LogbookStore{DB: db},
-			Log:       log,
-			AuthLimit: limiter,
+			Auth:           service,
+			Logbook:        postgres.LogbookStore{DB: db},
+			Log:            log,
+			AuthLimit:      credential,
+			TravellerLimit: traveller,
 		})
 	}, nil
+}
+
+// limiters builds the API's two ceilings from the two variables that carry
+// them.
+//
+// IT IS A FUNCTION OF ITS OWN SO THAT A TEST CAN SPEND FROM THEM. Which
+// variable feeds which limiter is invisible from outside the process — a
+// swapped pair gives the credential routes a ceiling of 600 and the
+// authenticated ones a ceiling of 10, and every leg about status codes passes.
+// Mount's nil panic is what guards the wiring; this is what guards the
+// arithmetic.
+func limiters(cfg config.Config) (credential, traveller *httpx.Limiter) {
+	return httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil),
+		httpx.NewLimiter(cfg.TravellerRateLimitPerMin, nil)
 }
 
 // serverChain is httpx.Base MINUS Timeout, and the subtraction is stated

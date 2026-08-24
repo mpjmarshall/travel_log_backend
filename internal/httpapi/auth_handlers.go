@@ -31,12 +31,13 @@ import (
 	"travellog/internal/logbook"
 )
 
-// Deps is what the routes need. AuthLimit is not optional — see Mount.
+// Deps is what the routes need. Neither limiter is optional — see Mount.
 type Deps struct {
-	Auth      *auth.Service
-	Logbook   logbook.Store
-	Log       *slog.Logger
-	AuthLimit *httpx.Limiter
+	Auth           *auth.Service
+	Logbook        logbook.Store
+	Log            *slog.Logger
+	AuthLimit      *httpx.Limiter
+	TravellerLimit *httpx.Limiter
 }
 
 // credentials is both request bodies. DEC-61 settles the field names and
@@ -68,32 +69,84 @@ type sessionBody struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// Mount adds the two auth routes, both rate limited.
+// Mount adds every route in the table, each behind a ceiling and the
+// authenticated ones behind the credential check as well.
 //
 // A NIL LIMITER PANICS RATHER THAN MEANING "NO LIMIT". DEC-48 is a ruling, and
 // the way a ruling like this regresses is silently: an optional field left
 // unset reads as working software and removes the only bound on unauthenticated
 // Argon2 work. Failing at wiring time is loud, immediate, and cannot reach
-// production.
+// production. That argument covers both limiters, and the second one is the
+// wiring leg for cmd/api: apiRoutes forgetting to build it is a panic at boot
+// rather than a route served with no ceiling.
+//
+// RATE LIMITING AND AUTHENTICATION ARE COMPOSED, NOT ALTERNATED, AND THAT IS
+// THE FIX FOR A DEFECT THIS FUNCTION SHIPPED. It read:
+//
+//	if route.Auth { handler = authed(handler) } else { handler = limited(handler) }
+//
+// so every authenticated route had no ceiling whatever — measured against the
+// running stack at 7b47bee: the credential routes 429 after their burst, and
+// 60 concurrent GET /v1/logbook drew 60 200s. Against a thirty-day untuned
+// session TTL with no revocation surface, that is unlimited whole-log reads
+// for a stolen token, and unlimited cascading deletes once the write routes
+// land.
+//
+// THE TWO CEILINGS ARE TWO LIMITERS BECAUSE THEY BOUND TWO THINGS. The
+// credential limiter bounds an unauthenticated 64 MiB-per-attempt Argon2
+// surface and is deliberately low (AUTH_RATE_LIMIT_PER_MIN, 10). The
+// authenticated one bounds a stolen token, so it has to be high enough that no
+// honest client ever meets it (TRAVELLER_RATE_LIMIT_PER_MIN, 600) — reusing the
+// credential ceiling would be a phone that stops syncing.
+//
+// AND THE AUTHENTICATED LIMITER SITS INSIDE THE AUTHENTICATION RATHER THAN
+// OUTSIDE IT. It keys on the traveller, which is on the context only after
+// RequireTraveller has resolved the credential, so the composition is
+// authed(limited(handler)) and not the other way round. Two consequences, both
+// wanted: a stolen token used from a thousand addresses is one bucket, and a
+// flood from somebody holding no credential cannot spend a traveller's
+// allowance. One consequence that is not: the session lookup happens before the
+// ceiling, so what this bounds is the log read and the cascade rather than the
+// token lookup. Bounding THAT is a general per-address ceiling on the whole
+// API, which is a third budget and does not exist yet — see CLAUDE.md.
 func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.AuthLimit == nil {
 		panic("httpapi: the auth routes need a rate limiter (DEC-48); a nil one is not 'no limit'")
+	}
+	if deps.TravellerLimit == nil {
+		panic("httpapi: the authenticated routes need a rate limiter of their own; " +
+			"a nil one is not 'no limit', it is an unlimited log read for a stolen token")
 	}
 	if deps.Logbook == nil {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
 	}
-	limited := httpx.RateLimit(deps.AuthLimit, deps.Log)
+	perAddress := httpx.RateLimit(deps.AuthLimit, deps.Log)
+	perTraveller := limitByTraveller(deps.TravellerLimit, deps.Log)
 	authed := RequireTraveller(deps.Auth, deps.Log)
 	for _, route := range Routes(deps) {
 		handler := http.Handler(route.Handler)
 		if route.Auth {
-			handler = authed(handler)
+			handler = authed(perTraveller(handler))
 		} else {
-			handler = limited(handler)
+			handler = perAddress(handler)
 		}
 		mux.Handle(route.Method+" "+route.Pattern, handler)
 	}
+}
+
+// limitByTraveller counts against the traveller the credential named.
+//
+// This is the whole of what httpx cannot do for itself: it imports no domain,
+// so it takes the key as a function and this package supplies the one that
+// knows what a traveller is. A request with no traveller on the context is a
+// middleware mounted outside RequireTraveller, and httpx.RateLimitBy answers
+// that with a 500 rather than a shared bucket.
+func limitByTraveller(l *httpx.Limiter, log *slog.Logger) httpx.Middleware {
+	return httpx.RateLimitBy(l, log, "traveller", func(r *http.Request) (string, bool) {
+		tr, held := auth.TravellerFrom(r.Context())
+		return tr.ID, held
+	})
 }
 
 func register(deps Deps) http.HandlerFunc {

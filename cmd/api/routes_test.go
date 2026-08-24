@@ -24,8 +24,41 @@ import (
 
 func wiredConfig() config.Config {
 	return config.Config{
-		AuthRateLimitPerMin: 60,
-		Argon2MaxConcurrent: 4,
+		AuthRateLimitPerMin:      60,
+		TravellerRateLimitPerMin: 600,
+		Argon2MaxConcurrent:      4,
+	}
+}
+
+// THE TWO CEILINGS COME FROM THE TWO VARIABLES, AND NOT FROM EACH OTHER. A
+// swapped pair is invisible to every other leg in this package: the routes are
+// still mounted, the statuses are still right, and the credential routes would
+// be running at 600 a minute against a 64 MiB-per-attempt Argon2 surface while
+// a phone met a ceiling of 10. Spending from the two limiters is the only way
+// to see it from outside internal/httpx.
+func TestTheTwoCeilingsComeFromTheirOwnVariables(t *testing.T) {
+	cfg := config.Config{AuthRateLimitPerMin: 3, TravellerRateLimitPerMin: 7}
+	credential, traveller := limiters(cfg)
+
+	spend := func(l *httpx.Limiter) int {
+		served := 0
+		for range 50 {
+			if l.Allow("k") {
+				served++
+			}
+		}
+		return served
+	}
+
+	if got := spend(credential); got != 3 {
+		t.Errorf("the credential limiter served %d requests at AUTH_RATE_LIMIT_PER_MIN=3, want 3", got)
+	}
+	if got := spend(traveller); got != 7 {
+		t.Errorf("the traveller limiter served %d requests at TRAVELLER_RATE_LIMIT_PER_MIN=7, want 7", got)
+	}
+	if credential == traveller {
+		t.Error("the two ceilings are one limiter, so the credential routes and the " +
+			"authenticated ones spend the same allowance")
 	}
 }
 

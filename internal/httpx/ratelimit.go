@@ -137,17 +137,56 @@ func ClientKey(r *http.Request) string {
 }
 
 // RateLimit refuses over-quota requests with the envelope, before the handler
-// runs.
+// runs, counting against the client address.
 //
 // The client address goes to the log and never to the body: the body is the
 // code alone, and an address is the one detail an operator actually needs here.
 func RateLimit(l *Limiter, log *slog.Logger) Middleware {
+	return RateLimitBy(l, log, "client", func(r *http.Request) (string, bool) {
+		return ClientKey(r), true
+	})
+}
+
+// RateLimitBy is RateLimit with the key chosen by the caller.
+//
+// WHY THE KEY IS A PARAMETER RATHER THAN ALWAYS THE ADDRESS. The address is the
+// right key for an unauthenticated credential attempt, which is all this
+// package had a caller for until the authenticated routes got a ceiling of
+// their own. It is the wrong key for a request that carries an identity: a
+// stolen token used from a thousand addresses is a thousand buckets and no
+// limit at all, and every traveller behind one NAT is one bucket. What the
+// identity IS cannot be decided here — this package imports no domain and has
+// never heard of a traveller — so the caller supplies the function.
+//
+// `keyName` is what the refusal is logged under, and it is not decoration: an
+// address that ran out and an identity that ran out are different events with
+// different responses, and a log that spells them the same way makes an
+// operator read the value to find out which one they are looking at.
+//
+// A REQUEST THE FUNCTION CANNOT KEY IS REFUSED WITH A 500, NOT WAVED THROUGH
+// AND NOT PUT IN A SHARED BUCKET. The only way it fails is a middleware mounted
+// where the fact it reads is not on the request yet, which is a wiring defect
+// rather than a client fault. Failing open would remove the ceiling in exactly
+// the case nobody notices — the app works and the guard is not there — and the
+// empty-string bucket would be one allowance shared by everybody, which is a
+// denial of service handed out for free. This is the same ruling DEC-48 already
+// made for a nil limiter: a misconfiguration must not read as "no limit".
+func RateLimitBy(l *Limiter, log *slog.Logger, keyName string, key func(*http.Request) (string, bool)) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			key := ClientKey(r)
-			if !l.Allow(key) {
+			k, held := key(r)
+			if !held {
+				log.LogAttrs(r.Context(), slog.LevelError, "the rate limiter could not key this request",
+					slog.String("key", keyName),
+					slog.String("path", r.URL.Path),
+					slog.String("requestId", RequestIDFrom(r.Context())),
+				)
+				WriteError(w, r, CodeInternal)
+				return
+			}
+			if !l.Allow(k) {
 				log.LogAttrs(r.Context(), slog.LevelWarn, "rate limited",
-					slog.String("client", key),
+					slog.String(keyName, k),
 					slog.String("path", r.URL.Path),
 					slog.String("requestId", RequestIDFrom(r.Context())),
 				)

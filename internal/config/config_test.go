@@ -14,8 +14,15 @@ import (
 
 // allVars is the seven variables VS2's step text names, written out rather than
 // read from the package: a test that asks the subject what it reads cannot
-// notice the subject forgetting to read one. TestLoadNamesEverySevenWhenTheEnvironmentIsEmpty
+// notice the subject forgetting to read one. TestLoadNamesEveryVariableWhenTheEnvironmentIsEmpty
 // pins the count from the other side.
+//
+// EIGHT SINCE THE LIMITER FIX. TRAVELLER_RATE_LIMIT_PER_MIN is the
+// authenticated ceiling, and it is a SECOND variable rather than a second use
+// of AUTH_RATE_LIMIT_PER_MIN because the two bound different things: the
+// credential ceiling bounds unauthenticated Argon2 work and is deliberately
+// low, and this one bounds a stolen token and must be high enough that no
+// honest client meets it.
 var allVars = []string{
 	"DATABASE_URL",
 	"PORT",
@@ -23,6 +30,7 @@ var allVars = []string{
 	"DB_MAX_OPEN_CONNS",
 	"DB_MAX_IDLE_CONNS",
 	"AUTH_RATE_LIMIT_PER_MIN",
+	"TRAVELLER_RATE_LIMIT_PER_MIN",
 	"ARGON2_MAX_CONCURRENT",
 }
 
@@ -31,13 +39,14 @@ var allVars = []string{
 // about the stack rather than about invented input.
 func complete() map[string]string {
 	return map[string]string{
-		"DATABASE_URL":            "postgres://travellog:travellog@postgres:5432/travellog?sslmode=disable",
-		"PORT":                    "8080",
-		"LOG_LEVEL":               "info",
-		"DB_MAX_OPEN_CONNS":       "8",
-		"DB_MAX_IDLE_CONNS":       "4",
-		"AUTH_RATE_LIMIT_PER_MIN": "10",
-		"ARGON2_MAX_CONCURRENT":   "2",
+		"DATABASE_URL":                 "postgres://travellog:travellog@postgres:5432/travellog?sslmode=disable",
+		"PORT":                         "8080",
+		"LOG_LEVEL":                    "info",
+		"DB_MAX_OPEN_CONNS":            "8",
+		"DB_MAX_IDLE_CONNS":            "4",
+		"AUTH_RATE_LIMIT_PER_MIN":      "10",
+		"TRAVELLER_RATE_LIMIT_PER_MIN": "600",
+		"ARGON2_MAX_CONCURRENT":        "2",
 	}
 }
 
@@ -108,7 +117,7 @@ func TestLoadReportsAllThreeMissingVariablesAtOnce(t *testing.T) {
 	}
 }
 
-func TestLoadNamesEverySevenWhenTheEnvironmentIsEmpty(t *testing.T) {
+func TestLoadNamesEveryVariableWhenTheEnvironmentIsEmpty(t *testing.T) {
 	setEnv(t, map[string]string{})
 
 	_, err := config.Load()
@@ -162,13 +171,14 @@ func TestLoadReadsEveryValueFromACompleteEnvironment(t *testing.T) {
 	}
 
 	want := config.Config{
-		DatabaseURL:         "postgres://travellog:travellog@postgres:5432/travellog?sslmode=disable",
-		Port:                "8080",
-		LogLevel:            slog.LevelInfo,
-		DBMaxOpenConns:      8,
-		DBMaxIdleConns:      4,
-		AuthRateLimitPerMin: 10,
-		Argon2MaxConcurrent: 2,
+		DatabaseURL:              "postgres://travellog:travellog@postgres:5432/travellog?sslmode=disable",
+		Port:                     "8080",
+		LogLevel:                 slog.LevelInfo,
+		DBMaxOpenConns:           8,
+		DBMaxIdleConns:           4,
+		AuthRateLimitPerMin:      10,
+		TravellerRateLimitPerMin: 600,
+		Argon2MaxConcurrent:      2,
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v,\nwant %+v", cfg, want)
@@ -217,11 +227,13 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 		{"max open is not a number", "DB_MAX_OPEN_CONNS", "eight", "strconv"},
 		{"max idle is not a number", "DB_MAX_IDLE_CONNS", "four", "strconv"},
 		{"rate limit is not a number", "AUTH_RATE_LIMIT_PER_MIN", "ten", "strconv"},
+		{"traveller rate limit is not a number", "TRAVELLER_RATE_LIMIT_PER_MIN", "six hundred", "strconv"},
 		{"argon2 concurrency is not a number", "ARGON2_MAX_CONCURRENT", "two", "strconv"},
 		{"max open is zero", "DB_MAX_OPEN_CONNS", "0", "database/sql reads 0 as UNLIMITED, which removes the ceiling DEC-21 sizes Argon2 against"},
 		{"max open is negative", "DB_MAX_OPEN_CONNS", "-1", "same as 0 to database/sql"},
 		{"max idle is negative", "DB_MAX_IDLE_CONNS", "-1", "database/sql reads any n<=0 as no idle connections; say 0 and mean it"},
 		{"rate limit is zero", "AUTH_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every login, which is an outage spelled as a setting"},
+		{"traveller rate limit is zero", "TRAVELLER_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every authenticated request, which is the app switched off"},
 		{"argon2 concurrency is zero", "ARGON2_MAX_CONCURRENT", "0", "a zero-capacity semaphore blocks the first login forever"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

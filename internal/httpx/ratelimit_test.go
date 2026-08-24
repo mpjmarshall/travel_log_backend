@@ -3,6 +3,7 @@ package httpx_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -224,5 +225,102 @@ func TestConcurrentCallersSpendExactlyTheAllowanceBetweenThem(t *testing.T) {
 
 	if allowed.Load() != 50 {
 		t.Errorf("200 concurrent callers spent %d of a 50 allowance", allowed.Load())
+	}
+}
+
+// === keying by something other than the address ===
+
+// RateLimit's key is the client address, which is the right key for an
+// unauthenticated credential attempt and the wrong one for a request that
+// carries an identity: a stolen token used from a thousand addresses is a
+// thousand buckets. RateLimitBy is what lets a caller that HAS an identity key
+// on it — and the key function belongs to the caller, because this package
+// imports no domain and has never heard of a traveller.
+func TestRateLimitBySpendsTheAllowancePerKeyTheFunctionReturns(t *testing.T) {
+	log, _ := testLogger()
+	c := newClock()
+	l := httpx.NewLimiter(2, c.now)
+
+	// One address, two identities: the shape a limiter keyed on RemoteAddr
+	// cannot tell apart.
+	byHeader := httpx.RateLimitBy(l, log, "traveller", func(r *http.Request) (string, bool) {
+		return r.Header.Get("X-Who"), true
+	})
+	h := httpx.Chain(http.HandlerFunc(ok), byHeader)
+
+	call := func(who string) int {
+		r := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
+		r.RemoteAddr = "203.0.113.9:41235"
+		r.Header.Set("X-Who", who)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	if call("matt") != http.StatusOK || call("matt") != http.StatusOK {
+		t.Fatal("the allowance of 2 was not served")
+	}
+	if got := call("matt"); got != http.StatusTooManyRequests {
+		t.Errorf("the 3rd request for one key = %d, want 429", got)
+	}
+	if got := call("kit"); got != http.StatusOK {
+		t.Errorf("a second key at the SAME address = %d, want 200 — the limiter is not "+
+			"keyed on what the function returned", got)
+	}
+}
+
+// A REQUEST IT CANNOT KEY IS REFUSED, NOT WAVED THROUGH. The only way the key
+// function fails is a middleware mounted where the fact it reads is not on the
+// request yet — a wiring defect, not a client fault — so it is a 500 and it is
+// loud. Failing OPEN here would remove the ceiling in exactly the case nobody
+// notices: the app works, and the guard is not there.
+func TestRateLimitByRefusesARequestItCannotKey(t *testing.T) {
+	log, _ := testLogger()
+	c := newClock()
+	l := httpx.NewLimiter(60, c.now)
+
+	var ran int
+	h := httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran++
+		w.WriteHeader(http.StatusOK)
+	}), httpx.RateLimitBy(l, log, "traveller", func(*http.Request) (string, bool) {
+		return "", false
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("an unkeyable request = %d, want 500", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"code":"internal"}` {
+		t.Errorf("body = %s, want the envelope", got)
+	}
+	if ran != 0 {
+		t.Errorf("the handler ran %d times for a request the limiter could not key", ran)
+	}
+	if l.Len() != 0 {
+		t.Errorf("the limiter took %d buckets for a request it could not key — an "+
+			"empty key is one shared bucket for everybody", l.Len())
+	}
+}
+
+// The two refusals mean different things to an operator, so they are not
+// spelled the same in the log: one names the address that ran out and the other
+// names the identity.
+func TestTheKeyNameIsWhatTheRefusalIsLoggedUnder(t *testing.T) {
+	log, logs := testLogger()
+	c := newClock()
+	l := httpx.NewLimiter(1, c.now)
+	h := httpx.Chain(http.HandlerFunc(ok), httpx.RateLimitBy(l, log, "traveller",
+		func(*http.Request) (string, bool) { return "traveller-7", true }))
+
+	r := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+
+	line := logs.String()
+	if !strings.Contains(line, `"traveller":"traveller-7"`) {
+		t.Errorf("the refusal is not logged under the key name it was given:\n%s", line)
 	}
 }

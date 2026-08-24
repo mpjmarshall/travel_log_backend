@@ -10,18 +10,18 @@
 //
 //   - It reports EVERY problem, not the first. A first-failure Load makes a
 //     fresh checkout a sequence of restarts, each revealing one more missing
-//     variable; seven variables is seven runs. One error is one run.
+//     variable; eight variables is eight runs. One error is one run.
 //
 //   - Nothing has a default. The client project's own house style is the
 //     precedent — apiBaseUrlProvider throws until it is overridden rather than
 //     carrying a placeholder, because "a placeholder host would fail later as
 //     a connection error". A defaulted DB_MAX_OPEN_CONNS is a pool size nobody
 //     chose, silently in force on a VPS. deploy/docker-compose.yml sets all
-//     seven with defaults of its own, which is where a default belongs: in the
+//     eight with defaults of its own, which is where a default belongs: in the
 //     deployment, visible, beside the thing it configures.
 //
 // A consequence worth stating: `make run` on a bare host now fails, naming all
-// seven. That is the design working. `make up` is the supported path.
+// eight. That is the design working. `make up` is the supported path.
 package config
 
 import (
@@ -33,21 +33,30 @@ import (
 	"strings"
 )
 
-// Config is the whole of what VS2 reads. The parent plan's S03 lists fifteen
-// variables; the slice names these seven, and the rest arrive with the steps
-// that read them.
+// Config is the whole of what the binary reads. The parent plan's S03 lists
+// fifteen variables; VS2 named seven, the limiter fix added an eighth, and the
+// rest arrive with the steps that read them.
 //
 // Port is kept as a string because that is what it is used as — ":"+Port. It is
 // nonetheless parsed and range-checked by loader.port, so "http" and "65536"
 // are refused here rather than by the kernel at Listen time.
+//
+// THE TWO RATE LIMITS ARE TWO CEILINGS ON TWO DIFFERENT THINGS, and
+// TravellerRateLimitPerMin is a second variable rather than a second use of
+// AuthRateLimitPerMin. The credential ceiling bounds an unauthenticated
+// 64 MiB-per-attempt Argon2 surface and is deliberately low; the authenticated
+// one bounds a stolen token against a thirty-day session TTL with no revocation
+// surface, so it has to be high enough that no honest client ever meets it. One
+// number cannot be both, and reusing the low one is a phone that stops syncing.
 type Config struct {
-	DatabaseURL         string
-	Port                string
-	LogLevel            slog.Level
-	DBMaxOpenConns      int
-	DBMaxIdleConns      int
-	AuthRateLimitPerMin int
-	Argon2MaxConcurrent int
+	DatabaseURL              string
+	Port                     string
+	LogLevel                 slog.Level
+	DBMaxOpenConns           int
+	DBMaxIdleConns           int
+	AuthRateLimitPerMin      int
+	TravellerRateLimitPerMin int
+	Argon2MaxConcurrent      int
 }
 
 // Load reads the environment and returns either a whole Config or a single
@@ -60,13 +69,14 @@ func Load() (Config, error) {
 	var l loader
 
 	cfg := Config{
-		DatabaseURL:         l.required("DATABASE_URL"),
-		Port:                l.port("PORT"),
-		LogLevel:            l.level("LOG_LEVEL"),
-		DBMaxOpenConns:      l.atLeast("DB_MAX_OPEN_CONNS", 1),
-		DBMaxIdleConns:      l.atLeast("DB_MAX_IDLE_CONNS", 0),
-		AuthRateLimitPerMin: l.atLeast("AUTH_RATE_LIMIT_PER_MIN", 1),
-		Argon2MaxConcurrent: l.atLeast("ARGON2_MAX_CONCURRENT", 1),
+		DatabaseURL:              l.required("DATABASE_URL"),
+		Port:                     l.port("PORT"),
+		LogLevel:                 l.level("LOG_LEVEL"),
+		DBMaxOpenConns:           l.atLeast("DB_MAX_OPEN_CONNS", 1),
+		DBMaxIdleConns:           l.atLeast("DB_MAX_IDLE_CONNS", 0),
+		AuthRateLimitPerMin:      l.atLeast("AUTH_RATE_LIMIT_PER_MIN", 1),
+		TravellerRateLimitPerMin: l.atLeast("TRAVELLER_RATE_LIMIT_PER_MIN", 1),
+		Argon2MaxConcurrent:      l.atLeast("ARGON2_MAX_CONCURRENT", 1),
 	}
 
 	l.refuseSilentIdleClamp(cfg)
@@ -199,6 +209,9 @@ func (l *loader) level(name string) slog.Level {
 //     and 0 is the worst case of that. Floor 1.
 //   - AUTH_RATE_LIMIT_PER_MIN at 0 refuses every login: an outage spelled as a
 //     setting. Floor 1.
+//   - TRAVELLER_RATE_LIMIT_PER_MIN at 0 refuses every authenticated request,
+//     which is the whole application switched off by a setting that reads like
+//     a safety measure. Floor 1.
 func (l *loader) atLeast(name string, floor int) int {
 	v := l.required(name)
 	if l.broke(name) {

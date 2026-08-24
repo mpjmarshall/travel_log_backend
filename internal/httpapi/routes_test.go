@@ -39,14 +39,47 @@ func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	}
 }
 
-// DEC-48's limiter bounds unauthenticated Argon2 work, and `!Auth` is exactly
-// that set. This is the leg that makes the derivation in routes.go a fact
-// rather than a comment: the credential routes refuse a second call in the
-// same minute, and the authenticated ones do not.
-func TestOnlyTheUnauthenticatedRoutesAreRateLimited(t *testing.T) {
-	// Three a minute: register and sign-in spend two getting the credential,
-	// which leaves exactly one for the loop below to spend and then be refused.
-	h := newHarness(t, options{ratePerMin: 3})
+// EVERY ROUTE IN THE TABLE IS RATE LIMITED. This leg replaces
+// TestOnlyTheUnauthenticatedRoutesAreRateLimited, which asserted the defect as
+// though it were the design: `Mount` applied the limiter and the authentication
+// as EITHER/OR, so `limited == !route.Auth` passed on a table in which every
+// authenticated route had no ceiling at all.
+//
+// The two budgets are different budgets — see TestTheTwoBudgetsAreNotOneBudget
+// below — so both ceilings are set low here and the claim is only that each
+// route has ONE.
+func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
+	// Three of each: register and sign-in spend two credential tokens getting
+	// the bearer, which leaves one for the loop to spend and then be refused.
+	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 3})
+	token := bearer(t, h)
+
+	for _, route := range Routes(h.deps) {
+		path := strings.ReplaceAll(route.Pattern, "{id}", "kyoto")
+		limited := false
+		for range 6 {
+			if h.do(t, route.Method, path, aTrip, token).status == http.StatusTooManyRequests {
+				limited = true
+			}
+		}
+		if !limited {
+			t.Errorf("%s %s answered 6 requests in a minute at a ceiling of 3 without one 429.\n"+
+				"    A route with no ceiling is unlimited work for anybody holding a\n"+
+				"    credential — or, on the credential routes, holding nothing at all.",
+				route.Method, route.Pattern)
+		}
+	}
+}
+
+// AND THEY ARE NOT ONE BUDGET. The credential ceiling bounds an unauthenticated
+// 64 MiB-per-attempt Argon2 surface and is deliberately low; the authenticated
+// one bounds a stolen token and has to be high enough that no honest client
+// meets it. This is the leg that fails if somebody "composes" by wrapping the
+// authenticated routes in the credential limiter — every route would have a
+// ceiling, TestEveryRouteInTheTableIsRateLimited would pass, and a phone
+// syncing a log would meet a limit built for a password guesser.
+func TestTheTwoBudgetsAreNotOneBudget(t *testing.T) {
+	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 60})
 	token := bearer(t, h)
 
 	for _, route := range Routes(h.deps) {
@@ -58,7 +91,11 @@ func TestOnlyTheUnauthenticatedRoutesAreRateLimited(t *testing.T) {
 			}
 		}
 		if limited != !route.Auth {
-			t.Errorf("%s %s: rate limited = %v, want %v", route.Method, path, limited, !route.Auth)
+			t.Errorf("%s %s: refused inside a ceiling of 60 = %v, want %v.\n"+
+				"    The authenticated routes must be spending the TRAVELLER budget and\n"+
+				"    the credential routes the ADDRESS budget; a route drawing on the\n"+
+				"    wrong one is either unusable or unbounded.",
+				route.Method, route.Pattern, limited, !route.Auth)
 		}
 	}
 }
@@ -101,8 +138,18 @@ func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
 		name string
 		deps Deps
 	}{
-		{"no rate limiter", Deps{Auth: full.Auth, Logbook: full.Logbook, Log: full.Log}},
-		{"no logbook store", Deps{Auth: full.Auth, Log: full.Log, AuthLimit: full.AuthLimit}},
+		{"no credential rate limiter", Deps{
+			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
+			TravellerLimit: full.TravellerLimit,
+		}},
+		{"no traveller rate limiter", Deps{
+			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
+			AuthLimit: full.AuthLimit,
+		}},
+		{"no logbook store", Deps{
+			Auth: full.Auth, Log: full.Log,
+			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func() {

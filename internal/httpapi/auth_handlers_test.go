@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -132,18 +133,64 @@ type harness struct {
 	deps    Deps
 	logs    *bytes.Buffer
 	client  *http.Client
+	addrs   *addressLog
+}
+
+// addressLog records the client address of every request that reaches the
+// chain.
+//
+// IT EXISTS SO THAT "two travellers, ONE address" IS MEASURED RATHER THAN
+// ASSUMED. That is the premise the whole per-traveller keying claim rests on:
+// a limiter keyed on the address, on a constant, or on the path passes every
+// leg written from loopback unless something asserts the addresses were the
+// same. httptest is expected to give both callers 127.0.0.1, and a leg whose
+// premise is an expectation about the test harness is a leg that stops meaning
+// what it says the day the harness changes.
+type addressLog struct {
+	mu   sync.Mutex
+	seen map[string]int
+}
+
+func (a *addressLog) record(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.seen[key]++
+}
+
+func (a *addressLog) distinct() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.seen))
+	for key := range a.seen {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func recordAddresses(a *addressLog) httpx.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			a.record(httpx.ClientKey(r))
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 type options struct {
-	ratePerMin    int
-	maxConcurrent int
-	hasher        auth.Hasher
+	ratePerMin      int
+	travellerPerMin int
+	maxConcurrent   int
+	hasher          auth.Hasher
 }
 
 func newHarness(t *testing.T, opt options) *harness {
 	t.Helper()
 	if opt.ratePerMin == 0 {
 		opt.ratePerMin = 1000
+	}
+	if opt.travellerPerMin == 0 {
+		opt.travellerPerMin = 1000
 	}
 	if opt.maxConcurrent == 0 {
 		opt.maxConcurrent = 8
@@ -171,10 +218,11 @@ func newHarness(t *testing.T, opt options) *harness {
 
 	books := &fakeLogbook{}
 	deps := Deps{
-		Auth:      service,
-		Logbook:   books,
-		Log:       log,
-		AuthLimit: httpx.NewLimiter(opt.ratePerMin, nil),
+		Auth:           service,
+		Logbook:        books,
+		Log:            log,
+		AuthLimit:      httpx.NewLimiter(opt.ratePerMin, nil),
+		TravellerLimit: httpx.NewLimiter(opt.travellerPerMin, nil),
 	}
 	mux := http.NewServeMux()
 	Mount(mux, deps)
@@ -195,9 +243,14 @@ func newHarness(t *testing.T, opt options) *harness {
 			httpx.WriteJSON(w, r, http.StatusOK, map[string]any{"id": tr.ID, "email": tr.Email})
 		})))
 
-	server := httptest.NewServer(httpx.Chain(mux, httpx.Base(log, 30*time.Second)...))
+	addrs := &addressLog{seen: map[string]int{}}
+	server := httptest.NewServer(httpx.Chain(mux,
+		append(httpx.Base(log, 30*time.Second), recordAddresses(addrs))...))
 	t.Cleanup(server.Close)
-	return &harness{server: server, store: store, logbook: books, deps: deps, logs: logs, client: server.Client()}
+	return &harness{
+		server: server, store: store, logbook: books, deps: deps,
+		logs: logs, client: server.Client(), addrs: addrs,
+	}
 }
 
 type answer struct {
@@ -256,6 +309,12 @@ func (a answer) decode(t *testing.T) map[string]any {
 }
 
 const registered = `{"email":"matt@example.com","passphrase":"a long enough passphrase"}`
+
+// credentialsFor is `registered` for any address, so a leg needing a SECOND
+// traveller does not need a second constant.
+func credentialsFor(email string) string {
+	return fmt.Sprintf(`{"email":%q,"passphrase":"a long enough passphrase"}`, email)
+}
 
 // === THE LEG WRITTEN FIRST ===
 

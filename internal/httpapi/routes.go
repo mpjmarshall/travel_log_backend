@@ -8,14 +8,28 @@
 // slice buys is a thing a test can iterate.
 //
 // THE MIDDLEWARE PER ROUTE IS DERIVED FROM `Auth`, AND THE DERIVATION IS
-// STATED HERE BECAUSE IT IS NOT OBVIOUS. Every route in this table that does
-// NOT require a traveller is an auth route, so `!Auth` is exactly DEC-48's
-// rate-limited set: the limiter bounds unauthenticated Argon2 work, and there
-// is no unauthenticated route here that is not an attempt at a credential.
+// STATED HERE BECAUSE IT IS NOT OBVIOUS. EVERY route in this table wears a
+// ceiling; `Auth` decides WHICH, and it decides it completely. A route with no
+// traveller is a credential attempt, so it takes DEC-48's per-address ceiling,
+// which bounds unauthenticated Argon2 work. A route with a traveller takes the
+// per-traveller ceiling, which bounds a stolen token — and it could not take
+// any other key, because the traveller id is the only identity such a request
+// carries and a route without one has no id to count against. So the derivation
+// is not a convenience here: today it is forced.
 // /healthz is unauthenticated and unlimited and is deliberately NOT in this
 // table — it is cmd/api's, because a liveness probe is not part of the API.
-// The day an unauthenticated route arrives that is not a credential attempt,
-// this becomes a sixth field rather than a derivation.
+//
+// THE SIXTH FIELD WAS PUT AND DECLINED, at the fix that composed the two
+// middlewares. The line below used to promise it "the day an unauthenticated
+// route arrives that is not a credential attempt", and that day is the public
+// share read, which is two steps away and not here. A per-route ceiling added
+// now would be a field whose value is a pure function of `Auth` on every row —
+// the exact shape `Mutating` is in, and `Mutating` needs a leg of its own to
+// stop it becoming decoration. What the share read actually needs is a THIRD
+// budget (per address, generous, for a route with no identity at all), and a
+// field that can only say "credential" or "traveller" would not carry it. The
+// field arrives with the row that cannot be derived, and it arrives holding
+// three values rather than two.
 package httpapi
 
 import "net/http"

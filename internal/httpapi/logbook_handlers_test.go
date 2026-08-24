@@ -113,6 +113,33 @@ func bearer(t *testing.T, h *harness) string {
 	return "Bearer " + token
 }
 
+// bearerFor is `bearer` for any address: register, sign in, answer the header.
+// A leg about two travellers needs two of these and one of `bearer`'s email.
+func bearerFor(t *testing.T, h *harness, email string) string {
+	t.Helper()
+	body := credentialsFor(email)
+	if got := h.post(t, "/v1/auth/register", body); got.status != http.StatusCreated {
+		t.Fatalf("register %s = %d %s", email, got.status, got.body)
+	}
+	return signInAs(t, h, email)
+}
+
+// signInAs signs a traveller who ALREADY EXISTS in again, so a leg can hold two
+// live tokens for one traveller. VS6 mints a new token per sign-in and asserts
+// it; this is what a second device looks like from the server's side.
+func signInAs(t *testing.T, h *harness, email string) string {
+	t.Helper()
+	issued := h.post(t, "/v1/auth/session", credentialsFor(email))
+	if issued.status != http.StatusCreated {
+		t.Fatalf("sign in %s = %d %s", email, issued.status, issued.body)
+	}
+	token, held := issued.decode(t)["token"].(string)
+	if !held {
+		t.Fatalf("the sign-in answered no token: %s", issued.body)
+	}
+	return "Bearer " + token
+}
+
 func (h *harness) get(t *testing.T, path, bearer string, headers map[string]string) answer {
 	t.Helper()
 	return h.doWithHeaders(t, http.MethodGet, path, "", bearer, headers)
