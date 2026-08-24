@@ -83,7 +83,7 @@ down:
 logs:
 	$(COMPOSE) logs -f api
 
-## test-db — the database the internal/store tests run against.
+## test-db — the database the internal/postgres tests run against.
 ## Brings up ONLY postgres, then prints the URL to export. The store tests skip
 ## without TEST_DATABASE_URL and say so, naming this target.
 ##
@@ -97,7 +97,7 @@ logs:
 ##
 ## THE CONSEQUENCE IS WORSE THAN A URL THAT WILL NOT CONNECT. On this machine
 ## 5432 is a developer's own Postgres and 5433 is an unrelated container, so a
-## stale printed URL can point host-run internal/store tests — which create and
+## stale printed URL can point host-run internal/postgres tests — which create and
 ## drop tables — at a database that is not the stack's.
 ##
 ## `compose port` answers for the container that is actually running, and the

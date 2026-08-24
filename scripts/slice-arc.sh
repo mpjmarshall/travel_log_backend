@@ -207,10 +207,20 @@ phase_record() {
 	ok "every path named in a comment exists or is exempt with a reason"
 
 	step "R2: every documented target is a target, and every target is documented"
+	# A doc line is `## <name> — …`. The em dash is what separates a heading
+	# from the continuation lines under it, several of which also begin with a
+	# lowercase word; without it this compared "normally", "without" and
+	# "three" against the target list.
 	local documented targets
-	documented="$(grep -oE '^## [a-z-]+' "$REPO/Makefile" | sed 's/^## //' | sort -u)"
-	targets="$(grep -oE '^\.PHONY: .*' "$REPO/Makefile" | sed 's/^\.PHONY: //' | tr ' ' '\n' | sort -u)"
-	assert_eq "$(printf '%s' "$targets")" "$(printf '%s' "$documented")" "the ## doc lines and .PHONY"
+	documented="$(grep -oE '^## [a-z0-9-]+ —' "$REPO/Makefile" | sed 's/^## //; s/ —$//' | sort -u)"
+	targets="$(grep -hoE '^\.PHONY:.*' "$REPO/Makefile" | sed 's/^\.PHONY://' | tr ' ' '\n' | grep -v '^$' | sort -u)"
+	if [ "$documented" = "$targets" ]; then
+		ok "all $(printf '%s\n' "$targets" | wc -l | tr -d ' ') targets are documented, and every ## heading is a target"
+	else
+		printf '\033[31m    FAIL the ## headings and .PHONY disagree:\033[0m\n' >&2
+		diff <(printf '%s\n' "$documented") <(printf '%s\n' "$targets") | sed 's/^/       /' >&2 || true
+		fail "the Makefile documents a target it does not have, or has one it does not document"
+	fi
 
 	step "R3: make slice runs the script, and propagates its exit code"
 	# THE CLASS THIS GUARDS IS "a target that exits 0 having done nothing",
