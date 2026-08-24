@@ -79,14 +79,16 @@ against that mutation, not against its class.** The step has three recorded
 legs now — unparseable → 2, misformatted → 1, clean → 0 — under VS1-FIXES with
 their output.
 
-**`make migrate` and `make slice` fail non-zero today** — the recipes `exit 1`,
-and make reports its own **exit 2** when a recipe fails, which is what a caller
-or CI observes. (This file said "exit 1" in two places until VS1-FIXES.
-Re-derived rather than remembered: `make migrate >/dev/null 2>&1; echo $?` → 2,
-`make slice` → 2. The substantive claim — that they fail loudly rather than
-exiting 0 on nothing — was right; only the number was wrong.) A target that
-exits 0 having done nothing is indistinguishable from one that succeeded, and
-that is how a missing step gets counted as a passing one.
+**Every target does what it says now.** This paragraph used to read
+"`make migrate` and `make slice` fail non-zero today", and both halves have
+been overtaken — VS4 implemented `migrate`, VS8 implemented `slice`. The
+sentence it existed for is the one to keep: **a target that exits 0 having
+done nothing is indistinguishable from one that succeeded**, and that is how a
+missing step gets counted as a passing one. It is now a leg rather than a
+paragraph — the arc's `record` phase runs `make slice SLICE=<stub>` against a
+stub exiting 0 and a stub exiting 3, and asserts make answers 0 and 2. (The
+exit-2 number itself was wrong here in two places until VS1-FIXES, which is
+why it is derived by running the target rather than written down.)
 
 **`make check` leaves `./api` behind, and that is `go build ./...`, not a bug in
 the Makefile.** With a single main package in the pattern, `go build ./...`
@@ -188,8 +190,8 @@ migrations/            .up.sql / .down.sql, a PACKAGE (//go:embed cannot reach
                        outside its own directory), applied by internal/postgres
 deploy/                Dockerfile, docker-compose.yml, .env.example
 .dockerignore          AT THE ROOT, because the build context is the root
-scripts/               slice-arc.sh (VS8)
-docs/                  EVIDENCE.md (VS8)
+scripts/               slice-arc.sh — `make slice`, five phases, needs Docker
+docs/                  EVIDENCE.md, the plan and the review records
 ```
 
 Standard Go project layout, as go_backend.md L17 asks.
@@ -201,10 +203,13 @@ nowhere else — a copy beside the Dockerfile would be read by nothing, silently
 It was absent until VS1-FIXES; see that section for what `COPY . .` was picking
 up.
 
-**`docs/` and `README.md` do not exist and never have.** `docs/EVIDENCE.md` is
-planned for VS8 and is the only file planned under `docs/`. Recorded here
-because `deploy/Dockerfile` claimed a divergence was "recorded in three places"
-naming `docs/DIVERGENCES.md` and `README.md` — see VS1-FIXES.
+**`docs/DIVERGENCES.md` has never existed, and that is the only half of this
+paragraph still standing.** It used to say `docs/` and `README.md` did not
+exist either; `README.md` landed at `de94ca1` and `docs/` now holds the plan,
+the three review records, the handoff and — from VS8 — `EVIDENCE.md`. The
+finding it was written for survives all of that: `deploy/Dockerfile` claimed a
+divergence was "recorded in three places" and named two files that had never
+been created, which is what the arc's `record` phase now checks on every run.
 
 ---
 
@@ -310,11 +315,9 @@ Recorded as deferrals rather than allowed to read as simplifications.
   *including its trailing newline*, and `httpx.WriteJSON` deliberately emits
   none. The newline question is settled once, for every route, by the step that
   wires the mux.
-- **`make slice`** — VS8. It fails non-zero today: the recipe `exit 1`s, and
-  make reports **exit 2**, which is what a caller observes. (Said "exit 1" here
-  until VS1-FIXES; corrected against `make slice >/dev/null 2>&1; echo $?` → 2.)
-  **`make migrate` is no longer on this list** — VS4 implemented it, and the
-  server also migrates at boot.
+- **`make slice`** — **done at VS8**, and off this list with `make migrate`,
+  which VS4 implemented. The entry is kept rather than deleted because what it
+  said about a target that fails loudly is now a leg: see the `record` phase.
 - **The DEC-27 floor attribution** — see above; VS1 has no dependencies and
   cannot answer it.
 
@@ -3156,6 +3159,10 @@ checked against `config.Load`'s variable list. New at VS7:
 
 ### The routes are STILL not in the running container
 
+*(Closed at VS8. Left standing because the note is what made the gap findable,
+and because the reason VS6 gave for the build failing turned out to be wrong —
+see VS8 below.)*
+
 VS6's note stands and now covers four routes rather than two. `make check` is
 green, the arc above ran against the real database through the real binary, but
 **the image was not rebuilt in this session** — `docker compose build` was
@@ -3164,6 +3171,13 @@ before VS6 and `GET /v1/logbook` against `127.0.0.1:8080` answers **404**, in
 plain text, from a build that predates `httpx.MuxErrors`. VS8's arc needs that
 build to succeed; VS6 recorded the BuildKit frontend fetch as the thing that
 stops it.
+
+> **CLOSED, VS8.** `scripts/slice-arc.sh arc` builds the image as step A1 and
+> then asserts, at A13, the four answers only the running container can give —
+> the mux's own 404 inside the JSON envelope, the 405 with its `Allow` header,
+> the 401 with no credential, and the 406 naming the formats. A 404 in plain
+> text at any of them means an image from before VS6, which is what that
+> paragraph was warning about and is now a red rather than a note.
 
 ---
 
