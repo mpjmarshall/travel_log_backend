@@ -189,6 +189,27 @@
       "title": "RULED \u2014 the backend is seeded by `make seed` from the captured client fixture; the client ships with NO mock data",
       "reasoning": "The human is deleting `sample_log.dart` and `assets/imagery/` from the Flutter app entirely \u2014 'No mock files. Kill them.' \u2014 so the app's empty states become the real first-run experience rather than a branch nobody could reach. That leaves the backend with nothing to work against, and leaves every Go round-trip test with no reference document. CAUGHT IN TIME: the 85,422-byte encoded fixture existed ONLY in a scratch directory. The Go repo had never captured it, and `internal/logbook/` does not exist yet. Once the Dart source is deleted it can never be regenerated. Copied to `internal/logbook/testdata/client_sample_log.json`, sha256 03e88872\u2026 matching the figure the fix verifier recorded independently.",
       "consequence": "`make seed` loads that document into Postgres. It is the right seed BECAUSE it is a real logbook shape rather than three rows of foo: 7 trips, 12 cities, 17 places, 49 visits, 284 photographs, 2 walks \u2014 and it carries the edge cases the schema was designed around. Kyoto visited three times (the ordinal tie DEC-68 needed timestamptz for), a wishlist place with no visits (which D3 promises survives a trip deletion), 28 visits dated before the trip that names them, and only TWO distinct asset locators across all 284 photographs \u2014 which is what makes content-addressed storage collapse the whole library to two objects. AS-IS, NOT ANONYMISED: the edge cases are the value, and rewriting the names would risk flattening exactly the shapes that found defects. IT IS A DEV COMMAND AND MUST SAY SO \u2014 never run at boot, never in production, and the target refuses against a non-empty log rather than merging. NOTE THE ASYMMETRY AND KEEP IT: mock data on the SERVER, run deliberately by a developer, is not the same thing as an app that ships fake trips baked in. The first is a fixture; the second is the 'stranger's data' objection the client's own record makes."
+    },
+    {
+      "id": "DEC-76",
+      "status": "ruled",
+      "title": "RULED \u2014 the CLIENT bumps to logbookFormatVersion 2; the server keeps emitting 2 only",
+      "reasoning": "MEASURED by the re-plan, and neither side had noticed: the server stamps `\"version\": 2` and `Emit` refuses anything else, while the client's `decodeLogbook` compares `version != 1` with EXACT EQUALITY and quarantines. `X-Logbook-Format: 1` answers 406 because `Formats()` is `[2]`. THERE IS NO VERSION AT WHICH THE TWO CAN EXCHANGE A DOCUMENT. DEC-40's 'costs nothing today because nothing has shipped' was true of the backend and false of the client, which has shipped.",
+      "consequence": "`logbookFormatVersion` -> 2 on the client. Justified on its own terms rather than to match the server: `Photo.asset` and the three `coverAsset` fields change MEANING from a bundled path to an object id (DEC-46, DEC-58), and the client's own rule is to move the version when an old file's meaning changes. NO SERVER CHANGE. Emitting 1 as well would mean maintaining a shape nothing asks for. THE CACHE MAKES THE BUMP CHEAP, and that is the reason it is safe: under DEC-34 a cache the client cannot read is DELETED AND RE-FETCHED, not quarantined. A version bump costs one refetch, where against a file-as-record it would have cost the log. RECORD IN CLIENT-PREREQUISITES: this is a client change and it must land before the first real request, not after."
+    },
+    {
+      "id": "DEC-77",
+      "status": "ruled",
+      "title": "RULED \u2014 the two fixture PNGs are captured into the backend repo",
+      "reasoning": "All 284 fixture photographs and every `coverAsset` point at one of two files, and they exist only on the client's `main` branch \u2014 `wipe/mock-data` deleted them and `pubspec.yaml` declares no assets at all. Substituting different bytes would change every content hash in the plan.",
+      "consequence": "CAPTURED at `internal/logbook/testdata/imagery/` \u2014 `hero-mountain.png` (sha256 e66b552e6043510b\u2026) and `card-ireland.png` (8dfb203bc0f89065\u2026), 1.0 MB. Taken from client `main` before that branch is merged away, the same rescue the encoded logbook needed. They are TEST DATA, not app assets: the client ships no imagery now, and these exist so `make seed` can put real bytes in the bucket and the content addresses in the plan stay true."
+    },
+    {
+      "id": "DEC-78",
+      "status": "ruled",
+      "title": "RULED \u2014 the compose service is `postgres`; media before seed",
+      "reasoning": "CLAUDE.md flagged that the slice plan said `postgres` and the old plan said `db`, and asked the re-plan to settle it. `postgres` is what is running and what `DATABASE_URL` names. Separately, the re-plan flagged its own media-before-seed ordering as its most challengeable call; confirmed, because the seed needs media rows to point at and stub references would have to be rewritten.",
+      "consequence": "`postgres` everywhere. Order stands: R2 media, R3 media routes, R4 seed."
     }
   ],
   "gate_l12": {
