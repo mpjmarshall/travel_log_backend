@@ -249,6 +249,137 @@ nothing.
 
 ---
 
+## R2 — the media store, every mutation run at `90f6a68`
+
+Twelve mutations, one commit, and the control re-run green after each. The
+stack they ran against: MinIO **RELEASE.2025-09-07T16-13-09Z** on 127.0.0.1:9412
+(`make test-s3`), Go 1.26.5 darwin/arm64, Docker 27.4.0.
+
+Every mutation's `git diff --stat` was printed before its legs ran, because a
+mutation that does not change the file is a green suite proving nothing.
+Restoration is `git checkout -- .` and is safe **only** because every file
+under mutation was committed first — the tree was clean at `90f6a68` before
+each one.
+
+### THE RECORDED INTERMEDIATE RED — the leg failing against a naive implementation
+
+This is the run the whole step exists to justify, and it is worth more than
+any mutation below: the checksum leg, against real MinIO, with `PresignPut`
+implemented through minio-go's plain presigned-PUT helper. Run at `2758da6`
+plus the step's working tree, before the real signer existed:
+
+```
+$ TEST_S3_ENDPOINT=http://127.0.0.1:9412 go test -tags integration ./internal/media/ \
+    -count=1 -run TestABodyThatDoesNotMatch -v
+=== RUN   TestABodyThatDoesNotMatchThePresignedDigestIsRefusedByTheBucket
+    minio_integration_test.go:230: the bucket answered 200  for bytes that are
+    not the digest the URL was signed for; want XAmzContentChecksumMismatch.
+--- FAIL: TestABodyThatDoesNotMatchThePresignedDigestIsRefusedByTheBucket (0.01s)
+exit=1
+```
+
+**200, and the object stored at the poisoned address.** A leg written after the
+correct implementation cannot say that.
+
+### The signature: what each header is holding up
+
+| # | mutation | reddens | stays green |
+|---|---|---|---|
+| M1 | `content-length` out of the signed set | the LENGTH leg, with `400 XAmzContentChecksumMismatch` where it wanted `SignatureDoesNotMatch`; and the header-map leg | **the CHECKSUM leg** — the pair that proves they are two controls and not one |
+| M2 | the banned presigner in place of `PresignHeader` | `ban_test.go` (`minio.go calls the banned presigner at minio.go:209:12`); the omit-the-digest leg, with **200**; the header-map leg (`the signature covers []`) | **the CHECKSUM leg**, and that is the finding — see below |
+| M5 | the checksum leg does not replay one signed header | the CHECKSUM leg, with `400 AccessDenied` — the right red for the wrong reason | — |
+| M6 | the digest signed as hex rather than base64 | the round trip, with `400 InvalidArgument`; and the unit `Address` leg, three rows | — |
+| M8 | `If-None-Match: *` out of the signature | the write-once leg: `the SAME bytes again answered 200, want 412 PreconditionFailed` | the twin's own write-once, which enforces it in Go — a second control |
+
+**M2 IS THE ONE WORTH READING.** The plan predicted that swapping in the banned
+presigner would redden the checksum leg. **It does not.** With `host` signed and
+nothing else, and the four headers still *sent*, MinIO validates the digest
+anyway and answers `XAmzContentChecksumMismatch` — so the leg passes. It
+exercises an **honest** client. An attacker omits the header, and with only
+`host` in the signature there is nothing left to refuse. `TestAnUploadThatOmits
+TheDigestIsRefused` was written for that and is what turns red (200, object
+present). Three legs now cover the ban and none replaces another.
+
+### The key, the traveller, and the two lifetimes
+
+| # | mutation | reddens |
+|---|---|---|
+| M3 | `Address` drops the traveller prefix | the unit cross-traveller leg **and** the repointed-URL leg against real MinIO |
+| M4 | the two lifetimes swapped inside `media.New` | the TTL-by-audience leg (`X-Amz-Expires`, read off the signature) |
+| M4b | the two lifetimes swapped at the **wiring** site, `cmd/api` | the wiring leg — the other end of the same wire, and not implied by M4 |
+| M4c | the two **addresses** swapped at the wiring site | `the signed base = "http://minio:9000", want "https://media.example.test"` |
+| M7 | the key and the header derived from two variables | the digest-disagreement leg |
+
+### The bucket, and the one guard that is the arc's alone
+
+| # | mutation | `make check` | `up --wait` | the arc |
+|---|---|---|---|---|
+| M9 | the `EnsureBucket` call deleted from `run()` | **exit 0 — green** | three services **healthy** | **RED**: `buckets named travellog-media in mc ls local/ = 0, want 1` |
+
+**`make check` stays green and that is stated rather than glossed.**
+`cmd/api/media_test.go` guards what `mediaStore` *does* — against a closed port
+it must refuse to come up — and cannot see whether `run()` calls it. **A2b is
+the only guard on that call site.** It is also the exact fail-open shape DEC-98
+describes: presigning is offline arithmetic once the region is pinned, so a URL
+minted against a missing bucket is perfectly well-formed and fails on the
+phone.
+
+### Three assertions the arc carried out of R1, all red before R2 touched them
+
+Found by running `make slice`, not by reading. Each is a literal in
+`scripts/slice-arc.sh` that a shipped change moved:
+
+| step | the arc said | the running stack answers | what moved it |
+|---|---|---|---|
+| A8/A9/A11/A15 | `W/"1-1"` | `W/"2-1"` | `EmitterVersion` 1 → 2 (DEC-91) |
+| A10 | `false\|false\|false` | `true\|true\|false` | migration 0002's DEFAULTs (DEC-82, PD-01) |
+| A13 | `not_found` | `unsupported_route` | DEC-103 |
+
+### The `.dockerignore` patterns, verified rather than reasoned
+
+Six canaries written into the tree, the **build stage** built, and its contents
+listed from inside the image:
+
+```
+absent   .env.local          absent   secrets/s3.txt
+absent   server.pem          absent   id_rsa
+absent   tls.key             absent   deploy/.env
+PRESENT  deploy/.env.example
+```
+
+A `!deploy/.env.example` line was written and then **deleted**: nothing
+excludes that path — `deploy/.env` matches one exact path and `.env.*` matches
+the context root only — so it was an exception excepting nothing. Removing it
+and re-running gave the identical table.
+
+### What R2 leaves guarded by nothing
+
+- **The `mem_limit`, `restart` and `logging` VALUES.** The acceptance check
+  reads them out of `docker compose config`; nothing asserts `256m` is the
+  right number, and no leg reads them at all. Same tier as the iOS manifest
+  flags in the client project: a human with a box.
+- **`S3_PRESIGN_TTL_PUBLIC`'s DEFAULT value.** `internal/config` bounds it at
+  1s..168h and `internal/media` asserts the audience gets the configured one.
+  Nothing pins **15m**, which is the number four sentences of client copy are
+  written against. Set it to `168h` and the whole suite is green and the copy
+  is a lie. This is the same hole R1 recorded for `REQUEST_TIMEOUT` and
+  VS8-SEC for the two rate limits, and it is now **four** variables wide.
+- **`MEDIA_MAX_BYTES` has no enforcement anywhere yet.** It is loaded, bounded
+  and documented; the route that refuses to mint above it is R3's. Nothing
+  today reads the value.
+- **Real S3.** Every S3 error code asserted in `internal/media` is MinIO's.
+  DEC-43's asymmetry cuts the project's way for what matters — a REFUSAL here
+  is strong evidence, since a stricter server also refuses — but
+  `If-None-Match: *` on S3 is documentation and not a measurement, and so is
+  S3's answer to a chunked PUT.
+- **`up -d --wait` does not rebuild.** The acceptance check's compose line was
+  run once against a stale image left by the M9 mutation and reported three
+  healthy services with **zero** buckets. `make up` passes `--build`; the
+  plan's line does not. Same class as VS6/VS7's "green in `go test`, 404 in
+  the container".
+
+---
+
 ## What is still guarded by nothing
 
 Carried forward so the list does not shorten by silence, with what VS8 moved
@@ -269,10 +400,13 @@ out of it.
 
 **Still guarded by nothing:**
 
-- **`deploy/.env.example` and `deploy/docker-compose.yml` against
-  `config.Load`'s variable list.** Delete `ARGON2_MAX_CONCURRENT` from the
-  compose file and `make check` stays green while the container refuses to
-  start. The parent plan's S23 is the test that would close it.
+- ~~**`deploy/.env.example` and `deploy/docker-compose.yml` against
+  `config.Load`'s variable list.**~~ **CLOSED at `d5be39c`** by
+  `internal/config/deploy_files_test.go`, and this entry was stale from that
+  commit until R2 found it. Both halves are asserted: every variable the
+  package reads is set on the api service, and every `${VAR}` compose
+  interpolates is documented in the template. R2's nine new variables were
+  added test-first through it — the leg went red naming all nine.
 - **The four unimplemented lists have no round trip through storage.** `PutTrip`
   writes trips and nothing else, so the six read queries' column ordering, the
   visits nesting and the `jsonb_array_elements` unnest are guarded by their
@@ -302,12 +436,33 @@ out of it.
 ## Running any of this again
 
 ```bash
-make check                 # the gate: 462 legs, 16 skips             (4.4s)
+make check                 # the gate                                 (~7s)
+make test-db               # prints the export line make check needs for the DB tier
+make test-s3               # prints the export line the integration tier needs
 make test-image            # the scratch image and the named volume   (~45s warm)
-make slice                 # all five phases below, 76 assertions      (1m26s)
+make slice                 # all five phases below, 80 assertions      (~2m)
 scripts/slice-arc.sh arc   # one phase; also record, gate, testdb, healthcheck
+
+# the integration tier — real MinIO, behind a build tag AND behind the variable
+TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
 ```
+
+**THE LEG COUNTS ARE RE-DERIVED, NOT CARRIED.** This block said "462 legs" and
+was three commits stale before anybody noticed:
+
+```bash
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 625 at 90f6a68
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 492, no database
+TEST_S3_ENDPOINT=...   go test -tags integration ./internal/media/ -count=1 -v \
+                         | grep -c -- '--- PASS'                           # 39 = 27 unit + 12 integration
+```
+
+The 133-leg gap between the first two is what `TEST_DATABASE_URL` buys, and
+the DB tier **skips and says so** without it.
 
 `make slice` **destroys the named volume** — `docker compose down -v` is its
 first step, because a 201 against a database that already held the row proves
-nothing.
+nothing. Since R2 it destroys **two**: `<project>_pgdata` and
+`<project>_miniodata`. It also runs under whatever `COMPOSE_PROJECT_NAME` is
+set, because A14's volume name is now derived rather than written — so it can
+be run beside a live stack instead of against it.

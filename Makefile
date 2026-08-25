@@ -29,6 +29,7 @@
 SHELL := /bin/bash
 
 COMPOSE := docker compose -f deploy/docker-compose.yml
+COMPOSE_S3 := docker compose -f deploy/docker-compose.test.yml
 BIN     := bin/api
 
 # SLICE is a variable so the wiring can be tested without recursion: the arc's
@@ -38,7 +39,7 @@ BIN     := bin/api
 # guards.
 SLICE   := scripts/slice-arc.sh
 
-.PHONY: build run check fmt up down logs test-db migrate slice
+.PHONY: build run check fmt up down logs test-db test-s3 migrate slice
 
 ## build — compile the server to bin/api
 build:
@@ -71,7 +72,7 @@ check:
 fmt:
 	gofmt -w .
 
-## up — bring the two-service stack up and wait for the api to be healthy
+## up — bring the three-service stack up and wait for every one of them to be healthy
 up:
 	$(COMPOSE) up -d --build --wait
 
@@ -117,6 +118,37 @@ test-db:
 	fi; \
 	echo; \
 	echo "export TEST_DATABASE_URL=postgres://$$user:$$pass@127.0.0.1:$$port/$$db?sslmode=disable"
+
+## test-s3 — the MinIO the internal/media integration legs run against.
+##
+## A SECOND STACK, DELIBERATELY. deploy/docker-compose.test.yml has its own
+## project name, its own port and its own named volume, so this can run beside
+## `make up` and be destroyed without touching the bucket the deployment uses —
+## the same separation `make test-db` draws, for the same reason.
+##
+## EVERY FIELD IS DERIVED FROM THE RUNNING CONTAINER, which is the correction
+## `make test-db` already carries: a target that restates a port or a
+## credential prints the wrong one the first time somebody overrides it.
+##
+## The legs are behind a build tag AS WELL AS behind the variable, so `go test
+## ./...` never reaches them and `make check` stays four commands:
+##
+##   TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
+test-s3:
+	$(COMPOSE_S3) up -d --wait
+	@port="$$($(COMPOSE_S3) port minio 9000 | sed 's/.*://')"; \
+	user="$$($(COMPOSE_S3) exec -T minio printenv MINIO_ROOT_USER)"; \
+	pass="$$($(COMPOSE_S3) exec -T minio printenv MINIO_ROOT_PASSWORD)"; \
+	if [ -z "$$port" ] || [ -z "$$user" ] || [ -z "$$pass" ]; then \
+		echo "make test-s3: minio is up but did not answer for its own published" >&2; \
+		echo "port or credentials — refusing to print values that would be a guess." >&2; \
+		echo "Try: $(COMPOSE_S3) ps minio" >&2; \
+		exit 1; \
+	fi; \
+	echo; \
+	echo "export TEST_S3_ENDPOINT=http://127.0.0.1:$$port"; \
+	echo "export TEST_S3_ACCESS_KEY=$$user"; \
+	echo "export TEST_S3_SECRET_KEY=$$pass"
 
 ## migrate — apply migrations against the stack's database.
 ##

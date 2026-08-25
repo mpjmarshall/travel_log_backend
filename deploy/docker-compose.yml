@@ -1,16 +1,23 @@
-# The slice's stack: TWO services.
+# The stack: THREE services, and they are not the three the spec names.
 #
-# go_backend.md L32 asks for three — the Go API, PostgreSQL with a persistent
-# volume, and a Caddy reverse proxy for automatic HTTPS. The third is DEFERRED
-# for the slice, not declined: Caddy brings TLS, the proxy hop and
-# X-Forwarded-For client resolution, none of which the slice's arc exercises,
-# and deferring it defers the limiter-behind-proxy question with it. The
-# rate limiter therefore keys on RemoteAddr, which is correct for a direct
-# connection and wrong the moment a proxy appears — recorded in CLAUDE.md as
-# unfinished rather than as a simplification.
+# go_backend.md L32 asks for the Go API, PostgreSQL with a persistent volume,
+# and a Caddy reverse proxy for automatic HTTPS. What is here is api, postgres
+# and MINIO. That is DIVERGENCE 3 (DEC-39) plus a standing deferral, and the
+# two are named separately rather than netted off against each other:
 #
-# The parent plan's fourth service (MinIO, DEC-39) is out of scope entirely:
-# no object storage, no media routes.
+#   - MinIO is the fourth service the parent plan always intended (DEC-39) and
+#     R2 is where it arrives. It is LOCAL ONLY: a public deploy against real S3
+#     has no minio service at all, and the only thing that changes is the five
+#     S3_* values below.
+#   - Caddy is still DEFERRED, not declined. It brings TLS, the proxy hop and
+#     X-Forwarded-For client resolution. The rate limiter keys on RemoteAddr,
+#     which is correct for a direct connection and wrong the moment a proxy
+#     appears — recorded in CLAUDE.md as unfinished rather than as a
+#     simplification, and it now weakens the public read's limiter rather than
+#     merely postponing TLS.
+#
+# DEC-95's THREE LINES ARE ON EVERY SERVICE — `restart: always`, a `logging`
+# stanza and a `mem_limit` — and each is argued where it sits rather than here.
 #
 # Explicit `name` so `docker compose down -v` from any directory reaches the
 # same project. The compose file lives in deploy/, so compose's own project
@@ -42,6 +49,31 @@ services:
       # configuration value nobody chose, silently in force. This is that
       # variable.
       REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-15s}
+      # THE BUCKET GROUP (R2). Nine variables, and internal/config refuses to
+      # start without every one of them — which is what makes MinIO locally
+      # and real S3 in production configuration rather than code.
+      #
+      # THE TWO ADDRESSES ARE DIFFERENT HERE AND THAT IS THE WHOLE POINT
+      # (DEC-42). The api dials minio over the compose network by service
+      # name; the SIGNATURE covers the public one, because a SigV4 signature
+      # covers the HOST and a URL minted against `minio:9000` is valid only
+      # for a client that can resolve `minio` — which a phone cannot. On this
+      # machine that is the published loopback port; on a VPS it is the
+      # bucket's real address, and nothing in the code changes.
+      S3_INTERNAL_ENDPOINT: http://minio:9000
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://127.0.0.1:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-travellog-media}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-travellog}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-travellogsecret}
+      # DEC-47's two lifetimes. The private one is the phone's and is the
+      # revocation knob (DEC-44); the public one is what GET /l/{token}
+      # embeds and is DEC-84's fifteen minutes. RAISING THE PUBLIC ONE IS A
+      # COPY CHANGE, not a knob turn — four client sentences are written
+      # against it.
+      S3_PRESIGN_TTL_PRIVATE: ${S3_PRESIGN_TTL_PRIVATE:-2m}
+      S3_PRESIGN_TTL_PUBLIC: ${S3_PRESIGN_TTL_PUBLIC:-15m}
+      MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-26214400}
     ports:
       # Loopback-bound: local-only target (DEC-21). Nothing here is reachable
       # from the network without an explicit change.
@@ -49,7 +81,40 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    restart: unless-stopped
+      # WITHOUT THIS THE API BOOTS AGAINST A BUCKET THAT MAY NOT ANSWER, and
+      # since R2 the first thing it does is create one (DEC-98). A failure
+      # there is a process that exits rather than one serving 500s, which is
+      # the same call run() already makes for its Postgres ping.
+      minio:
+        condition: service_healthy
+    # `always` AND NOT `unless-stopped` (DEC-95). Measured as a controlled
+    # pair, because the difference is invisible by inspection: a container
+    # that dies on its own reaches `restarting restarts=6` in 20s under
+    # BOTH, and one stopped from OUTSIDE sits at `exited restarts=0`
+    # indefinitely under `unless-stopped` — and that decision persists across
+    # a daemon restart and a host reboot. So `docker stop` to take a dump,
+    # then a reboot, leaves an unattended box permanently down with nothing
+    # reporting it. Observed on this stack: `docker kill` left Postgres
+    # exited 100+ seconds later while the api sat at `healthy` and every
+    # request 500'd.
+    restart: always
+    # NO LOG ROTATION WAS THE MEASURED DEFAULT (DEC-95). `LogConfig.Config` was
+    # empty on both containers and there are no daemon-level log-opts, so
+    # json-file ran uncapped: 3,066,153 bytes over 21.35 idle hours = 3.4 MB a
+    # day = 1.26 GB a year, of which 15,151 of 15,960 lines (94.9%) were the
+    # healthcheck talking to itself. 10m x 3 is 30 MB a service, bounded.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # SO THE OOM-KILLER'S CHOICE IS YOURS. Measured: the api's steady working
+    # set after one Argon2 run is 140.5 MiB against 12.42 MiB idle, and it does
+    # NOT come back down — Go's scavenger does not return it promptly — so each
+    # +1 on ARGON2_MAX_CONCURRENT is +64 MiB of STEADY working set. 256m is
+    # that plus one more concurrent hash of headroom. docs/BEFORE-A-PUBLIC-DEPLOY.md
+    # carries the derivation for all three.
+    mem_limit: ${API_MEM_LIMIT:-256m}
     # THE INNER SHUTDOWN BUDGET MUST STAY STRICTLY BELOW THE OUTER ONE.
     # serve() shuts down with a 10s context (cmd/api/main.go, shutdownTimeout)
     # and Docker's default stop timeout is also 10s, so a shutdown that
@@ -120,7 +185,97 @@ services:
       timeout: 2s
       retries: 20
       start_period: 5s
-    restart: unless-stopped
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # Postgres 17's default `shared_buffers` is 128 MB, and work_mem is drawn
+    # per sort per connection against DB_MAX_OPEN_CONNS=8. 384m is the buffers
+    # plus room for eight connections; it is a CEILING and not a reservation,
+    # so the three ceilings here deliberately sum to more than a 1 GiB box has.
+    mem_limit: ${POSTGRES_MEM_LIMIT:-384m}
+
+  # THE THIRD SERVICE (DEC-39, reached at R2). Local only: a public deploy
+  # points the five S3_* values at real S3 and deletes this block.
+  minio:
+    # PINNED, FOR THE REASON THE POSTGRES TAG ABOVE IS PINNED AND FOR ONE MORE.
+    # A named volume under a tag that moves is a data layout that can change
+    # underneath it — that is the postgres argument. The extra one here is
+    # that every measurement in CLAUDE.md's R2 section, and every S3 error code
+    # the integration legs assert on, was taken against THIS release: "MinIO
+    # answers 400 XAmzContentChecksumMismatch" is a claim about a named server,
+    # and `:latest` would make it a claim about whatever shipped this morning.
+    # deploy/docker-compose.test.yml pins the same tag, on purpose.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-travellog}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-travellogsecret}
+      # `mc` is in this image and `curl` is not, so the healthcheck below has
+      # to be an mc command, and mc needs an alias. MC_HOST_<alias> is how it
+      # takes one from the environment with no config file to write. It is
+      # also what makes `docker compose exec -T minio mc ls local/` work,
+      # which is R2's acceptance check for the bucket existing.
+      MC_HOST_local: http://${MINIO_ROOT_USER:-travellog}:${MINIO_ROOT_PASSWORD:-travellogsecret}@127.0.0.1:9000
+    volumes:
+      # A NAMED VOLUME, FOR THE REASON pgdata IS ONE — with a sharper edge.
+      # The photographs are the only thing in this system that cannot be
+      # re-derived from anything: the database can be restored from a dump and
+      # the objects cannot, because a dump carries `media_objects` ROWS and not
+      # bytes. Losing this volume is 308 references that all resolve, pointing
+      # at nothing, with no error anywhere.
+      - miniodata:/data
+    ports:
+      # Loopback-bound, like every other published port here (DEC-21). It is
+      # published because S3_PUBLIC_BASE_URL above points at it: the signature
+      # covers the host, so the address a browser fetches from has to be an
+      # address a browser can reach. The console (9001) is deliberately not
+      # published.
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+    healthcheck:
+      # `mc ready local` rather than a GET of /minio/health/live, because there
+      # is no curl in this image.
+      #
+      # AND WHAT THE PROBE DOES NOT SAY, which is true of /healthz above too
+      # and has never been written down (OPS-MIN-13). (a) A liveness probe is
+      # answering a READINESS question: the api's /healthz answers a fact about
+      # its CONNECTION POOL rather than about whether it can serve, and both
+      # inversions were observed in one run — 200 in 4.7 ms while ten requests
+      # hung with no status at all, then 503 after stalling its full 2.004s
+      # budget once the pool was exhausted. (b) NOTHING CONSUMES `unhealthy`:
+      # compose does not restart on it, there is no watchdog and no
+      # orchestrator is planned, so the only real consumer of every probe in
+      # this file is `--wait` at deploy time, and an unhealthy container keeps
+      # taking traffic indefinitely. Restart-on-unhealthy is an autoheal
+      # sidecar or a systemd timer, and it is a deliberate seventh-service
+      # conversation whose trigger is the first unattended box.
+      #
+      # AND THREE HEALTHY SERVICES IS NOT A BUCKET (DEC-98). This probe answers
+      # 200 against a MinIO holding zero buckets — measured, `ls /data` ->
+      # `.minio.sys` only — which is why EnsureBucket runs in the api's own
+      # boot and why the arc does a PUT and a GET rather than reading `ps`.
+      test: ["CMD", "mc", "ready", "local"]
+      # The timeout goes STRICTLY BELOW the interval. This file shipped
+      # violating that rule once (postgres, timeout 3s against interval 2s) and
+      # slice-arc's H3 is the leg that caught it.
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # MEASURED AT 214.7 MiB IDLE, which is larger than the api and Postgres
+    # together — so after R2 the OOM-killer's "whichever has the largest RSS"
+    # would pick MinIO, and this is what makes that choice deliberate rather
+    # than emergent.
+    mem_limit: ${MINIO_MEM_LIMIT:-512m}
 
 volumes:
   pgdata:
+  miniodata:

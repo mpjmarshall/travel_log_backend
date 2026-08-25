@@ -43,6 +43,13 @@ COMPOSE=(docker compose -f "$REPO/deploy/docker-compose.yml")
 ARC_EMAIL="arc@travellog.test"
 ARC_PASS="correct-horse-battery-staple"
 ARC_TRIP="kyoto"
+
+# The bucket the api creates at boot, and a canary to put in it. Both are
+# literals here for the reason ARC_EMAIL is one: the arc owns the volume it
+# destroyed at A0, so a fixed name is written exactly once per run. The bucket
+# name must agree with S3_BUCKET's default in deploy/docker-compose.yml.
+ARC_BUCKET="travellog-media"
+ARC_CANARY="travellog-arc-canary"
 JSON_CT="Content-Type: application/json"
 
 # The trip body is a single-quoted literal because it carries no variable, and
@@ -400,13 +407,41 @@ phase_arc() {
 	fi
 	ok "the image is built from this tree"
 
-	step "A2: make up — both services healthy"
+	step "A2: make up — all THREE services healthy"
 	( cd "$REPO" && make up )
 	assert_eq healthy "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}" ps -q postgres)")" "postgres health"
+	assert_eq healthy "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}" ps -q minio)")" "minio health"
 	assert_eq healthy "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}" ps -q api)")" "api health"
 
 	base="$(api_base)"
 	ok "api published at $base"
+
+	########################################################################
+	# A2b: THE BUCKET, AND THIS IS WHY THE THREE ASSERTIONS ABOVE ARE NOT IT.
+	#
+	# `up --wait` reporting three healthy services says NOTHING about whether a
+	# photograph can be stored (DEC-98). Measured against the official image at
+	# a pinned tag with a fresh volume and no init: /minio/health/live 200,
+	# /minio/health/ready 200, `ls /data` -> `.minio.sys` only, ZERO buckets.
+	# `MINIO_DEFAULT_BUCKETS` is a Bitnami variable and not a MinIO one. And
+	# because presigning is offline arithmetic once the region is pinned, a URL
+	# minted against a bucket that does not exist is perfectly well-formed —
+	# the failure surfaces on the PHONE, as NoSuchBucket, three steps later.
+	#
+	# So the arc asserts a ROUND TRIP and not a process. The bucket is here
+	# because the api's own boot created it: nothing in compose does, and
+	# `mc` never runs except in this step. Delete EnsureBucket from
+	# cmd/api/main.go and every assertion above stays green while this one
+	# reddens, which is the whole point of it.
+	########################################################################
+	step "A2b: the api's boot created the bucket, and it round-trips"
+	assert_eq 1 "$("${COMPOSE[@]}" exec -T minio mc ls local/ 2>/dev/null | grep -c "$ARC_BUCKET")" \
+		"buckets named $ARC_BUCKET in \`mc ls local/\`"
+	"${COMPOSE[@]}" exec -T minio sh -c \
+		"printf '%s' '$ARC_CANARY' | mc pipe local/$ARC_BUCKET/arc/canary.txt" >/dev/null
+	assert_eq "$ARC_CANARY" \
+		"$("${COMPOSE[@]}" exec -T minio mc cat "local/$ARC_BUCKET/arc/canary.txt" | tr -d '\r\n')" \
+		"the bytes that came back out of the bucket"
 
 	step "A3: GET /healthz"
 	code="$(req "$base/healthz")"
@@ -453,17 +488,25 @@ phase_arc() {
 	step "A7: GET /v1/logbook before any write — 200 and NO ETag"
 	code="$(req -H "$auth_header" "$base/v1/logbook")"
 	assert_eq 200 "$code" "GET /v1/logbook at version 0"
-	assert_eq "" "$(header ETag)" "ETag at logbook_version 0 (W/\"1-0\" is the tag DEC-49 exists to prevent)"
+	assert_eq "" "$(header ETag)" "ETag at logbook_version 0 (W/\"2-0\" is the tag DEC-49 exists to prevent)"
 	assert_eq 0 "$(jqbody '.logbook.trips | length')" "trips"
 	assert_eq "[]" "$(jqbody -c '.logbook.cities')" "cities — [] and not null"
 
 	# The body carries shareCoordinates:true, which TripWrite has no slot for
 	# (SF6). DEC-13 keeps unknown fields tolerated, so it is not refused — it is
 	# simply not heard, and A10 reads the stored flags back to prove it.
+	# THE `2` IN EVERY ETag BELOW IS internal/logbook's EmitterVersion, AND IT
+	# IS A LITERAL ON PURPOSE. R1 moved it from 1 to 2 (DEC-91: the emitted
+	# Trip gained `shared`, so the CODE's shape changed while the WIRE's did
+	# not) and left these five assertions reading `W/"1-1"` — so the arc was
+	# red from R1 and R2 is what found it. Reading the constant out of the
+	# source instead would make these lines unfalsifiable: a client caches this
+	# exact string, so an emitter bump SHOULD break the arc. What it must not
+	# do is break it silently a step later.
 	step "A8: PUT /v1/trips/$ARC_TRIP"
 	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP" -H "$auth_header" -H "$JSON_CT" -d "$TRIP_BODY")"
 	assert_eq 200 "$code" "PUT /v1/trips/$ARC_TRIP"
-	assert_eq 'W/"1-1"' "$(header ETag)" "the write's ETag"
+	assert_eq 'W/"2-1"' "$(header ETag)" "the write's ETag"
 	assert_eq "$ARC_TRIP" "$(jqbody .id)" "the written id"
 	# THE DEFECT VS7 FOUND BY RUNNING THE BINARY, AND THE REASON THIS LINE IS
 	# NOT `jq '.cityIds | length'`. A nil Go slice marshals to `null`, and
@@ -476,23 +519,32 @@ phase_arc() {
 	step "A9: GET /v1/logbook — the trip is there"
 	code="$(req -H "$auth_header" "$base/v1/logbook")"
 	assert_eq 200 "$code" "GET /v1/logbook"
-	assert_eq 'W/"1-1"' "$(header ETag)" "the read's ETag"
+	assert_eq 'W/"2-1"' "$(header ETag)" "the read's ETag"
 	assert_eq "Kyoto in May" "$(jqbody '.logbook.trips[0].name')" "the trip's name"
 	assert_eq "[]" "$(jqbody -c '.logbook.trips[0].cityIds')" "cityIds on the READ"
 	assert_eq 2 "$(jqbody .version)" "the document's format version"
 
-	# `false|false|false` and not `f|f|f`: VS7's record quotes psql's COLUMN
+	# `true|true|false` and not `t|t|f`: VS7's record quotes psql's COLUMN
 	# display of a bare boolean, and `boolean || text` casts through
 	# `boolean::text`, which is the whole word.
+	#
+	# THE FIRST TWO ARE `true` SINCE R1 AND THIS LINE SAID `false` UNTIL R2.
+	# Migration 0002 (DEC-82, PD-01) gave share_photos and share_notes the
+	# CLIENT's own defaults, and the arc was never re-run against it — the same
+	# staleness as the ETag at A8, found the same way. The leg still says what
+	# it was written to say, and says it through the THIRD flag: the request
+	# body carries `shareCoordinates:true`, TripWrite has no slot for it, and
+	# the stored value is still `false`. An unknown field is tolerated (DEC-13)
+	# and is simply not heard.
 	step "A10: the three sharing flags stayed at their defaults (SF6)"
-	assert_eq "false|false|false" \
+	assert_eq "true|true|false" \
 		"$(in_psql "select share_photos||'|'||share_notes||'|'||share_coordinates from trips where id='$ARC_TRIP'" | tr -d '[:space:]')" \
 		"share_photos|share_notes|share_coordinates after a body that asked for true"
 
 	step "A11: GET /v1/logbook with If-None-Match — 304 and a ZERO-BYTE body"
-	code="$(req -H "$auth_header" -H 'If-None-Match: W/"1-1"' "$base/v1/logbook")"
+	code="$(req -H "$auth_header" -H 'If-None-Match: W/"2-1"' "$base/v1/logbook")"
 	assert_eq 304 "$code" "conditional GET"
-	assert_eq 'W/"1-1"' "$(header ETag)" "the 304's ETag"
+	assert_eq 'W/"2-1"' "$(header ETag)" "the 304's ETag"
 	# VS7 measured that this half is net/http's guarantee (bodyAllowedForStatus)
 	# rather than this handler's, so it is recorded as the arc confirming the
 	# stack end to end and NOT as a guard on internal/httpapi.
@@ -507,7 +559,13 @@ phase_arc() {
 	code="$(req -H "$auth_header" "$base/v1/nope")"
 	assert_eq 404 "$code" "GET /v1/nope"
 	assert_eq 'application/json' "$(header Content-Type)" "  its Content-Type — the mux's own 404, brought inside the envelope"
-	assert_eq not_found "$(jqbody .code)" "  its code"
+	# `unsupported_route` AND NOT `not_found` SINCE R1 (DEC-103), and this line
+	# said the old word until R2 — the third staleness the arc carried out of
+	# R1, beside A8's ETag and A10's defaults. The distinction is the whole
+	# reason the word was added: `not_found` is "that trip is not in your log"
+	# and this is "this build does not have that route", which a client acts on
+	# differently — one is a wrong id, the other needs a newer server.
+	assert_eq unsupported_route "$(jqbody .code)" "  its code"
 	code="$(req -X POST -H "$auth_header" "$base/v1/logbook")"
 	assert_eq 405 "$code" "POST /v1/logbook"
 	assert_contains "$(header Allow)" GET "  its Allow header"
@@ -526,8 +584,18 @@ phase_arc() {
 	( cd "$REPO" && make down )
 	[ -z "$("${COMPOSE[@]}" ps -q 2>/dev/null)" ] || fail "containers survived make down"
 	ok "no containers"
-	docker volume inspect travellog_pgdata >/dev/null 2>&1 || fail "the named volume did not survive make down"
-	ok "travellog_pgdata is still there"
+	# THE VOLUME NAME IS DERIVED AND NOT WRITTEN, which is the correction
+	# `make test-db` already carries: this line said `travellog_pgdata`, so the
+	# whole arc could only ever run under the DEFAULT project — and the one
+	# thing you want when a live stack is holding somebody's log is to run it
+	# somewhere else. Compose answers for the project that is actually
+	# configured, so COMPOSE_PROJECT_NAME now moves the arc wholesale.
+	local project pgvolume
+	project="$("${COMPOSE[@]}" config --format json | jq -r '.name')"
+	[ -n "$project" ] && [ "$project" != null ] || fail "compose did not answer for its own project name"
+	pgvolume="${project}_pgdata"
+	docker volume inspect "$pgvolume" >/dev/null 2>&1 || fail "the named volume $pgvolume did not survive make down"
+	ok "$pgvolume is still there"
 	( cd "$REPO" && make up )
 	base="$(api_base)"
 
@@ -537,7 +605,7 @@ phase_arc() {
 	code="$(req -H "$auth_header" "$base/v1/logbook")"
 	assert_eq 200 "$code" "GET /v1/logbook after restart"
 	assert_eq "Kyoto in May" "$(jqbody '.logbook.trips[0].name')" "the trip's name, after a full teardown"
-	assert_eq 'W/"1-1"' "$(header ETag)" "the ETag — the version counter survived too"
+	assert_eq 'W/"2-1"' "$(header ETag)" "the ETag — the version counter survived too"
 	assert_eq "[]" "$(jqbody -c '.logbook.trips[0].cityIds')" "cityIds"
 	ok "the log outlived the stack"
 }

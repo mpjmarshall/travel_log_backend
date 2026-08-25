@@ -27,7 +27,7 @@ var (
 	volStarted   bool
 )
 
-// stack brings the two-service project up once per test binary, on its own
+// stack brings the three-service project up once per test binary, on its own
 // ports and under its own project name.
 func stack(t *testing.T) {
 	t.Helper()

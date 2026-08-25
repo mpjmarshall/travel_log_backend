@@ -34,6 +34,15 @@ var allVars = []string{
 	"TRAVELLER_RATE_LIMIT_PER_MIN",
 	"ARGON2_MAX_CONCURRENT",
 	"REQUEST_TIMEOUT",
+	"S3_INTERNAL_ENDPOINT",
+	"S3_PUBLIC_BASE_URL",
+	"S3_REGION",
+	"S3_BUCKET",
+	"S3_ACCESS_KEY",
+	"S3_SECRET_KEY",
+	"S3_PRESIGN_TTL_PRIVATE",
+	"S3_PRESIGN_TTL_PUBLIC",
+	"MEDIA_MAX_BYTES",
 }
 
 // complete is a whole environment Load must accept. Its values are the ones
@@ -50,6 +59,15 @@ func complete() map[string]string {
 		"TRAVELLER_RATE_LIMIT_PER_MIN": "600",
 		"ARGON2_MAX_CONCURRENT":        "2",
 		"REQUEST_TIMEOUT":              "15s",
+		"S3_INTERNAL_ENDPOINT":         "http://minio:9000",
+		"S3_PUBLIC_BASE_URL":           "http://127.0.0.1:9000",
+		"S3_REGION":                    "us-east-1",
+		"S3_BUCKET":                    "travellog-media",
+		"S3_ACCESS_KEY":                "travellog",
+		"S3_SECRET_KEY":                "travellogsecret",
+		"S3_PRESIGN_TTL_PRIVATE":       "2m",
+		"S3_PRESIGN_TTL_PUBLIC":        "15m",
+		"MEDIA_MAX_BYTES":              "26214400",
 	}
 }
 
@@ -183,6 +201,15 @@ func TestLoadReadsEveryValueFromACompleteEnvironment(t *testing.T) {
 		TravellerRateLimitPerMin: 600,
 		Argon2MaxConcurrent:      2,
 		RequestTimeout:           15 * time.Second,
+		S3InternalEndpoint:       "http://minio:9000",
+		S3PublicBaseURL:          "http://127.0.0.1:9000",
+		S3Region:                 "us-east-1",
+		S3Bucket:                 "travellog-media",
+		S3AccessKey:              "travellog",
+		S3SecretKey:              "travellogsecret",
+		S3PresignTTLPrivate:      2 * time.Minute,
+		S3PresignTTLPublic:       15 * time.Minute,
+		MediaMaxBytes:            26214400,
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v,\nwant %+v", cfg, want)
@@ -245,6 +272,36 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 		{"request timeout is negative", "REQUEST_TIMEOUT", "-1s", "same as zero to http.TimeoutHandler"},
 		{"request timeout is below the floor", "REQUEST_TIMEOUT", "500ms", "one Argon2id hash at 64 MiB does not finish inside it, so every sign-in answers 503"},
 		{"request timeout is above the ceiling", "REQUEST_TIMEOUT", "120s", "a handler allowed to outlive the connection's own write deadline"},
+
+		// The bucket group. THE TWO ADDRESSES ARE VALIDATED AS ADDRESSES AND
+		// NOT MERELY AS PRESENT (DEC-42): a SigV4 signature covers the HOST,
+		// so "minio:9000" without a scheme is a signature nothing can satisfy
+		// and a failure that surfaces on the phone rather than at boot.
+		{"the internal endpoint has no scheme", "S3_INTERNAL_ENDPOINT", "minio:9000", "minio.New needs a host and a transport, and a bare host:port gives neither"},
+		{"the internal endpoint is a scheme we do not speak", "S3_INTERNAL_ENDPOINT", "s3://minio:9000", "only http and https"},
+		{"the internal endpoint has no host", "S3_INTERNAL_ENDPOINT", "http://", "a signature covers the host"},
+		{"the public base has no scheme", "S3_PUBLIC_BASE_URL", "127.0.0.1:9000", "the phone connects to this one, and it is what the signature covers"},
+		{"the public base is not a URL at all", "S3_PUBLIC_BASE_URL", "http://a b c", "url.Parse"},
+
+		// THE TWO LIFETIMES ARE BOUNDED BY THE SIGNER'S OWN LIMITS, measured
+		// against minio-go: below 1s it answers "Expires cannot be lesser than
+		// 1 second" and above 7 days "Expires cannot be greater than 7 days".
+		// Outside them every media route 500s at the first request, so the
+		// refusal belongs at boot.
+		{"the private lifetime has no unit", "S3_PRESIGN_TTL_PRIVATE", "120", "a bare number is ambiguous and ParseDuration refuses it"},
+		{"the private lifetime is below the signer's floor", "S3_PRESIGN_TTL_PRIVATE", "500ms", "minio-go refuses an expiry under a second"},
+		{"the private lifetime is zero", "S3_PRESIGN_TTL_PRIVATE", "0s", "every minted URL would be expired on arrival"},
+		{"the public lifetime is above the signer's ceiling", "S3_PRESIGN_TTL_PUBLIC", "169h", "SigV4 presigned URLs cap at seven days"},
+		{"the public lifetime is not a duration", "S3_PRESIGN_TTL_PUBLIC", "fifteen", "ParseDuration"},
+
+		// MEDIA_MAX_BYTES HAS A FLOOR AND THE FLOOR IS A MEASUREMENT: the
+		// fixture's larger object is hero-mountain.png at 555,376 bytes, so a
+		// ceiling under a megabyte is a build that cannot store its own seed
+		// data — and R4's `make seed` is where that would be discovered.
+		{"the media bound is not a number", "MEDIA_MAX_BYTES", "twenty-five megabytes", "strconv"},
+		{"the media bound is zero", "MEDIA_MAX_BYTES", "0", "a ceiling of zero refuses every upload, which is a feature switched off by a setting that reads like a safety measure"},
+		{"the media bound is negative", "MEDIA_MAX_BYTES", "-1", "same as zero"},
+		{"the media bound is below the fixture's own largest object", "MEDIA_MAX_BYTES", "555375", "one byte under hero-mountain.png, and `make seed` is where it would be found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setEnv(t, with(tc.key, tc.value))

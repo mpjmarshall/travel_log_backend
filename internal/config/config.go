@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -59,6 +60,47 @@ type Config struct {
 	TravellerRateLimitPerMin int
 	Argon2MaxConcurrent      int
 	RequestTimeout           time.Duration
+
+	// THE BUCKET GROUP, and it is nine variables rather than four because
+	// object storage is the first thing this application talks to that is not
+	// the database. What makes MinIO locally and real S3 in production
+	// CONFIGURATION rather than code is that every one of these is here.
+	//
+	// TWO ADDRESSES AND NOT ONE (DEC-42). S3InternalEndpoint is what the API
+	// DIALS — inside compose that is http://minio:9000 — and S3PublicBaseURL
+	// is what a SIGNATURE COVERS and what a phone connects to. A SigV4
+	// signature covers the host, so an address baked into signing code cannot
+	// be changed downstream at all: a proxy cannot rewrite it, a Host header
+	// cannot correct it, a CNAME cannot rescue it. They are the same value in
+	// every deployment except a containerised local stack, and BOTH ARE
+	// REQUIRED rather than one defaulting to the other — this file's rule is
+	// that nothing has a default, and "the internal endpoint is the public one
+	// unless you say otherwise" is exactly the silent value nobody chose that
+	// the rule exists to refuse.
+	S3InternalEndpoint string
+	S3PublicBaseURL    string
+
+	S3Region    string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+
+	// TWO LIFETIMES, TWO AUDIENCES (DEC-47). The private one is the phone's,
+	// and it is the revocation knob (DEC-44); the public one is what
+	// GET /l/{token} embeds and is fifteen minutes (DEC-84), because the
+	// envelope has nothing to re-mint its URLs with. They are configurable
+	// because a lifetime that is not closes DEC-21's tuning question by
+	// accident, and they are two variables because one number cannot be both.
+	S3PresignTTLPrivate time.Duration
+	S3PresignTTLPublic  time.Duration
+
+	// MediaMaxBytes is an API-SIDE REFUSAL TO MINT and is not what the bucket
+	// enforces. SigV4 signs an exact header value and never a range, so what
+	// the bucket enforces is `== the declared byteSize`; this is what stops a
+	// capability being minted for an absurd one in the first place. Both
+	// sentences are needed and neither is true alone — internal/media's
+	// Upload.ByteSize carries the long form.
+	MediaMaxBytes int64
 }
 
 // MinRequestTimeout and MaxRequestTimeout bound REQUEST_TIMEOUT, and both ends
@@ -79,6 +121,39 @@ const (
 	MaxRequestTimeout = 60 * time.Second
 )
 
+// MinPresignTTL and MaxPresignTTL bound both presign lifetimes, and BOTH ENDS
+// ARE THE SIGNER'S OWN rather than a policy invented here.
+//
+// MEASURED against minio-go: an expiry below one second answers "Expires
+// cannot be lesser than 1 second" and one above seven days answers "Expires
+// cannot be greater than 7 days" — at PRESIGN time, which means every media
+// route 500s at its first request on a value nothing refused at boot. That is
+// the same argument REQUEST_TIMEOUT's bounds make: refuse the value that
+// silently switches something off, where it can still be reported.
+//
+// THE CEILING IS NOT A POLICY AND MUST NOT BE READ AS ONE. Seven days is what
+// SigV4 permits; it is NOT what "Stop sharing" can honestly promise.
+// S3_PRESIGN_TTL_PUBLIC is the revocation window four sentences of client copy
+// are written against (DEC-84), so raising it is a copy change and not a knob
+// turn. deploy/.env.example says so beside the value.
+const (
+	MinPresignTTL = time.Second
+	MaxPresignTTL = 7 * 24 * time.Hour
+)
+
+// MinMediaMaxBytes is a MEASUREMENT and not a round number. The fixture's
+// larger object is `internal/logbook/testdata/imagery/hero-mountain.png` at
+// 555,376 bytes, so a ceiling below a megabyte is a build that cannot store
+// its own seed data — and R4's `make seed` is where that would be discovered,
+// as an upload refused by the API that wrote the refusal.
+//
+// THERE IS NO CEILING ON THE CEILING, deliberately. The API never buffers a
+// photograph — DEC-36's whole point is that the bytes go straight to the
+// bucket — so a large value costs bucket space rather than memory, and nothing
+// in R1-R8 reclaims an object (OE-12). docs/BEFORE-A-PUBLIC-DEPLOY.md carries
+// that arithmetic; a number invented here would not be one anybody chose.
+const MinMediaMaxBytes = 1 << 20
+
 // Load reads the environment and returns either a whole Config or a single
 // error naming every variable that is missing or invalid. It never returns a
 // partly-filled Config beside an error.
@@ -98,6 +173,15 @@ func Load() (Config, error) {
 		TravellerRateLimitPerMin: l.atLeast("TRAVELLER_RATE_LIMIT_PER_MIN", 1),
 		Argon2MaxConcurrent:      l.atLeast("ARGON2_MAX_CONCURRENT", 1),
 		RequestTimeout:           l.duration("REQUEST_TIMEOUT", MinRequestTimeout, MaxRequestTimeout),
+		S3InternalEndpoint:       l.address("S3_INTERNAL_ENDPOINT"),
+		S3PublicBaseURL:          l.address("S3_PUBLIC_BASE_URL"),
+		S3Region:                 l.required("S3_REGION"),
+		S3Bucket:                 l.required("S3_BUCKET"),
+		S3AccessKey:              l.required("S3_ACCESS_KEY"),
+		S3SecretKey:              l.required("S3_SECRET_KEY"),
+		S3PresignTTLPrivate:      l.duration("S3_PRESIGN_TTL_PRIVATE", MinPresignTTL, MaxPresignTTL),
+		S3PresignTTLPublic:       l.duration("S3_PRESIGN_TTL_PUBLIC", MinPresignTTL, MaxPresignTTL),
+		MediaMaxBytes:            l.bytes("MEDIA_MAX_BYTES", MinMediaMaxBytes),
 	}
 
 	l.refuseSilentIdleClamp(cfg)
@@ -290,4 +374,64 @@ func (l *loader) duration(name string, floor, ceiling time.Duration) time.Durati
 		return 0
 	}
 	return d
+}
+
+// address parses one of DEC-42's two bucket addresses and refuses anything
+// minio.New could not act on.
+//
+// THE SCHEME IS REQUIRED RATHER THAN DEFAULTED, and that is the decision in
+// this helper. minio.New takes a HOST and a boolean saying whether to speak
+// TLS, so `minio:9000` carries neither: guessing http would be a silent choice
+// of transport, and guessing wrong is a signature that fails against a server
+// that is right there. A signature also covers the HOST, so an address with no
+// host is a URL nothing can be signed for.
+//
+// The value IS echoed into a problem, unlike DATABASE_URL: these two carry no
+// credential — S3_ACCESS_KEY and S3_SECRET_KEY are separate variables — and an
+// address you cannot see is an address you cannot fix.
+func (l *loader) address(name string) string {
+	v := l.required(name)
+	if l.broke(name) {
+		return ""
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		l.add(name, fmt.Sprintf("%q is not a URL: %v", v, err))
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		l.add(name, fmt.Sprintf(
+			"%q has no http:// or https:// scheme; minio.New takes a host AND a "+
+				"transport, and a bare host:port gives it neither", v))
+		return ""
+	}
+	if u.Host == "" {
+		l.add(name, fmt.Sprintf(
+			"%q names no host, and a SigV4 signature covers the host", v))
+		return ""
+	}
+	return v
+}
+
+// bytes parses a byte count and enforces a floor. It is int64 rather than int
+// because it is compared against a file size, and a 32-bit int would make the
+// bound wrap on a platform this could plausibly run on.
+func (l *loader) bytes(name string, floor int64) int64 {
+	v := l.required(name)
+	if l.broke(name) {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		l.add(name, fmt.Sprintf("%q is not a number of bytes", v))
+		return 0
+	}
+	if n < floor {
+		l.add(name, fmt.Sprintf(
+			"%d is below the minimum of %d; the fixture's own larger photograph is "+
+				"555,376 bytes, so a ceiling under a megabyte is a build that cannot "+
+				"store its own seed data", n, floor))
+		return 0
+	}
+	return n
 }
