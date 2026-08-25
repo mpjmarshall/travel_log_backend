@@ -47,6 +47,21 @@ and from the seven lens reports:
   * `internal/logbook/emit.go` appears in some step's file list, and the
     migration count is DERIVED from the file lists rather than stated.
 
+WHAT v7.2.2 ADDS. Four rulings landed (DEC-103..DEC-106; 55 now, DEC-43..DEC-106)
+and the four-field stamp caught ALL FOUR fields before a word of the revision was
+written — size, hash, count AND id range. That is the return on v7.2's three
+extra fields: the v7.1 gate could not have seen the count or the range, and the
+three previous re-stamps each went wrong in a way it could not see.
+
+DEC-103 then reopened a set DEC-12 had closed, so "the twelve codes" became false
+in eleven places at once — the third time in three revisions that a ruling
+narrowing a literal left the old one behind (OE-17's phrase survived in four,
+the content-type regex in five). The first two got a bespoke check each. THE
+THIRD GOT A MECHANISM: `plan.superseded_literals` names each literal, the ruling
+that superseded it and the marker a surviving mention must carry, and one loop
+drives all three. Three instances of one shape is a class, and a fourth bespoke
+check would have been the sixth count this document polices by reading.
+
 WHAT v7.2.1 ADDS, AFTER AN INDEPENDENT FixVerifier READ v7.2 AGAINST THE SEVEN
 LENS REPORTS. It graded 81 LANDED, 5 PARTIAL, 3 FICTION, 3 CONTAINS-ITS-OWN-DEFECT
 and 1 GUARD-CANNOT-FAIL, and re-ran all eleven checks above and reproduced every
@@ -443,46 +458,64 @@ if gt:
                   f"gate_transcripts historical entry at {h.get('at_commit')} is not reproducible "
                   f"and says nothing about why")
 
-# ADDED AT v7.2.1 — NO SURVIVING "FOUR SENTENCES". OE-17 deletes the phrase, and
-# its first draft named three locations, missed two, and one of the three had
-# moved when R1 was rewritten. A deletion recorded against a location is a claim
-# about that location; this is the claim in a form that can fail.
+# SUPERSEDED LITERALS — ONE MECHANISM, THREE ENTRIES, ADDED AT v7.2.2.
 #
-# THE FIRST DRAFT OF THIS CHECK USED AN ALLOWLIST OF TOP-LEVEL KEYS AND WAS
-# WRONG IN THE OTHER DIRECTION — it went red on three sites that name the phrase
-# precisely in order to correct it (the measurement's own headline, this check's
-# own description, and the lens table's summary of the finding). A location
-# allowlist cannot tell "still says four" from "says four WAS wrong", and the
-# difference is the whole point. The predicate is about the CLAIM instead: the
-# phrase may appear only in a string that also carries its correction. A site
-# still asserting four will not also say eighteen — risks[7] did not, and neither
-# did RULE-07's what_is_already_true, which are the two the verifier found.
-def phrase_sites(node, path=""):
-    if isinstance(node, dict):
-        for k, v in node.items():
-            yield from phrase_sites(v, f"{path}.{k}" if path else k)
-    elif isinstance(node, list):
-        for i, v in enumerate(node):
-            yield from phrase_sites(v, f"{path}[{i}]")
-    elif isinstance(node, str):
-        low = node.lower()
-        if "four sentences" in low or "four client sentences" in low:
-            yield path, ("eighteen" in low or "18 " in low)
+# A ruling that narrows a literal leaves the old one behind in several places,
+# and this project has now had that three times in three revisions: "four
+# sentences" survived in FOUR places after OE-17 deleted it, "the twelve codes"
+# in ELEVEN when DEC-103 reopened the set, and `^image/(jpeg|png|heic)$` in FIVE
+# when DEC-104 narrowed it. The first two got a bespoke check each. The third got
+# this instead — three instances of one shape is a class, and a fourth bespoke
+# check would have been the sixth count this document polices by reading.
+#
+# THE PREDICATE IS ABOUT THE CLAIM, NOT THE LOCATION, and that distinction was
+# paid for: the first draft of the "four sentences" check was an allowlist of
+# top-level keys and went RED ON THREE CORRECT SITES, because a permitted-key
+# list cannot tell "still says four" from "says four was wrong". A superseded
+# literal may be NAMED wherever its correction is beside it, and may not be
+# ASSERTED anywhere.
+#
+# THE EXEMPTIONS ARE EACH A STRING THAT IS A RECORD RATHER THAN A CLAIM:
+# `claimed_fixes[*].finding` is a verbatim copy of a lens report's `target` and is
+# equality-checked against that report in this same run; `open_rulings[*].question`
+# is what was asked, not what is true. Rewording either to satisfy a checker would
+# falsify a record — the failure this repository has logged seven times from the
+# other direction, a worker weakening the artefact instead of the code.
+sl = plan.get("superseded_literals")
+check(sl is not None, "the plan records no superseded_literals table")
+if sl:
+    for e in sl["entries"]:
+        check(len(e.get("why", "")) > 80,
+              f"superseded literal {e['id']} carries no challengeable reason")
+        check(bool(e.get("superseded_by")) and bool(e.get("must_accompany")),
+              f"superseded literal {e['id']} names no ruling or no required marker")
 
+    def literal_sites(node, path=""):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                yield from literal_sites(v, f"{path}.{k}" if path else k)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                yield from literal_sites(v, f"{path}[{i}]")
+        elif isinstance(node, str):
+            yield path, node
 
-for where, corrected in sorted(set(phrase_sites(plan))):
-    # claimed_fixes[*].finding is a VERBATIM COPY of the lens report's `target`
-    # string and is checked for equality against it elsewhere in this run.
-    # Rewording it to satisfy this check would break that equality and would
-    # falsify a quotation — the exact failure this repository has recorded seven
-    # times from the other direction, a worker weakening the artefact to satisfy
-    # a checker.
-    if re.fullmatch(r"claimed_fixes\[\d+\]\.finding", where):
-        continue
-    check(corrected,
-          f"'four sentences' survives at {where} without its correction beside it — OE-17 "
-          f"deletes that phrase, and PD-16 re-derived the count as eighteen across ten "
-          f"screens. Naming the phrase to correct it is fine; asserting it is not")
+    # The table describes itself, necessarily — it must name the literals it
+    # governs — so it is not scanned, on the same footing as the citation
+    # exemption register.
+    for where, text in literal_sites(plan):
+        if where.startswith("superseded_literals"):
+            continue
+        low = text.lower()
+        for e in sl["entries"]:
+            needles = [e["literal"]] + list(e.get("also_matches", []))
+            if not any(n.lower() in low for n in needles):
+                continue
+            if any(re.fullmatch(pat, where) for pat in e.get("exempt_paths", [])):
+                continue
+            check(e["must_accompany"].lower() in low,
+                  f"{e['id']}: the superseded literal {e['literal']!r} survives at {where} "
+                  f"without {e['must_accompany']!r} beside it — {e['superseded_by']}")
 
 # §6.3 — a revision deletes something.
 check(len(plan["deletions"]) > 0, "deletions is empty and carries no stated reason")

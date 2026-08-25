@@ -3,7 +3,9 @@
 Revised from 7.1 on 24 August 2026, at HEAD `d781d29`. Every change below names the finding or the
 ruling that forced it. Nothing here is a preference.
 
-**Revised to 7.2.1 on 24 August 2026** after an independent FixVerifier read v7.2 against the seven
+**Revised to 7.2.2 on 24 August 2026**, folding in DEC-103..DEC-106 (55 rulings, DEC-43..DEC-106) — see [What v7.2.2 folded](#what-v722-folded). `open_rulings` is now empty.
+
+**Revised to 7.2.1** after an independent FixVerifier read v7.2 against the seven
 lens reports and graded all 93 `claimed_fixes`: 81 LANDED, 5 PARTIAL, 3 FICTION, 3
 CONTAINS-ITS-OWN-DEFECT, 1 GUARD-CANNOT-FAIL. Every one of the twelve non-LANDED verdicts is acted on
 — see [What v7.2.1 fixed](#what-v721-fixed). None is argued with.
@@ -32,6 +34,204 @@ $ python3 scripts/check-plan.py          # after
 > self-contained, and those are different things.** v7.2.1 adds the invariant that follows:
 > `gate_transcripts` carries the sha256 of the script that produced the output, and the script hashes
 > itself and compares.
+
+---
+
+## What v7.2.2 folded
+
+`docs/rulings-v3-pending.json` at `09d1b79` holds **55 rulings, DEC-43..DEC-106**. Re-derived, not
+copied:
+
+```
+$ wc -c < docs/rulings-v3-pending.json
+86386
+$ shasum -a 256 docs/rulings-v3-pending.json
+67852d5a352a47985c7e5934be356376ad00acc57626da56da210830bcccee81
+$ python3 -c "import json;r=json.load(open('docs/rulings-v3-pending.json'))['rulings'];print(len(r), r[0]['id'], r[-1]['id'])"
+55 DEC-43 DEC-106
+```
+
+**The gate caught all four stamp fields before a word was written** — size, hash, **count and id
+range** — which is the return on v7.2's three extra fields. The v7.1 gate could not have seen the
+count or the range at all, and the previous three re-stamps each went wrong in a way it could not
+see: v7.0 reused three ruling ids, v7.1 re-ran the hash and left the word THIRTY-TWO beside it, and
+v7.2 opened the file to find nineteen unread rulings. This time the arrival of four rulings was a
+**gate failure** rather than something a later reader noticed.
+
+```
+FAIL: the rulings stamp says 80096 bytes; the file is 86386
+FAIL: the rulings stamp says 6552054a5bb6…; the file is 67852d5a352a…
+FAIL: the rulings stamp says count=51; the file holds 55
+FAIL: the rulings stamp says DEC-43..DEC-102; the file runs DEC-43..DEC-106
+```
+
+### DEC-103 — the thirteenth word, and the count that had to be re-derived
+
+Written as a **DEC-12 decision, not a patch**: the twelve were closed on the argument that a client
+can *act* on each, and this word passes because its action is "this needs a newer server" and no
+other word's is.
+
+**The spelling is the plan's (PD-24), not the ruling's:** `unsupported_route`, because it pairs with
+`unsupported_format` — and the pairing is not cosmetic. PD-17 already gives `unsupported_format` a
+lane of its own that **must never retry**, and this word belongs in that lane for exactly the same
+reason. A word whose lane is derivable from its name is a word a client developer maps correctly the
+first time. It is explicitly **not** `method_not_allowed`, which `mux.go` proposed and DEC-12
+refused; that refusal still stands on its own merits and DEC-103 does not reopen it.
+
+**One constant fixes both statuses, and the mux had already done the hard part.**
+`envelopeWriter.WriteHeader` writes `bodyNotFound` only when `stdlibWroteIt(status)` is true — 404
+or 405 with a non-JSON Content-Type, i.e. **only when net/http answered because no pattern matched**.
+A handler's own 404 for an unknown id is already the envelope with `application/json` set before
+`WriteHeader`, so the wrapper leaves it alone. That discrimination is exactly the one the new word
+needs: *the mux answered* **is** "this build does not have that route", and *the handler answered*
+**is** "that trip is not in your log". The 405 keeps its status and its `Allow` header — mux.go's
+recorded decision, unchanged — and what stops is the status and the code **disagreeing**.
+
+Three comments in `mux.go` become false and are corrected in the same commit: the file argues that
+"the block is closed" and that a thirteenth word "is refused by DEC-12". A comment carrying a
+reversed decision is worse than no comment.
+
+**The client half is taken too, and is not made redundant by the code.** A 404/405 on a route the
+client's own table believes in is a deployment mismatch and must never map to the delete-succeeded
+branch — because every server older than R1 still answers `not_found`. Ship the status rule first
+and read the code as confirmation.
+
+#### The count, re-derived and every site corrected
+
+```
+$ grep -c 'Code = "' internal/httpx/errors.go
+12                    # today; 13 at the end of R1
+```
+
+The twelve, by name: `unauthenticated`, `forbidden`, `not_found`, `conflict`, `invalid_body`,
+`invalid_field`, `rate_limited`, `payload_too_large`, `timeout`, `internal`, `upload_incomplete`,
+`unsupported_format`.
+
+**Eleven sites stated the old count and all eleven are corrected.** A predicate matching only the
+phrases that *assert* it (`twelve codes`, `twelve error codes`, `twelve-code`, `twelve rows`, `three
+of the twelve`) found exactly twelve occurrences and **zero false positives** — a twelve-photo grid,
+twelve local HMACs, twelve URLs in an envelope and twelve non-LANDED verdicts all sit in this
+document and none matched.
+
+| site | was |
+|---|---|
+| `base.measured[3].fact` | "TWELVE error codes, closed vocabulary… A thirteenth is refused by DEC-12" |
+| `definition_of_done[40]` | "the twelve error codes as twelve rows in three lanes" |
+| `decisions[PD-17].title` | "Twelve error codes, three lanes" |
+| `decisions[PD-17].evidence` | "-> 12"; "twelve codes collapse to one boolean" |
+| `decisions[PD-17].reasoning` | "Three of the twelve need behaviour a boolean cannot express" |
+| `decisions[PD-17].consequence` | "a table of TWELVE ROWS" |
+| `review_lenses_required.table[7]` | "a twelve-row error table" |
+| `steps[R1].work` (item 7) | "THE ERROR VOCABULARY DOES NOT GROW… DEC-12's twelve codes are untouched" |
+| `claimed_fixes[CF-MAJ-7]` | "A table of TWELVE ROWS… transport failure as a thirteenth row" |
+| `claimed_fixes[OPS-MAJ-8]` | "the vocabulary does not grow… twelve codes are untouched" |
+| `claimed_fixes[CF-BLO-4]` | "The server half is RULE-11, raised new" |
+| `open_rulings[RULE-11]` | the question itself — now CLOSED |
+
+**The twelfth match is exempt and stays as written:** `claimed_fixes[CF-MAJ-7].finding` is a verbatim
+copy of the lens report's `target` string ("internal/httpx/errors.go (twelve codes) × …") and is
+equality-checked against the lens file in the same run. Rewording it to satisfy a checker would
+falsify a quotation — the same exemption, for the same reason, as the "four sentences" check.
+
+**Two counts are now quoted together, deliberately:** the table is **thirteen code rows plus one row
+that is not a code — fourteen in all**. Pairing a code count with a row count is precisely the mixing
+error PD-16 made with sentences and screens, and it is not repeated here.
+
+`R1 item 7`'s correction is worth reading closely, because the honest statement is subtle: DEC-96's
+503 branch still adds **no** code — it is a status and a header — and the vocabulary grows in the
+same step anyway, for a different reason and by a different ruling. The two are kept apart because
+"the 503 needed a code" is the wrong lesson to draw from a step that added one.
+
+### DEC-104 — `heic` comes out
+
+`^image/(jpeg|png)$`. **One edit and not three**, because DEC-87 already has the Go 422, the 0003
+CHECK and the signed Content-Type reading the *same validated value* — the return on that ruling
+landing first. Nothing in this system can produce a HEIC: the shutter is inert by decision, DEC-41
+seeds two PNGs, and the fixture's 284 photographs resolve to two `image/png` objects. `image/jpeg`
+stays and earns its place independently of any camera — `schema_test.go:62` seeds shared fixtures
+with it. **That asymmetry is the whole answer:** one of the three is reachable from the test suite
+today and one is reachable from nothing at all.
+
+The general form is worth more than the character, and it is now written down: *an allowlist entry
+nothing can produce or test is not a free option — it is a claim the schema makes that no leg can
+check.* R3's acceptance check greps `heic` to zero.
+
+### DEC-105 — GATE-L12 ratified
+
+Both changes ratified **in writing** rather than inferred, because a clearance that survives by
+silence is indistinguishable from one nobody rechecked. Deleting a route with no caller cannot
+invalidate a diagram of the routes that have callers. DEC-86's registration close adds one error
+state to the `register` diagram and removes none — and it was the sharper of the two precisely
+because the clearance's own KNOWN-OPEN list had already flagged that diagram's request body. DEC-91's
+additive `shared` field is judged **not material and recorded as judged**, because "nobody mentioned
+it" and "somebody checked it" look identical six weeks later.
+
+### DEC-106 — 500 stops being provisional
+
+PD-21 proposed 500 inside DEC-93's "a few hundred" and marked it in the Argon2 tier. Confirmed at
+500 on the same arithmetic: ~26 KB against a 1 MiB ceiling is two orders of magnitude of headroom,
+and 500 fixes draw any city walk as the polyline C2 is the only consumer of. It leaves that tier,
+which still holds numbers nobody has confirmed.
+
+### The CLIENT-PREREQUISITES consequences
+
+Three of the four rulings carry one, and both are now in R1 item 14 rather than in the ruling text
+only:
+
+- **Item 14 — the status-branching rule** (DEC-103), with the reason it is not redundant: the new
+  code does not help a client talking to a build that predates it.
+- **Item 10 — client-side track decimation** (DEC-93, DEC-106), with the consequence the phone pays:
+  **a user whose walk is refused with a 422 has lost a recording of a day.** A `List<LatLng>`
+  recorded once, on a day that has passed. The 422 is the backstop, not the mechanism.
+
+### Did anything change a step's size or file list?
+
+**One file list, one step.** `internal/httpx/mux.go` joins **R1** for DEC-103's body constant, and
+R1's size inventory gains "one new error code". Nothing else moves:
+
+- DEC-104 changes the regex in R3's *text*; the files that hold it (`validate.go`, `0003_*.up.sql`,
+  `schema_test.go`) were already in R3's list.
+- DEC-105 touches `sequencing.gate` only.
+- DEC-106 removes a word from PD-21; R7's files and legs are unchanged.
+
+### And a fourth site the check found that I had not listed
+
+The eleven above are the ones the count-predicate matched. Writing the `heic` narrowing then turned
+up **five more sites carrying the old regex** — of which two are legitimate (a verbatim quotation of
+DEC-51's own wording inside PD-10, and RULE-09's `question`, which is a record of what was asked) and
+**three were stale assertions**: `definition_of_done[25]`, `claimed_fixes[SEC-BLO-3]`, and
+`global_constraints[17]`. All three corrected.
+
+### Three bespoke checks became one mechanism
+
+That is the third time in three revisions that a ruling narrowing a literal left the old one behind:
+`four sentences` in **four** places, `the twelve codes` in **eleven**, `^image/(jpeg|png|heic)$` in
+**five**. The first two got a bespoke check each. **Three instances of one shape is a class**, and a
+fourth bespoke check would have been the sixth count this document polices by reading — so
+`plan.superseded_literals` now names each literal, the ruling that superseded it, and the marker a
+surviving mention must carry, and one loop in the gate drives all three.
+
+Two exemptions, each a string that is a **record rather than a claim**: `claimed_fixes[*].finding`
+(a verbatim lens `target`, equality-checked against the report in the same run) and
+`open_rulings[*].question` (what was asked, not what is true). Rewording either to satisfy a checker
+would falsify a record.
+
+| # | mutation | result |
+|---|---|---|
+| SL-1 | `risks[7]` reverted to the deleted phrase | red, naming SL-1 |
+| SL-2 | `base.measured[3]` reverted to "TWELVE error codes, closed vocabulary" | red, naming SL-2 |
+| SL-3 | `definition_of_done[25]` reverted to the `heic` regex | red, naming SL-3 |
+| SL-0 | the table itself removed | `the plan records no superseded_literals table` |
+| SL-4 | an entry given a one-word `why` | `superseded literal SL-3 carries no challengeable reason` |
+| — | rulings stamp left at count 51 / DEC-102 with the hash correct | red on **both** count and id range |
+| **control** | "Twelve of them is roughly 4.7 kB **of code**" in an unrelated sentence | **green**, as it must be |
+
+The control matters as much as the reds, and it is the correction the first bespoke check needed:
+its draft was an allowlist of top-level keys and went red on three *correct* sites, because a
+permitted-key list cannot tell "still says the old thing" from "says the old thing was wrong". The
+predicate is about the claim, and it was tested against its false positives before it was written —
+a twelve-photo grid, twelve local HMACs, twelve URLs in an envelope and twelve non-LANDED verdicts
+all sit in this document and none of them matches.
 
 ---
 
@@ -387,7 +587,7 @@ stated as *"already done — verify, do not redo."*
 
 Also folded in: DEC-90's `.toUtc()` **and its local-format consequence**; DEC-91's `shared` field and
 H1's new third state; DEC-88's *412-means-success* retry rule; DEC-93's client-side track decimation;
-the twelve-code error table in three lanes (RETRY / REPORT / RE-AUTHENTICATE) with
+the error table — thirteen code rows plus one transport row, fourteen in all — in three lanes (RETRY / REPORT / RE-AUTHENTICATE) with
 `unsupported_format` in its own lane that must never retry (PD-17); DEC-47's real consequence —
 **five `AssetImage` constructions and zero declared assets, so without it every image in the app is
 the failure plate** (PD-16, M-ASSETS-ZERO); and the `LogbookSource` mapping (PD-18), which the plan
@@ -458,15 +658,15 @@ rule, because 0003 carries no `-- migrate:no-transaction` directive at all.
 |---|---|
 | RULE-01 | CLOSED (DEC-76) — unchanged |
 | RULE-02 | CLOSED (DEC-77) — unchanged |
-| **RULE-03** | **OPEN, and WIDENED.** GATE-L12's clearance now has *two* candidates, not one: OE-7 deletes `GET /v1/me`, **and DEC-86 changes an error state on the approved `register` sequence diagram** — whose request body the clearance already lists as KNOWN OPEN. DEC-91's additive `shared` field is judged NOT material and is recorded as judged. |
+| **RULE-03** | **CLOSED by DEC-105 at v7.2.2.** Both changes ratified in writing rather than inferred — a clearance that survives by silence is indistinguishable from one nobody rechecked. Deleting a route with no caller cannot invalidate a diagram of the routes that have callers; the register diagram gains one error state and loses none. DEC-91's additive `shared` field is judged NOT material and is **recorded as judged**. |
 | RULE-04 | CLOSED (DEC-78) — unchanged |
-| **RULE-05** | **OPEN, and NARROWED.** Its compression half is closed: DEC-94 puts gzip in the Go server, so this is no longer blocking. The proxy hop remains — the public read's limit does not bind until `ClientKey` learns X-Forwarded-For. |
+| **RULE-05** | **CARRIED, NOT RULED — closed as an open_ruling at v7.2.2 and labelled so.** Two of its three subjects were taken out and done (DEC-94's gzip; DEF-08's orphan classes). What is left is the proxy hop, which is `next_slice`'s first item and its whole subject. A confirm-or-object that has shrunk to "the thing the next slice is about" is not an open ruling. |
 | RULE-06 | CLOSED (DEC-78) — unchanged |
 | **RULE-07** | **CLOSED by DEC-84.** Fifteen minutes. R2 is unblocked and the replacement leg is restored — and it is *mandated* by the ruling, which names the deletion OE-15 made before it saw the ruling that ordered it. |
 | **RULE-08** | **CLOSED by DEC-85.** Share tokens hashed. Read it with DEC-91: neither is complete alone. |
-| **RULE-09** | **OPEN.** Checked against all nineteen unread rulings; none touches the allowlist, so it stays open rather than being closed by accident. DEC-87 raises its stakes slightly — the allowlist now reaches the object and not only the row — which makes an unused entry worth slightly less. |
+| **RULE-09** | **CLOSED by DEC-104 at v7.2.2.** `heic` comes out; `^image/(jpeg|png)$`. One edit and not three, because DEC-87 already has the 422, the CHECK and the signed Content-Type reading one validated value. `jpeg` stays — `schema_test.go:62` seeds shared fixtures with it. |
 | **RULE-10** | **CLOSED by DEC-86.** Registration closes. It moves out of `next_slice` and into R5. |
-| **RULE-11** | **NEW, OPEN.** All 18 unbuilt routes answer `not_found`, the same word as "that trip is not in your log", and the client's three delete methods read an unknown id as success. The client half is scheduled regardless; whether the closed twelve-code vocabulary wants a thirteenth word is a DEC-12 decision and this plan does not open a closed ruling on its own initiative. |
+| **RULE-11** | **CLOSED by DEC-103 at v7.2.2.** The vocabulary gains a thirteenth word, written as a DEC-12 decision. The plan spells it `unsupported_route` (PD-24). The client-side status-branching half is taken too, and is **not** made redundant by the code. |
 
 ---
 
@@ -577,15 +777,20 @@ fifth count in this project's history to go wrong from being carried rather than
 
 ## What is still open, and needs a human
 
-- **RULE-03** — does GATE-L12's clearance survive `GET /v1/me`'s deletion *and* DEC-86's change to the
-  approved `register` diagram's error states?
-- **RULE-05** — Caddy, still on its second deferral rather than a third: v7.2 does not defer it again, it takes the compression half out and does it here.
-- **RULE-09** — should `heic` be in the allowlist?
-- **RULE-11** — does the closed twelve-code vocabulary want a thirteenth word for "this build does
-  not have that route"?
-- **PD-21's number.** DEC-93 rules "a few hundred" points and this plan implements **500**, with the
-  derivation written out. It is provisional in the same tier as the Argon2 parameters — asserted as a
-  value so it cannot move unnoticed, with nothing claiming it is the right value.
-- **Nothing has read v7.2.** The two lenses that produced v7.1 read v7.0; the other five read v7.1. So none has seen R1's
-  new shape, DEC-89's pointer contract, the fourth migration, or the reordered acceptance checks. A
-  lens finding is evidence about the artefact it read.
+**`open_rulings` is empty as of v7.2.2.** RULE-01, 02, 04 and 06 closed at v7.1/v7.2; RULE-07, 08 and
+10 closed at v7.2; RULE-03, 09 and 11 closed at v7.2.2 by DEC-105, DEC-104 and DEC-103; and RULE-05
+is recorded as **carried, not ruled** — its remaining subject is the proxy hop, which is
+`next_slice`'s first item and its whole subject.
+
+What remains is not a ruling and is stated so it is not mistaken for one:
+
+- **§6.2 has not run on v7.2.2.** The FixVerifier graded v7.2, and this revision has moved eleven
+  sites, one file list, one decision, and the contents of `open_rulings` since. The ninety-three
+  `claimed_fixes` are unchanged in substance but four of them were edited.
+- **Nothing has read v7.2.x with a lens.** The two lenses that produced v7.1 read v7.0; the other
+  five read v7.1. None has seen R1's shape, DEC-89's pointer contract, the fourth migration, the
+  reordered acceptance checks, or DEC-103's thirteenth code.
+- **`unsupported_route` is the plan's spelling, not the ruling's.** DEC-103 rules the word in and
+  states the test it passes; PD-24 picks the name, on the argument that it pairs with
+  `unsupported_format` and therefore lands in PD-17's never-retry lane by its own shape. A human may
+  overrule the spelling without reopening the ruling.
