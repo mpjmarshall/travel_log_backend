@@ -55,7 +55,29 @@ type Traveller struct {
 
 // Trip carries the four sharing fields OUT and the write does not take them
 // back IN (SF6). The client has a dedicated `copyWithShare` precisely because
-// the sharing group is written alone; see tripInput in the handlers.
+// the sharing group is written alone; see logbook.TripWrite.
+//
+// `shared` IS THE ONE KEY IN THIS DOCUMENT THE CLIENT'S ENCODER NEVER WROTE,
+// and it is last for that reason (DEC-91). It is DERIVED — `EXISTS (… WHERE
+// revoked_at IS NULL)` — and never stored, because a stored copy is a second
+// place for the same fact.
+//
+// IT EXISTS BECAUSE DEC-85 TOOK SOMETHING AWAY. Share tokens are hashed at
+// rest now, so the server can no longer emit `shareLinkId`, and DEC-32's write
+// response is a whole Trip the phone SPLICES into its cached log — so an
+// ordinary rename overwrote the local plaintext token with null, H1 rendered
+// no URL, and both 'Copy link' and 'Stop sharing' went inert while the row was
+// un-revoked and `GET /l/{token}` still served it. The user lost the
+// capability AND the only control that revokes it, from an action that has
+// nothing to do with sharing. `shared` restores 'Stop sharing' from any
+// device; it leaks no capability, because a boolean is not a token.
+//
+// TWO THINGS THE CLIENT HAS TO DO WITH IT, and both are in
+// docs/CLIENT-PREREQUISITES.md: `Trip.isShared` becomes `shared` rather than
+// `shareLinkId != null`, and the splice must be a MERGE that preserves
+// `shareLinkId` rather than a replacement. H1 then gains a third state it does
+// not have today — shared, but this device does not hold the link — with 'New
+// link' as the way back, which H1 already offers.
 type Trip struct {
 	ID               string   `json:"id"`
 	Name             string   `json:"name"`
@@ -68,6 +90,7 @@ type Trip struct {
 	SharePhotos      bool     `json:"sharePhotos"`
 	ShareNotes       bool     `json:"shareNotes"`
 	ShareCoordinates bool     `json:"shareCoordinates"`
+	Shared           bool     `json:"shared"`
 }
 
 type City struct {

@@ -748,3 +748,168 @@ func TestAPartialDateWriteThatWouldInvertTheOrderNamesTheField(t *testing.T) {
 			stored)
 	}
 }
+
+// === DEC-91: the emitted trip says whether it is shared ===
+
+// DEC-32's write response is a whole Trip the phone SPLICES into its cached
+// log. With DEC-85 hashing tokens at rest that Trip carries `shareLinkId:
+// null`, and THE CLIENT HOLDS THE ONLY COPY — it minted the token. So an
+// ordinary rename overwrites it, and H1 then renders no URL and puts BOTH
+// controls out of reach: verified on `wipe/mock-data`, 'Copy link' is
+// `onPressed: url == null || _busy ? null : () => _copy(url)`
+// (share_sheet_screen.dart:224) and 'Stop sharing' is
+// `onPressed: !trip.isShared || _busy ? null : _stop` (line 228), with
+// `Trip.isShared => shareLinkId != null` (trip.dart:102). Meanwhile the row in
+// share_links is un-revoked and `GET /l/{token}` still serves it. The user
+// loses the capability AND the only control that revokes it, from an action
+// that has nothing to do with sharing.
+//
+// `Trip.withName`'s own doc states the invariant verbatim (trip.dart:185-187):
+// "A live link belongs to the trip and not to its name — renaming a trip you
+// have shared must not quietly kill the URL somebody is holding."
+//
+// THE PLAN'S EXISTING GUARD IS BLIND TO IT: "the write's answer spliced into
+// the cached document decodes equal to the next whole read" — and the next
+// whole read is null too. THIS LEG USES A TRIP THAT HAS A LIVE LINK. That is
+// the difference, and it is why the leg it replaces passed.
+func TestARenamedTripStillReportsThatItIsShared(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+
+	if _, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"),
+	}); err != nil {
+		t.Fatalf("PutTrip (create): %v", err)
+	}
+	aLiveShareLink(t, db, id, "autumn-crossing", "kyoto-9f2a")
+
+	got, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing, renamed"),
+	})
+	if err != nil {
+		t.Fatalf("PutTrip (rename): %v", err)
+	}
+	if !got.Shared {
+		t.Errorf("shared = false on a trip whose share_links row is un-revoked — " +
+			"the phone splices this answer over its cache, so H1 loses the URL AND " +
+			"the only control that revokes it, from an action that has nothing to " +
+			"do with sharing")
+	}
+
+	revokeShareLink(t, db, id, "autumn-crossing")
+	after, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"),
+	})
+	if err != nil {
+		t.Fatalf("PutTrip (after revocation): %v", err)
+	}
+	if after.Shared {
+		t.Errorf("shared = true after revocation — the field must be DERIVED from " +
+			"share_links and not stored, or it is a second place for the same fact")
+	}
+}
+
+// The whole-log read has to agree with the write's answer, or the splice and
+// the next fetch disagree about the same trip — which is exactly the shape of
+// bug the ETag makes permanent.
+func TestTheWholeLogAgreesWithTheWriteAboutSharing(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+
+	for _, trip := range []string{"shared-one", "private-one"} {
+		if _, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+			ID: ptr(trip), Name: ptr(trip),
+		}); err != nil {
+			t.Fatalf("PutTrip(%s): %v", trip, err)
+		}
+	}
+	aLiveShareLink(t, db, id, "shared-one", "token-live")
+	// A REVOKED link on the private one, which is the case a naive EXISTS
+	// without `revoked_at IS NULL` gets wrong — and it is the ordinary state,
+	// because DEC-67 revokes and keeps rather than deleting.
+	aRevokedShareLink(t, db, id, "private-one", "token-dead")
+
+	snap, err := store.Read(ctx, id, always)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	want := map[string]bool{"shared-one": true, "private-one": false}
+	for _, trip := range snap.Document.Trips {
+		if trip.Shared != want[trip.ID] {
+			t.Errorf("%s: shared = %v, want %v — a revoked link is still a row, so "+
+				"the subquery has to say `revoked_at IS NULL` and not just EXISTS",
+				trip.ID, trip.Shared, want[trip.ID])
+		}
+	}
+}
+
+// AND IT LEAKS NO CAPABILITY. `shared` is a boolean derived from the row's
+// existence; the token itself never reaches the emitter. The leg is here
+// because "derive a flag from share_links" and "emit share_links" are one
+// keystroke apart.
+func TestTheSharedFlagCarriesNoToken(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+
+	if _, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"),
+	}); err != nil {
+		t.Fatalf("PutTrip: %v", err)
+	}
+	aLiveShareLink(t, db, id, "autumn-crossing", "kyoto-9f2a")
+
+	snap, err := store.Read(ctx, id, always)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	envelope, err := logbook.Emit(logbook.FormatVersion, *snap.Document)
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(raw), "kyoto-9f2a") {
+		t.Errorf("the emitted log carries the share token itself:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), `"shared":true`) {
+		t.Errorf("the emitted log does not carry `\"shared\":true`:\n%s", raw)
+	}
+}
+
+func aLiveShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1::uuid, $2, $3)`,
+		travellerID, tripID, token); err != nil {
+		t.Fatalf("inserting a share link for %s: %v", tripID, err)
+	}
+}
+
+func aRevokedShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO share_links (traveller_id, trip_id, token, revoked_at)
+		 VALUES ($1::uuid, $2, $3, now())`,
+		travellerID, tripID, token); err != nil {
+		t.Fatalf("inserting a revoked share link for %s: %v", tripID, err)
+	}
+}
+
+func revokeShareLink(t *testing.T, db *sql.DB, travellerID, tripID string) {
+	t.Helper()
+	res, err := db.ExecContext(context.Background(),
+		`UPDATE share_links SET revoked_at = now()
+		 WHERE traveller_id = $1::uuid AND trip_id = $2 AND revoked_at IS NULL`,
+		travellerID, tripID)
+	if err != nil {
+		t.Fatalf("revoking the link on %s: %v", tripID, err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("revoking the link on %s moved %d rows, want 1", tripID, n)
+	}
+}

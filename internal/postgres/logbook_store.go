@@ -46,9 +46,16 @@ import (
 // LogbookStore is logbook.Store over *sql.DB.
 type LogbookStore struct{ DB *sql.DB }
 
-const readTripsSQL = `SELECT id, name, started_on, ended_on, summary, cover_asset,
-		share_photos, share_notes, share_coordinates
-	FROM trips WHERE traveller_id = $1::uuid ORDER BY id`
+// sharedSQL is DEC-91's derived flag, spelled once and used by both trip
+// reads. `revoked_at IS NULL` is the whole of it: DEC-67 revokes and KEEPS, so
+// a bare EXISTS would report every trip that was ever shared as still shared,
+// and 'Stop sharing' would appear to do nothing.
+const sharedSQL = `EXISTS (SELECT 1 FROM share_links s
+		WHERE s.traveller_id = t.traveller_id AND s.trip_id = t.id AND s.revoked_at IS NULL)`
+
+const readTripsSQL = `SELECT t.id, t.name, t.started_on, t.ended_on, t.summary, t.cover_asset,
+		t.share_photos, t.share_notes, t.share_coordinates, ` + sharedSQL + `
+	FROM trips t WHERE t.traveller_id = $1::uuid ORDER BY t.id`
 
 const readTripCitiesSQL = `SELECT trip_id, city_id
 	FROM trip_cities WHERE traveller_id = $1::uuid ORDER BY trip_id, ordinal`
@@ -147,7 +154,7 @@ func readTrips(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.T
 		var started, ended sql.NullTime
 		var summary, cover sql.NullString
 		if err := rows.Scan(&t.ID, &t.Name, &started, &ended, &summary, &cover,
-			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates); err != nil {
+			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates, &t.Shared); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a trip: %w", err)
 		}
 		t.Start, t.End = instantOrNil(started), instantOrNil(ended)
@@ -412,9 +419,9 @@ const cityExistsSQL = `SELECT 1 FROM cities WHERE traveller_id = $1::uuid AND id
 
 const mediaObjectExistsSQL = `SELECT 1 FROM media_objects WHERE traveller_id = $1::uuid AND id = $2`
 
-const readOneTripSQL = `SELECT id, name, started_on, ended_on, summary, cover_asset,
-		share_photos, share_notes, share_coordinates
-	FROM trips WHERE traveller_id = $1::uuid AND id = $2`
+const readOneTripSQL = `SELECT t.id, t.name, t.started_on, t.ended_on, t.summary, t.cover_asset,
+		t.share_photos, t.share_notes, t.share_coordinates, ` + sharedSQL + `
+	FROM trips t WHERE t.traveller_id = $1::uuid AND t.id = $2`
 
 const readOneTripsCitiesSQL = `SELECT city_id FROM trip_cities
 	WHERE traveller_id = $1::uuid AND trip_id = $2 ORDER BY ordinal`
@@ -599,7 +606,7 @@ func readOneTrip(ctx context.Context, tx *sql.Tx, travellerID, tripID string) (l
 
 	switch err := tx.QueryRowContext(ctx, readOneTripSQL, travellerID, tripID).
 		Scan(&t.ID, &t.Name, &started, &ended, &summary, &cover,
-			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates); {
+			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates, &t.Shared); {
 	case errors.Is(err, sql.ErrNoRows):
 		return logbook.Trip{}, fmt.Errorf("%w: %s", logbook.ErrNoTrip, tripID)
 	case err != nil:
