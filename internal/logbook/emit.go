@@ -162,6 +162,50 @@ func EmitPlace(p Place) Place {
 	return p
 }
 
+// EmitWalk is the same normalisation for `PUT /v1/walks/{id}`, and it is the
+// THIRD time this rule has had to be written down (CF-BLO-3, PD-15).
+//
+// MEASURED, ON THIS MODULE, AT THIS COMMIT:
+//
+//	bare Walk = {"id":"x","tripId":"","cityId":"",
+//	             "recordedOn":"0001-01-01T00:00:00.000Z","distanceKm":0,
+//	             "points":null,"name":null,"dismissed":false}
+//
+// and `photo.g.dart:47-49` reads `points` as
+// `(json['points'] as List<dynamic>).map(...)` — non-nullable, with no null
+// branch — so the app throws on the answer to its own write. N1's 'Name it'
+// and N1's 'Discard' are both that request.
+//
+// WHAT IT GUARDS IS THE CODE PATH AND NOT THE DATA, AND SAYING SO IS THE
+// HONEST FORM OF IT. Since migration 0003 `walks_points_present_ck` refuses an
+// empty array, and `walks.points` was already NOT NULL — so no STORED walk can
+// have an empty track and this function's `orEmpty` never fires on a row that
+// came out of the database. What it fires on is a `Walk` that was ASSEMBLED
+// rather than re-read: a store answering the request instead of the row, a
+// re-read that forgot to join the points, a zero value returned beside an
+// error nobody checked. Those are exactly the shapes that produced
+// `"cityIds":null` on a running server before `EmitTrip` existed.
+//
+// PHOTO NEEDS NONE AND THE REASON IS STATED SO NOBODY ADDS A NOISE FUNCTION.
+// `Photo` carries no list field, so there is no nil slice for the marshaller
+// to write as null — measured at the same commit:
+//
+//	bare Photo = {"id":"x","tripId":"","cityId":"",
+//	              "takenAt":"0001-01-01T00:00:00.000Z","asset":"",
+//	              "placeId":null,"visitId":null,"caption":null,
+//	              "coordinates":null,"accuracyMetres":null,"filedLater":null}
+//
+// No list key at all, therefore nothing to normalise, and `PUT
+// /v1/photos/{id}` and `POST /v1/photos/{id}/refile` answer a bare entity
+// safely. An `EmitPhoto` would be the empty forwarding method DEC-62 warns
+// against one layer up, with a test over it proving nothing —
+// `TestTheEntitiesWithNoListFieldStillHaveNone` asserts the negative and
+// reddens the day either grows one.
+func EmitWalk(w Walk) Walk {
+	w.Points = orEmpty(w.Points)
+	return w
+}
+
 // Formats is what a 406 names: every version this build can write.
 func Formats() []int { return []int{FormatVersion} }
 

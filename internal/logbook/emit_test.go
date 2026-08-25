@@ -710,20 +710,71 @@ func TestAPlacesVisitsAreEmptyRatherThanNull(t *testing.T) {
 	}
 }
 
-// AND THE TWO ENTITIES THAT NEED NO EmitX ARE ASSERTED TO NEED NONE, so nobody
-// adds two functions that are noise and nobody deletes the reason.
+// A WALK'S POINTS ARE THE SAME RULE A THIRD TIME, AND THIS IS THE ROUTE THE
+// CLIENT THROWS ON (CF-BLO-3, PD-15).
 //
-// `City` and `Traveller` carry no list field at all, so there is no nil slice
-// for encoding/json to write as null — which is a fact about the STRUCT rather
-// than about a call site, and the day somebody adds a list to either, this leg
-// is what says an emitter has to arrive with it.
-func TestACityAndATravellerCarryNoListAndThereforeNeedNoEmitter(t *testing.T) {
+// `photo.g.dart:47-49` reads `points` as `(json['points'] as List<dynamic>)`
+// with no null branch, and `PUT /v1/walks/{id}` answers a Walk — so N1's 'Name
+// it' and N1's 'Discard' both get an answer the app cannot decode without
+// EmitWalk.
+//
+// THE INPUT IS A WALK WITH NO POINTS, WHICH IS A SHAPE NO ROW CAN HOLD, AND
+// THAT IS THE POINT RATHER THAN A FLAW IN THE LEG. Since 0003's
+// `walks_points_present_ck` an empty track is refused by the schema, so what
+// EmitWalk guards is a Walk that was ASSEMBLED rather than read back — a zero
+// value, a re-read that forgot to join the points, a store answering the
+// request instead of the row. Those are exactly the shapes that put
+// `"cityIds":null` on a running server before EmitTrip existed.
+func TestAWalksPointsAreEmptyRatherThanNull(t *testing.T) {
+	unread := logbook.Walk{ID: "w-busan", TripID: "autumn-crossing", CityID: "busan"}
+	if unread.Points != nil {
+		t.Fatalf("this leg's input already carries a list, so it proves nothing")
+	}
+
+	inside := emitted(t, logbook.Document{Walks: []logbook.Walk{unread}})
+	if !strings.Contains(string(inside), `"points":[]`) {
+		t.Errorf("inside the document: %s, want `\"points\":[]`", inside)
+	}
+
+	bare, err := json.Marshal(unread)
+	if err != nil {
+		t.Fatalf("marshalling a bare walk: %v", err)
+	}
+	if !strings.Contains(string(bare), `"points":null`) {
+		t.Fatalf("a bare Walk no longer marshals `\"points\":null` (%s), so the rest of "+
+			"this leg is about nothing — re-derive the reason EmitWalk exists before "+
+			"deleting it", bare)
+	}
+
+	answered, err := json.Marshal(logbook.EmitWalk(unread))
+	if err != nil {
+		t.Fatalf("marshalling the write's answer: %v", err)
+	}
+	if !strings.Contains(string(answered), `"points":[]`) {
+		t.Errorf("the write's answer: %s, want `\"points\":[]`", answered)
+	}
+}
+
+// AND THE THREE ENTITIES THAT NEED NO EmitX ARE ASSERTED TO NEED NONE, so
+// nobody adds three functions that are noise and nobody deletes the reason.
+//
+// `City`, `Traveller` and `Photo` carry no list field at all, so there is no
+// nil slice for encoding/json to write as null — which is a fact about the
+// STRUCT rather than about a call site, and the day somebody adds a list to
+// any of them, this leg is what says an emitter has to arrive with it.
+//
+// PHOTO JOINS AT R7, AND IT IS THE ONE WORTH NAMING: `PUT /v1/photos/{id}` and
+// `POST /v1/photos/{id}/refile` both answer a bare `Photo`, so this leg is the
+// only thing standing between that decision and an `EmitPhoto` somebody adds
+// for symmetry.
+func TestACityATravellerAndAPhotoCarryNoListAndThereforeNeedNoEmitter(t *testing.T) {
 	for _, entity := range []struct {
 		name  string
 		value any
 	}{
 		{"City", logbook.City{ID: "kyoto", Name: "Kyoto"}},
 		{"Traveller", logbook.Traveller{Name: "Matt"}},
+		{"Photo", logbook.Photo{ID: "ph-0", TripID: "autumn-crossing", CityID: "seoul"}},
 	} {
 		raw, err := json.Marshal(entity.value)
 		if err != nil {
@@ -743,10 +794,26 @@ func TestACityAndATravellerCarryNoListAndThereforeNeedNoEmitter(t *testing.T) {
 					"key in this document is read by the client as a non-nullable List",
 					entity.name, key, entity.name)
 			}
-			if string(value) == "null" && key != "coverAsset" {
-				t.Errorf("%s.%s is null and is not the nullable cover — check whether it "+
-					"is a list before assuming this entity still needs no emitter",
-					entity.name, key)
+		}
+
+		// AND THE CLAIM IS ASSERTED ON THE STRUCT RATHER THAN ONLY ON ONE
+		// VALUE'S JSON, which is what makes it about the TYPE.
+		//
+		// IT USED TO BE A NULL-COUNTING HEURISTIC — "a null that is not
+		// `coverAsset` is suspicious" — and R7 is where that stopped scaling:
+		// `Photo` has SIX nullable fields (placeId, visitId, caption,
+		// coordinates, accuracyMetres, filedLater) and every one of them is a
+		// legal null the client reads. Widening the name list would have
+		// weakened the check to nothing. Asking the type whether any field is
+		// a slice is the thing the heuristic was standing in for, and it
+		// cannot be satisfied by a value that happens to be populated.
+		for i, kind := 0, reflect.TypeOf(entity.value); i < kind.NumField(); i++ {
+			switch field := kind.Field(i); field.Type.Kind() {
+			case reflect.Slice, reflect.Array:
+				t.Errorf("%s.%s is a %s, so this entity now needs an Emit%s: a nil "+
+					"slice marshals to `null`, and the client reads every list key "+
+					"in this document as a non-nullable List",
+					entity.name, field.Name, field.Type, entity.name)
 			}
 		}
 	}

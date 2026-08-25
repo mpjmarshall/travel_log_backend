@@ -45,6 +45,31 @@ var ErrNoTrip = errors.New("logbook: no such trip")
 // 404. A sentinel nothing returns is a branch nothing takes.
 var ErrNoPlace = errors.New("logbook: no such place")
 
+// ErrNoPhoto is a route naming a photograph this log does not hold, and it is
+// the first sentinel here that a route answers 404 with rather than only using
+// for a re-read.
+//
+// THE ASYMMETRY IS THE CLIENT'S OWN AND IT IS WORTH READING BESIDE ErrNoTrip.
+// `setPhotoCaption` answers false for an id the log does not hold — a set
+// "asks for a value the log then has to hold" — while `deletePhoto` answers
+// TRUE for one, because the caller asked for that photograph to be absent and
+// it is. So `POST /v1/photos/{id}/refile` is a 404 and `DELETE
+// /v1/photos/{id}` is a 204 on the same unknown id, and neither is a
+// concession.
+//
+// `PUT /v1/photos/{id}` IS NEITHER, AND THAT IS DEC-33 RATHER THAN A THIRD
+// ANSWER. It is an upsert on a client-minted key, so an unknown id is a
+// CREATE — and a create not carrying what a NOT NULL column needs is a 422
+// naming that column, which is exactly what `PUT /v1/places/{id}` already
+// answers a body of `{plan}` on an id the log has never held.
+var ErrNoPhoto = errors.New("logbook: no such photograph")
+
+// ErrNoWalk is the same for a walk, and it is reachable through ONE route's
+// own re-read only: there is no `DELETE /v1/walks/{id}`, because N1's
+// 'Discard' is a flag and not a deletion. "Discarding the nudge and discarding
+// the recording are different things, and only the first is drawn on N1."
+var ErrNoWalk = errors.New("logbook: no such walk")
+
 // Snapshot is what one read saw. Document is nil when `assemble` said no,
 // which is exactly the 304 path and is what makes "the 304 does not assemble
 // the document" a fact about the type rather than a claim.
@@ -153,6 +178,59 @@ type PlaceStore interface {
 	// for an id the log does not hold, because the caller asked for that place
 	// to be absent and it is.
 	RemovePlace(ctx context.Context, travellerID, placeID string, deletePhotos bool) (Snapshot, error)
+}
+
+// PhotoStore is R7's four photograph routes, declared here and satisfied by
+// internal/postgres.
+//
+// IT IS ITS OWN PORT rather than four more methods on Store, on ShareStore's
+// and PlaceStore's precedent and for the reason stated there: the interface a
+// handler is handed says what that handler can reach. The photo handlers
+// cannot delete a trip and the trip handler cannot unfile a photograph.
+type PhotoStore interface {
+	// PutPhoto is M2's note and DEC-33's create, and IT WRITES NEITHER
+	// `place_id` NOR `visit_id` — see logbook.PhotoWrite, which has no slot
+	// for either.
+	PutPhoto(ctx context.Context, travellerID string, w PhotoWrite) (Photo, int64, error)
+
+	// DeletePhoto is D1, and it is NON-CASCADING: nothing in this schema
+	// references a photograph. An unknown id is a SUCCESS that MOVES NO
+	// VERSION, exactly as it is on DeleteTrip and RemovePlace — the client's
+	// own `deletePhoto` answers true for an id the log does not hold, and a
+	// bump on a retried delete throws away the phone's whole cached document.
+	//
+	// It answers the version rather than a document, because the caller can
+	// splice a deletion: one id left the log and nothing else moved.
+	DeletePhoto(ctx context.Context, travellerID, photoID string) (int64, error)
+
+	// SnoozePhotos is N1's 'Later', ALL-OR-NOTHING IN ONE TRANSACTION WITH ONE
+	// VERSION BUMP.
+	//
+	// AN UNKNOWN ID IS SKIPPED RATHER THAN FATAL, matching the client's own
+	// method: "the row was derived from the log a frame ago and a photograph
+	// deleted since is one that no longer needs filing". A group that matches
+	// NOTHING writes nothing and moves no version, which is the client's
+	// "returns false without writing when the group is empty".
+	//
+	// It answers the rows it wrote, in id order, NEVER nil — the phone
+	// splices each one, and what is absent from the answer is what was
+	// skipped. See internal/postgres/photo_store.go for why that slice is
+	// made rather than appended to.
+	SnoozePhotos(ctx context.Context, travellerID string, w SnoozeWrite) ([]Photo, int64, error)
+
+	// RefilePhoto is M2.2's 'Change', and it is reached through
+	// `Service.RefilePhoto` rather than directly — see service.go for the one
+	// refusal that lives above this line.
+	RefilePhoto(ctx context.Context, travellerID, photoID string, w RefileWrite) (PhotoRefiled, error)
+}
+
+// WalkStore is N1's two walk writes, and it is ONE METHOD because they are one
+// route: `setWalkName` and `dismissWalk` write two columns of one row, and
+// DEC-89's contract is what tells them apart.
+type WalkStore interface {
+	// PutWalk writes the fields that were sent and LEAVES `points` ALONE when
+	// the key is absent. That branch is the whole of SAF-MAJ-6.
+	PutWalk(ctx context.Context, travellerID string, w WalkWrite) (Walk, int64, error)
 }
 
 // ShareStore is H1's three writes, declared here and satisfied by

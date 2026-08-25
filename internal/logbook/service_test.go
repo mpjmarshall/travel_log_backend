@@ -64,8 +64,11 @@ func TestTheServiceHasOnlyTheOperationsDEC62Named(t *testing.T) {
 	// which would make it say "the methods that are there are there". R3
 	// shipped CommitMedia; R6 ships RemovePlace, which is the operation
 	// DEC-62 named for "two branches, and a statement ORDER that silently
-	// inverts D2's promise if reversed".
-	for _, shipped := range []string{"CommitMedia", "RemovePlace"} {
+	// inverts D2's promise if reversed". R7 ships RefilePhoto, which is the
+	// operation DEC-62 named for the server VALIDATING the occasion the client
+	// chose rather than choosing one — and which is the last of the three, so
+	// this list stops growing here.
+	for _, shipped := range []string{"CommitMedia", "RefilePhoto", "RemovePlace"} {
 		if !slicesContains(got, shipped) {
 			t.Fatalf("logbook.Service has %v and not %s, which is a shipped step's "+
 				"whole reason for touching this file", got, shipped)

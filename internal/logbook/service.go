@@ -76,6 +76,11 @@ type Service struct {
 	// own log and is plain CRUD the handler reaches directly. A second
 	// interface declaring one of two methods would be ceremony.
 	Places PlaceStore
+
+	// Photos is R7's port, and it is the WHOLE PhotoStore for the reason
+	// Places is: the other three methods are the same traveller's own log and
+	// are plain CRUD the handlers reach directly.
+	Photos PhotoStore
 }
 
 // RemovePlace is D2, and it is the SECOND of the three operations DEC-62 named
@@ -116,6 +121,58 @@ func (s Service) RemovePlace(ctx context.Context, travellerID, placeID string, p
 		return Snapshot{}, err
 	}
 	return s.Places.RemovePlace(ctx, travellerID, placeID, photos == DeletePhotos)
+}
+
+// RefilePhoto is M2.2's 'Change', and it is the THIRD and last of the
+// operations DEC-62 named (PD-05). CommitMedia is R3's and RemovePlace is
+// R6's.
+//
+// WHAT IT OWNS IS THE SERVER'S AUTHORITY TO CHOOSE, AND IT REFUSES TO HAVE
+// ANY. The whole reason this route validates rather than re-derives is that
+// the obvious implementation is plausible and wrong: an unordered
+// `SELECT … FROM visits WHERE place_id = $1 AND trip_id = $2 LIMIT 1` files
+// the photograph to whichever row the planner happened to return, and every
+// field in the answer is individually valid. The client's own `refilePhoto`
+// already picks — `place.visitsOn(photo.tripId).firstOrNull` — so the pick has
+// been made, once, by the thing holding the screen; a second picker is a
+// second answer to a question that has one.
+//
+// THE TEST OF A FORWARDING METHOD IS WHETHER DELETING IT CHANGES ANYTHING,
+// AND THIS ONE HAS A MEASURED ANSWER. Delete it and a body with no `visitId`
+// reaches `PhotoStore.RefilePhoto`, whose parameterised `visit_id = $n` is
+// then NULL — so the photograph is written naming a PLACE WITH NO OCCASION,
+// which is the half-record state the client's model has never expressed
+// (across all 284 fixture photographs: 95 carry both, 189 carry neither,
+// place-only 0, visit-only 0). The mutation reddens
+// `TestARefileThatNamesNoOccasionIsRefusedBeforeAnyStatementRuns` and the
+// half-filed count with it.
+//
+// IT IS THINNER THAN RemovePlace AND THE THINNESS IS ARGUED RATHER THAN
+// APOLOGISED FOR, on that method's own precedent. `ValidateRefile` is about
+// the SHAPE of the ids it was handed — the split ValidateCity already makes
+// with "a city needs a name" — and this is about whether they were handed over
+// at all. Both refusals are `InvalidFieldError`, so they reach the client as
+// the 422 that says which field, through the same mapping every other refusal
+// in this API goes through.
+func (s Service) RefilePhoto(ctx context.Context, travellerID, photoID string, w RefileWrite) (PhotoRefiled, error) {
+	if s.Photos == nil {
+		return PhotoRefiled{}, errors.New("logbook: the photo service has no store")
+	}
+	if w.PlaceID == nil {
+		return PhotoRefiled{}, InvalidFieldError{Field: "placeId",
+			Why: "a re-file names the pin it is filing to; M2.2 lists the pins in the " +
+				"photograph's own city and there is no 'nowhere' among them"}
+	}
+	if w.VisitID == nil {
+		return PhotoRefiled{}, InvalidFieldError{Field: "visitId",
+			Why: "a re-file names the OCCASION as well as the pin, and the client is what " +
+				"chooses it — a place can be visited more than once on one trip (the " +
+				"fixture visits Nishiki four times in one day), so a server picking for " +
+				"itself would file the photograph to whichever row the planner returned. " +
+				"Send the id of an existing occasion, or a fresh id and `visitAt` to " +
+				"open a new one"}
+	}
+	return s.Photos.RefilePhoto(ctx, travellerID, photoID, w)
 }
 
 // CommitMedia is `POST /v1/media/{id}/commit`: HEAD the bucket, verify what
