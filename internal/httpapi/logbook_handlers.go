@@ -191,7 +191,22 @@ func writeLogbookFailure(w http.ResponseWriter, r *http.Request, log *slog.Logge
 		httpx.WriteFieldError(w, r, invalid.Field)
 	case errors.Is(err, logbook.ErrNoTraveller):
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)
-	case errors.Is(err, logbook.ErrNoTrip):
+	case errors.Is(err, logbook.ErrNoTrip),
+		errors.Is(err, logbook.ErrNoPlace),
+		errors.Is(err, logbook.ErrNoPhoto),
+		errors.Is(err, logbook.ErrNoWalk):
+		// FOUR SENTINELS AND ONE BRANCH, because to a client they are one
+		// condition: the thing this request is ABOUT is not in your log. Which
+		// kind it was is in the message and not in the code — DEC-12's
+		// vocabulary is closed, and `not_found` is the word for all four.
+		//
+		// THREE OF THE FOUR ARE ONLY EVER RAISED BY A RE-READ AFTER AN UPSERT,
+		// which is a 500-shaped bug rather than a client error, and mapping
+		// them here is deliberate anyway: a 404 tells the client to stop
+		// retrying, which is the right instruction for a row that is gone.
+		// `ErrNoPhoto` is the one a route raises on purpose — M2.2's re-file,
+		// where the client's own method answers false for an id the log does
+		// not hold.
 		httpx.WriteError(w, r, httpx.CodeNotFound)
 	case errors.Is(err, logbook.ErrUnsupportedFormat):
 		w.Header().Set(formatHeader, emittableFormats())

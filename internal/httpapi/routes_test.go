@@ -24,27 +24,33 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	// SIXTEEN AT R6, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
-	// `len(Routes(...))` would make this line unfalsifiable — it would say
+	// TWENTY-ONE AT R7, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it
+	// from `len(Routes(...))` would make this line unfalsifiable — it would say
 	// "the table holds as many routes as the table holds". What it is for is
 	// that a route ARRIVING or LEAVING is a decision somebody made, and it
 	// should cost one line in a test rather than nothing at all. It was four
 	// at VS7; R3 added begin, commit and mint; R5 added six — D3's cascade,
-	// H1's three share writes, U1's pencil and the one revocation surface.
+	// H1's three share writes, U1's pencil and the one revocation surface; R6
+	// added three; R7 adds five.
 	//
 	// R5's SIX WAS NOT SEVEN BECAUSE "REVOKE THEM ALL" IS A QUERY PARAMETER,
 	// AND R6's THREE IS NOT FOUR FOR THE SAME REASON: `?photos=keep|delete`
-	// rides on `DELETE /v1/places/{id}`. The plan's own table holds 23 rows at
-	// the end of R8 — 22 of them here, because `/healthz` is cmd/api's — and
-	// allots this step three: T5's city, C1's pin and D2's removal. There is
-	// deliberately NO `DELETE /v1/cities/{id}`: the client has no
-	// delete-a-city control, so no sheet copy authorises the cascade (DEC-57),
-	// and the three city foreign keys are RESTRICT.
-	if len(routes) != 16 {
-		t.Errorf("the table holds %d routes; R6's surface is sixteen — two credential "+
-			"routes, one conditional read, one whole-state write, D3's cascade, T5's "+
-			"city, C1's pin, D2's removal, H1's three share writes, U1's pencil, the "+
-			"revocation surface, and the three media routes", len(routes))
+	// rides on `DELETE /v1/places/{id}`. R7's FIVE IS NOT SIX BECAUSE N1's two
+	// walk controls are two fields of one body on one path — `setWalkName` and
+	// `dismissWalk` write two columns of one row, and DEC-89's contract is what
+	// tells them apart. There is deliberately no `DELETE /v1/walks/{id}`:
+	// 'Discard' is a flag, D2's sheet promises the track survives both
+	// branches, and nothing in this app authorises destroying a recording of a
+	// day — the same argument that leaves `DELETE /v1/cities/{id}` out of R6.
+	//
+	// The plan's own table holds 22 rows at the end of R8 — `/healthz` is
+	// cmd/api's and is not one of them — so R8's public read is the last.
+	if len(routes) != 21 {
+		t.Errorf("the table holds %d routes; R7's surface is twenty-one — two "+
+			"credential routes, one conditional read, one whole-state write, D3's "+
+			"cascade, T5's city, C1's pin, D2's removal, H1's three share writes, "+
+			"U1's pencil, the revocation surface, the three media routes, R7's four "+
+			"photograph routes and N1's one walk route", len(routes))
 	}
 
 	for _, route := range routes {

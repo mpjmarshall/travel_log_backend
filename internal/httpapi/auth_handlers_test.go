@@ -306,6 +306,10 @@ func newHarness(t *testing.T, opt options) *harness {
 	// THE GEOGRAPHY TWIN IS ONE STRUCT SATISFYING BOTH R6 PORTS, because a
 	// place write names a city and the two have to agree about what exists.
 	geography := &fakeGeography{books: books}
+	// THE MOMENTS TWIN IS ONE STRUCT SATISFYING BOTH R7 PORTS, over the same
+	// document — so a photograph written here is one a later re-file can name,
+	// and a walk written here is one N1's Discard can flag.
+	moments := &fakeMoments{books: books}
 	// THE MEDIA TWIN IS THE REAL ONE (media.Memory), NOT A STUB THAT SAYS YES.
 	// It enforces the digest, the exact length, the content type, the
 	// write-once and a bucket that has to exist — because a twin that accepts
@@ -323,6 +327,8 @@ func newHarness(t *testing.T, opt options) *harness {
 		Share:          &fakeShare{books: books},
 		Cities:         geography,
 		Places:         geography,
+		Photos:         moments,
+		Walks:          moments,
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(opt.ratePerMin, nil),
 		TravellerLimit: httpx.NewLimiter(opt.travellerPerMin, nil),
