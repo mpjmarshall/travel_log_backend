@@ -65,14 +65,27 @@ const createSessionSQL = `INSERT INTO sessions (id, traveller_id, token_hash, ex
 // FOUND by an indexed equality, which is not constant-time and cannot be; spec
 // L24 asks for the comparison all the same, so the service re-checks it with
 // subtle.ConstantTimeCompare and needs the bytes to do it.
-const sessionByTokenHashSQL = `SELECT s.id, s.traveller_id, s.token_hash, s.expires_at, s.revoked_at,
+const sessionByTokenHashSQL = `SELECT s.id, s.traveller_id, s.token_hash,
+		s.last_used_at, s.expires_at, s.revoked_at,
 		t.id, t.email, t.name
 	FROM sessions s JOIN travellers t ON t.id = s.traveller_id
 	WHERE s.token_hash = $1`
 
+// travellerExistsAtAllSQL is DEC-86's question, and it is `SELECT 1 … LIMIT 1`
+// rather than a count: the question is whether ANY row is there, and a count
+// over a table that will hold one row is the same answer with a worse habit.
+const travellerExistsAtAllSQL = `SELECT 1 FROM travellers LIMIT 1`
+
 // touchSessionSQL names the traveller as well as the session, so one
 // traveller's request cannot touch another's row even if the ids were crossed
 // somewhere above.
+//
+// IT CARRIES NO `last_used_at < …` PREDICATE, and the granularity DEC-100 asks
+// for is decided in internal/auth instead. Putting it here would be one fewer
+// branch and would collapse two answers into one: this UPDATE reports
+// ErrNoSession when it matches nothing, which is how a session deleted between
+// the lookup and the write is noticed, and a FRESH session matches nothing
+// too. See Service.Authenticate.
 const touchSessionSQL = `UPDATE sessions SET last_used_at = $3
 	WHERE id = $1::uuid AND traveller_id = $2::uuid`
 
@@ -145,7 +158,8 @@ func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (au
 	var revoked sql.NullTime
 
 	switch err := s.DB.QueryRowContext(ctx, sessionByTokenHashSQL, tokenHash).Scan(
-		&session.ID, &session.TravellerID, &session.TokenHash, &session.ExpiresAt, &revoked,
+		&session.ID, &session.TravellerID, &session.TokenHash,
+		&session.LastUsedAt, &session.ExpiresAt, &revoked,
 		&tr.ID, &tr.Email, &name,
 	); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -159,13 +173,34 @@ func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (au
 	return session, named(tr, name), nil
 }
 
-// TouchSession writes `last_used_at` under the traveller's lock and MOVES NO
-// VERSION.
+// TouchSession writes `last_used_at`, MOVES NO VERSION, and TAKES NO ADVISORY
+// LOCK (DEC-100).
 //
-// THE ROW COUNT IS CHECKED, and that is what the existence check in
-// WithTravellerLock cannot do on its own: an UPDATE matching nothing reports
-// success, so a session that has been deleted or belongs to somebody else
-// would keep authenticating for as long as the caller believed the answer.
+// IT USED TO GO THROUGH WithTravellerLock AND THAT COST FOUR ROUND TRIPS PER
+// AUTHENTICATED REQUEST. Measured by the performance lens with
+// pg_stat_statements reset around exactly one 304: NINE round trips, five of
+// them to stamp this timestamp — `begin`, `pg_advisory_xact_lock`, `SELECT 1
+// FROM travellers`, this UPDATE, `commit` — against 0.176 ms of total server
+// exec time and a 3.0-4.0 ms wall clock. It also SERIALISED every authenticated
+// request against the phone's own in-flight writes, through the same lock.
+//
+// WHAT THE LOCK WAS BUYING, AND WHY IT WAS NOTHING. tx.go argues at length
+// that a session write must not bump logbook_version, which is correct and is
+// a DIFFERENT QUESTION from whether it should take the write lock. What
+// WithTravellerLock protects is MULTI-STATEMENT work — a delete-then-insert, a
+// read-modify-write, DEC-02's six-way EXISTS check — and this is one UPDATE of
+// one row keyed by session id. The row lock the UPDATE takes itself is the
+// whole of the exclusion it needs.
+//
+// THE ROW COUNT IS STILL CHECKED, and it now does the job the wrapper's
+// existence read used to do as well as its own: an UPDATE matching nothing
+// reports success, so a session that has been deleted, that belongs to
+// somebody else, or whose traveller row is gone would keep authenticating for
+// as long as the caller believed the answer. `WHERE … AND traveller_id = $2`
+// is what makes the third case a miss — the traveller's disappearance takes
+// the session with it through sessions_traveller_fk's cascade — so
+// WithTravellerLock's `SELECT 1 FROM travellers`, a whole extra row read per
+// request, was asking a question this statement already answers.
 //
 // A TRAVELLER WHO IS GONE ANSWERS auth.ErrNoSession RATHER THAN
 // auth.ErrNoTraveller, and the two are genuinely different answers here. This
@@ -173,24 +208,36 @@ func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (au
 // is not live — a 401. Reporting "no such traveller" would make a deleted
 // account a 500.
 func (s AuthStore) TouchSession(ctx context.Context, travellerID, sessionID string, at time.Time) error {
-	err := WithTravellerLock(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, touchSessionSQL, sessionID, travellerID, at)
-		if err != nil {
-			return fmt.Errorf("postgres: touching a session: %w", err)
-		}
-		touched, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("postgres: counting the touched session: %w", err)
-		}
-		if touched == 0 {
-			return fmt.Errorf("%w: %s", auth.ErrNoSession, sessionID)
-		}
-		return nil
-	})
-	if errors.Is(err, ErrNoTraveller) {
-		return fmt.Errorf("%w: the traveller %s is gone", auth.ErrNoSession, travellerID)
+	result, err := s.DB.ExecContext(ctx, touchSessionSQL, sessionID, travellerID, at)
+	if err != nil {
+		return fmt.Errorf("postgres: touching a session: %w", err)
 	}
-	return err
+	touched, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("postgres: counting the touched session: %w", err)
+	}
+	if touched == 0 {
+		return fmt.Errorf("%w: %s", auth.ErrNoSession, sessionID)
+	}
+	return nil
+}
+
+// TravellerExists answers DEC-86's question: does this log already have a
+// traveller?
+//
+// IT OPENS NO TRANSACTION AND TAKES NO LOCK. It is one indexed-free row read
+// on a table that holds at most one row, and what it feeds is a decision the
+// service makes before it hashes anything. The window between this answer and
+// the INSERT that follows it is named in auth.Store's own comment.
+func (s AuthStore) TravellerExists(ctx context.Context) (bool, error) {
+	var one int
+	switch err := s.DB.QueryRowContext(ctx, travellerExistsAtAllSQL).Scan(&one); {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("postgres: asking whether this log has a traveller: %w", err)
+	}
+	return true, nil
 }
 
 // named is the one place a NULL name becomes a nil pointer. DEC-61 leaves the

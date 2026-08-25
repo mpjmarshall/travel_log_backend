@@ -122,6 +122,15 @@ func TestCreateTravellerStartsTheLogbookVersionAtZero(t *testing.T) {
 
 // DEC-60's surviving leg, which DEC-65 made stronger: it now fails at the
 // database rather than depending on a call site remembering a rule.
+//
+// SINCE DEC-86 IT IS THE ONLY THING IN THIS REPOSITORY THAT REACHES
+// travellers_email_lower_key IN THE WRITE DIRECTION, and that is the reason
+// registration's own rule is NOT in `createTravellerSQL`. Putting `WHERE NOT
+// EXISTS (SELECT 1 FROM travellers)` into the INSERT would make every second
+// CreateTraveller answer "no row" — the same answer a duplicate address gives
+// — and this leg would then be measuring the new guard rather than the index.
+// The rule lives in auth.Service.Register instead, where it can also refuse
+// before Argon2 runs; the store keeps the constraint the database owns.
 func TestASecondRegistrationOfOneAddressInAnotherCasingIsRefused(t *testing.T) {
 	store, _, _ := authStore(t)
 	ctx := context.Background()
@@ -309,7 +318,18 @@ func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 	}
 }
 
-func TestCreateSessionAndTouchSessionBothTakeTheTravellerLock(t *testing.T) {
+// DEC-100, MEASURED RATHER THAN READ: a session touch DOES NOT WAIT for the
+// traveller's write lock, and a session CREATE still does.
+//
+// THIS LEG USED TO BE CALLED TestCreateSessionAndTouchSessionBothTakeTheTravellerLock
+// AND IT NEVER TOUCHED A SESSION. Its body created one, blocked, and asserted;
+// TouchSession appeared in the name and nowhere in the code. So when DEC-100
+// took the lock off the touch, this leg stayed green — the rule leg in
+// tx_sweep_test.go is what went red. That is this project's own class 9
+// ("a test whose name promises a behaviour must assert that behaviour")
+// landing on a leg that had carried the wrong name since VS6, and it is why
+// both halves are asserted here, in opposite directions, against ONE held lock.
+func TestCreateSessionWaitsForTheTravellerLockAndTouchSessionDoesNot(t *testing.T) {
 	store, db, schema := authStore(t)
 	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
 	if err != nil {
@@ -335,8 +355,10 @@ func TestCreateSessionAndTouchSessionBothTakeTheTravellerLock(t *testing.T) {
 	}
 
 	blocked := make(chan error, 1)
+	created := make(chan string, 1)
 	go func() {
-		_, err := store.CreateSession(ctx, tr.ID, digest("a token"), time.Now().UTC().Add(time.Hour))
+		id, err := store.CreateSession(ctx, tr.ID, digest("a token"), time.Now().UTC().Add(time.Hour))
+		created <- id
 		blocked <- err
 	}()
 	select {
@@ -350,13 +372,52 @@ func TestCreateSessionAndTouchSessionBothTakeTheTravellerLock(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("the holding write: %v", err)
 	}
+	var sessionID string
 	select {
 	case err := <-blocked:
 		if err != nil {
 			t.Fatalf("CreateSession, once the lock was free: %v", err)
 		}
+		sessionID = <-created
 	case <-timeout():
 		t.Fatalf("CreateSession never completed after the lock was released")
+	}
+
+	// THE OTHER DIRECTION, AND IT IS THE ONE DEC-100 CHANGED. The lock is
+	// taken again, and this time the write under it must NOT wait: the touch
+	// is one UPDATE of one row keyed by session id, and the row lock it takes
+	// itself is the whole of the exclusion it needs.
+	heldAgain := make(chan struct{})
+	releaseAgain := make(chan struct{})
+	holding := make(chan error, 1)
+	go func() {
+		holding <- WithTravellerLock(ctx, db, tr.ID, func(context.Context, *sql.Tx) error {
+			close(heldAgain)
+			<-releaseAgain
+			return nil
+		})
+	}()
+	<-heldAgain
+	if lockIsFree(t, other, tr.ID) {
+		t.Fatalf("the lock is not held the second time — the fixture is wrong")
+	}
+
+	touched := make(chan error, 1)
+	go func() { touched <- store.TouchSession(ctx, tr.ID, sessionID, time.Now().UTC()) }()
+	select {
+	case err := <-touched:
+		if err != nil {
+			t.Errorf("TouchSession while the lock was held: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("TouchSession blocked on the traveller's advisory lock.\n" +
+			"    DEC-100: it writes one row keyed by session id and the lock buys it\n" +
+			"    nothing the row lock does not — and taking it SERIALISES every\n" +
+			"    authenticated request against the phone's own in-flight writes.")
+	}
+	close(releaseAgain)
+	if err := <-holding; err != nil {
+		t.Fatalf("the second holding write: %v", err)
 	}
 }
 
@@ -507,5 +568,90 @@ func TestCreateSessionRefusesATravellerThatIsNotThere(t *testing.T) {
 			"    The foreign key would refuse the INSERT anyway; what this asserts is that the\n"+
 			"    answer is a NAMED sentinel and not a driver error, because the caller's\n"+
 			"    response differs — an unknown traveller is a 401 and a driver error is a 500.", err)
+	}
+}
+
+// DEC-100's INPUT. The granularity decision is made in internal/auth from
+// `Session.LastUsedAt`, so a store that leaves the field at its zero value
+// makes every session look infinitely stale and puts the per-request write
+// back with every other leg still green — including the rule leg in
+// tx_sweep_test.go, which reads the file and not the row.
+//
+// IT ASSERTS THE VALUE AND NOT ONLY THE PRESENCE. `sessions.last_used_at` is
+// `NOT NULL DEFAULT now()`, so a fresh session's stamp is the moment it was
+// created: the assertion is that it sits between the instant before the
+// CreateSession call and the instant after it. A leg checking `!IsZero()`
+// would pass against a column scanned from `created_at`, from `expires_at`, or
+// from any other timestamp on the row.
+func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
+	store, _, tr := withTravellerRow(t)
+	ctx := context.Background()
+	hash := digest("a token")
+
+	before := time.Now().UTC().Add(-time.Second)
+	if _, err := store.CreateSession(ctx, tr.ID, hash, time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	after := time.Now().UTC().Add(time.Second)
+
+	session, _, err := store.SessionByTokenHash(ctx, hash)
+	if err != nil {
+		t.Fatalf("SessionByTokenHash: %v", err)
+	}
+	if session.LastUsedAt.Before(before) || session.LastUsedAt.After(after) {
+		t.Errorf("last_used_at = %s, want it between %s and %s.\n"+
+			"    DEC-100 compares this against the clock to decide whether to write it.\n"+
+			"    A zero value reports every session as infinitely stale, which is the\n"+
+			"    per-request write the ruling exists to remove.",
+			session.LastUsedAt.UTC(), before, after)
+	}
+
+	// AND THE TOUCH MOVES IT, which is what makes the read above an input to
+	// something rather than a field nobody uses.
+	want := time.Date(2027, 10, 12, 9, 0, 0, 0, time.UTC)
+	if err := store.TouchSession(ctx, tr.ID, session.ID, want); err != nil {
+		t.Fatalf("TouchSession: %v", err)
+	}
+	again, _, err := store.SessionByTokenHash(ctx, hash)
+	if err != nil {
+		t.Fatalf("SessionByTokenHash, again: %v", err)
+	}
+	if !again.LastUsedAt.UTC().Equal(want) {
+		t.Errorf("last_used_at = %s after a touch, want %s", again.LastUsedAt.UTC(), want)
+	}
+}
+
+// DEC-86's question, against the real table.
+//
+// IT ASKS ABOUT THE TABLE AND NOT ABOUT AN ADDRESS, which is the whole
+// difference between this and DEC-65's unique index: `TravellerByEmail` is
+// about one address and this is about whether the log belongs to anybody yet.
+// A store that answered by looking a particular address up would report an
+// empty log to a stranger, which is exactly the state the ruling closes.
+func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
+	store, _, _ := authStore(t)
+	ctx := context.Background()
+
+	held, err := store.TravellerExists(ctx)
+	if err != nil {
+		t.Fatalf("TravellerExists on an empty table: %v", err)
+	}
+	if held {
+		t.Fatalf("TravellerExists is true on an empty table")
+	}
+
+	if _, err := store.CreateTraveller(ctx, "matt@example.com", "$argon2id$stub"); err != nil {
+		t.Fatalf("CreateTraveller: %v", err)
+	}
+
+	held, err = store.TravellerExists(ctx)
+	if err != nil {
+		t.Fatalf("TravellerExists after a registration: %v", err)
+	}
+	if !held {
+		t.Errorf("TravellerExists is false with a traveller in the table.\n" +
+			"    DEC-86: registration closes once ANY traveller row exists, whatever\n" +
+			"    address it holds. Answering by address would report an empty log to a\n" +
+			"    stranger, which is the state the ruling closes.")
 	}
 }

@@ -29,6 +29,21 @@ type fakeStore struct {
 	nextID     int
 	failWith   error
 	touched    []string
+
+	// clock is what `sessions.last_used_at DEFAULT now()` is in the fake, and
+	// it is not decoration: DEC-100 decides whether to touch by comparing the
+	// STORED value against the clock, so a fake that left LastUsedAt at the
+	// zero time would report every session as infinitely stale and touch on
+	// every request — which is exactly the behaviour the granularity leg
+	// exists to refuse, passing.
+	clock func() time.Time
+}
+
+func (f *fakeStore) now() time.Time {
+	if f.clock == nil {
+		return time.Time{}
+	}
+	return f.clock()
 }
 
 type storedTraveller struct {
@@ -87,8 +102,9 @@ func (f *fakeStore) CreateSession(_ context.Context, travellerID string, tokenHa
 	f.sessions[string(tokenHash)] = storedSession{
 		Session: Session{
 			ID: id, TravellerID: travellerID,
-			TokenHash: append([]byte(nil), tokenHash...),
-			ExpiresAt: expiresAt,
+			TokenHash:  append([]byte(nil), tokenHash...),
+			LastUsedAt: f.now(),
+			ExpiresAt:  expiresAt,
 		},
 		traveller: owner,
 	}
@@ -106,12 +122,27 @@ func (f *fakeStore) SessionByTokenHash(_ context.Context, tokenHash []byte) (Ses
 	return held.Session, held.traveller, nil
 }
 
-func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID string, _ time.Time) error {
+func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID string, at time.Time) error {
 	if f.failWith != nil {
 		return f.failWith
 	}
 	f.touched = append(f.touched, travellerID+"/"+sessionID)
+	for key, held := range f.sessions {
+		if held.ID == sessionID {
+			held.LastUsedAt = at
+			f.sessions[key] = held
+		}
+	}
 	return nil
+}
+
+// TravellerExists is DEC-86's question, and the fake answers it the way the
+// table does: any row at all, whatever its address.
+func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
+	if f.failWith != nil {
+		return false, f.failWith
+	}
+	return len(f.travellers) > 0, nil
 }
 
 const testNow = "2027-10-12T09:00:00Z"
@@ -127,10 +158,26 @@ func at(t *testing.T, s string) time.Time {
 
 func newTestService(t *testing.T, store Store) *Service {
 	t.Helper()
+	return newServiceAtClock(t, store, func() time.Time { return at(t, testNow) })
+}
+
+// newServiceAtClock is newTestService with a clock a leg can move, AND IT HANDS
+// THE SAME CLOCK TO THE FAKE STORE.
+//
+// That second half is load-bearing rather than tidy. `sessions.last_used_at`
+// is `NOT NULL DEFAULT now()` in the schema, so a session is born fresh; a
+// fake whose sessions are born at the zero time reports every one of them as
+// infinitely stale, and DEC-100's granularity leg would pass against an
+// implementation that touched on every single request.
+func newServiceAtClock(t *testing.T, store Store, now func() time.Time) *Service {
+	t.Helper()
+	if fake, held := store.(*fakeStore); held {
+		fake.clock = now
+	}
 	return &Service{
 		Store:  store,
 		Hasher: Argon2id{Params: cheap.Params},
-		Now:    func() time.Time { return at(t, testNow) },
+		Now:    now,
 	}
 }
 
@@ -272,17 +319,82 @@ func TestRegisterStoresTheAddressAsTypedAndDoesNotLowercaseIt(t *testing.T) {
 	}
 }
 
-func TestRegisterRefusesAnAddressThatIsAlreadyHeld(t *testing.T) {
+// DEC-86. REGISTRATION CLOSES AFTER THE FIRST TRAVELLER, AND THE ADDRESS HAS
+// STOPPED MATTERING — which is the whole of the change and is why this leg
+// replaces TestRegisterRefusesAnAddressThatIsAlreadyHeld rather than sitting
+// beside it.
+//
+// The old leg asserted a second registration of ONE address was refused, and
+// its name promised that the address was the reason. It is not the reason any
+// more: a second registration of ANY address is refused, so a leg that only
+// tried the same address would pass against a build that still handed a
+// stranger an account.
+//
+// THE ORACLE SHRINKS RATHER THAN GROWS. Before, a 409 told a caller that THAT
+// ADDRESS is registered here. Now it tells them the instance is in use, which
+// the sign-in page already tells them. The two cases are asserted to answer
+// the SAME sentinel for that reason.
+func TestRegistrationClosesAfterTheFirstTraveller(t *testing.T) {
+	for _, second := range []string{
+		"matt@example.com",
+		"MATT@EXAMPLE.COM",
+		"a-total-stranger@example.com",
+	} {
+		t.Run(second, func(t *testing.T) {
+			store := newFakeStore()
+			s := newTestService(t, store)
+			ctx := context.Background()
+
+			if _, err := s.Register(ctx, "matt@example.com", "a long enough passphrase"); err != nil {
+				t.Fatalf("first Register: %v", err)
+			}
+			_, err := s.Register(ctx, second, "a different long passphrase")
+			if !errors.Is(err, ErrRegistrationClosed) {
+				t.Errorf("registering %q second answered %v, want ErrRegistrationClosed.\n"+
+					"    Ruling 3 is single-user. A stranger who registers on a deployed\n"+
+					"    instance gets an authenticated account carrying a 600/min budget\n"+
+					"    and, from R6, a `?photos=delete`.", second, err)
+			}
+		})
+	}
+}
+
+// AND THE REFUSAL COSTS NO ARGON2, which is why the rule is asked of the store
+// rather than left to the INSERT to answer.
+//
+// Hashing is 64 MiB and tens of milliseconds by design (DEC-08). A closed
+// instance that pays that on every attempt is an unauthenticated memory sink
+// behind a route on which nobody can ever succeed — DEC-48's per-address
+// ceiling bounds it, and a bound on work nobody should be doing at all is the
+// weaker of the two guards.
+//
+// IT COUNTS CALLS RATHER THAN TIMING THEM, which is the shape PD-12 asks for
+// everywhere in this package: a timing assertion on a machine running a test
+// suite is a flake with a comment over it.
+func TestAClosedRegistrationRefusesBeforeItHashesAnything(t *testing.T) {
 	store := newFakeStore()
-	s := newTestService(t, store)
+	counting := &countingHasher{Hasher: Argon2id{Params: cheap.Params}}
+	s := newServiceAtClock(t, store, func() time.Time { return at(t, testNow) })
+	s.Hasher = counting
 	ctx := context.Background()
 
 	if _, err := s.Register(ctx, "matt@example.com", "a long enough passphrase"); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
-	_, err := s.Register(ctx, "matt@example.com", "a different long passphrase")
-	if !errors.Is(err, ErrEmailTaken) {
-		t.Errorf("the second Register answered %v, want ErrEmailTaken", err)
+	if counting.hashes != 1 {
+		t.Fatalf("the first Register hashed %d times, want 1 — the fixture is wrong", counting.hashes)
+	}
+
+	for range 5 {
+		if _, err := s.Register(ctx, "stranger@example.com", "a long enough passphrase"); !errors.Is(err, ErrRegistrationClosed) {
+			t.Fatalf("Register on a closed instance = %v", err)
+		}
+	}
+	if counting.hashes != 1 {
+		t.Errorf("five refused registrations hashed %d more times, want 0.\n"+
+			"    Argon2 is 64 MiB a call. A refusal taken after the hash is an\n"+
+			"    unauthenticated memory sink behind a route nobody can succeed on.",
+			counting.hashes-1)
 	}
 }
 
@@ -445,8 +557,8 @@ func signedIn(t *testing.T) (*Service, *fakeStore, Issued) {
 	return s, store, issued
 }
 
-func TestAuthenticateResolvesTheTravellerAndTouchesTheSession(t *testing.T) {
-	s, store, issued := signedIn(t)
+func TestAuthenticateResolvesTheTraveller(t *testing.T) {
+	s, _, issued := signedIn(t)
 
 	tr, err := s.Authenticate(context.Background(), issued.Token)
 	if err != nil {
@@ -455,8 +567,62 @@ func TestAuthenticateResolvesTheTravellerAndTouchesTheSession(t *testing.T) {
 	if tr.Email != "matt@example.com" {
 		t.Errorf("Authenticate answered %q", tr.Email)
 	}
+}
+
+// DEC-100. THE TOUCH IS PER TouchInterval AND NOT PER REQUEST, and this leg
+// asserts BOTH directions because only the pair is falsifiable: an
+// implementation that never touches passes the first half, and one that
+// touches every time passes the second.
+//
+// THE FRESH-SESSION HALF IS THE ONE THAT MEASURES THE CHANGE. A sign-in writes
+// `last_used_at` — the column defaults to now() — so the very next request is
+// against a session seconds old, which is the state EVERY request after the
+// first is in for a phone that syncs. Before DEC-100 that state cost a
+// transaction, an advisory lock, an existence read, an UPDATE and a commit:
+// five of the nine round trips one 304 was measured to make.
+func TestTheSessionTouchIsPerIntervalAndNotPerRequest(t *testing.T) {
+	store := newFakeStore()
+	clock := at(t, testNow)
+	s := newServiceAtClock(t, store, func() time.Time { return clock })
+	ctx := context.Background()
+
+	if _, err := s.Register(ctx, "matt@example.com", "a long enough passphrase"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	issued, err := s.SignIn(ctx, "matt@example.com", "a long enough passphrase")
+	if err != nil {
+		t.Fatalf("SignIn: %v", err)
+	}
+	if len(store.touched) != 0 {
+		t.Fatalf("signing in touched %d sessions; the fixture is wrong", len(store.touched))
+	}
+
+	// A phone that syncs: many requests, all inside the interval.
+	clock = clock.Add(TouchInterval - time.Second)
+	for range 20 {
+		if _, err := s.Authenticate(ctx, issued.Token); err != nil {
+			t.Fatalf("Authenticate: %v", err)
+		}
+	}
+	if len(store.touched) != 0 {
+		t.Errorf("twenty requests inside TouchInterval wrote last_used_at %d times, want 0.\n"+
+			"    Measured with pg_stat_statements around exactly one 304: stamping this\n"+
+			"    timestamp was FIVE of NINE database round trips, against 0.176ms of\n"+
+			"    total server work.", len(store.touched))
+	}
+
+	// And it is not "never": once the stored value is stale, one write.
+	clock = clock.Add(2 * time.Second)
+	for range 20 {
+		if _, err := s.Authenticate(ctx, issued.Token); err != nil {
+			t.Fatalf("Authenticate: %v", err)
+		}
+	}
 	if len(store.touched) != 1 {
-		t.Errorf("last_used_at was written %d times, want 1", len(store.touched))
+		t.Errorf("twenty requests spanning TouchInterval wrote last_used_at %d times, want 1.\n"+
+			"    A touch that never happens is not granular, it is absent — and the\n"+
+			"    column would then say a live session was last used at sign-in.",
+			len(store.touched))
 	}
 }
 

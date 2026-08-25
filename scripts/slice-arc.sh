@@ -495,7 +495,7 @@ phase_arc() {
 	need curl
 	need jq
 
-	local code base token auth_header shouty traveller_id url
+	local code base token auth_header shouty traveller_id url same_address_body
 
 	step "A0: docker compose down -v — the volume goes, so what follows is real"
 	refuse_the_live_project
@@ -567,19 +567,52 @@ phase_arc() {
 	[ -n "$traveller_id" ] && [ "$traveller_id" != null ] || fail "register returned no id"
 	ok "traveller id $traveller_id"
 
-	# DEC-65: the unique index is on lower(email) and every lookup says
-	# `lower(email) = lower($1)`. THESE TWO STEPS ARE THE ONLY PLACE IN THE ARC
-	# THAT PROVES IT. Register the same address in a different case and the
-	# INDEX — not any Go code — is what refuses it; sign in in a different case
-	# and the functional LOOKUP is what finds it. Lowercase either request and
-	# both steps pass against a plain b-tree on `email`, so the case is the
-	# assertion and not decoration.
+	# DEC-86 CLOSED REGISTRATION AND THAT MOVED WHAT A5 PROVES. It used to
+	# read "the INDEX — not any Go code — is what refuses it", and that is no
+	# longer true of this request: `Service.Register` asks whether ANY
+	# traveller row exists and refuses before the INSERT is ever attempted, so
+	# travellers_email_lower_key is not reached through this route at all. It
+	# is still reached, and the leg that reaches it is
+	# TestASecondRegistrationOfOneAddressInAnotherCasingIsRefused in
+	# internal/postgres, which calls the store directly. Said here because a
+	# step whose comment claims the wrong mechanism is the staleness R2 found
+	# three times in this file.
+	#
+	# A6 IS NOW THE ONLY DEC-65 PROOF IN THE ARC, and it is the lookup half:
+	# sign in with the address in a different case and the functional index is
+	# what finds it. Lowercase that request and the step passes against a plain
+	# b-tree on `email`, so the case is the assertion and not decoration.
 	shouty="$(printf '%s' "$ARC_EMAIL" | tr 'a-z' 'A-Z')"
-	step "A5: POST /v1/auth/register, SAME address UPPERCASED — the index refuses it"
+	step "A5: POST /v1/auth/register, SAME address UPPERCASED — registration is closed"
 	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
 		-d "$(body_json --arg e "$shouty" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
 	assert_eq 409 "$code" "register $shouty"
 	assert_eq conflict "$(jqbody .code)" "the code"
+	same_address_body="$(cat "$WORK/body")"
+
+	# DEC-86, AND IT IS THE STEP THE OLD A5 COULD NOT MAKE. Ruling 3 is
+	# single-user; before this, a stranger who reached a deployed instance
+	# after the owner had registered got an authenticated account carrying a
+	# 600/min traveller budget and, from R6, a `?photos=delete`. The BYTE
+	# COMPARISON is the half that matters: the security lens flagged
+	# 409-on-duplicate as an enumeration surface, and what closes it is the two
+	# answers being the same answer, not the status alone.
+	step "A5b: POST /v1/auth/register, a DIFFERENT address — closed, and indistinguishable"
+	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
+		-d "$(body_json --arg e "a-total-stranger@example.com" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+	assert_eq 409 "$code" "register a stranger"
+	assert_eq conflict "$(jqbody .code)" "the code"
+	assert_eq "$same_address_body" "$(cat "$WORK/body")" \
+		"the stranger's refusal, byte for byte against the same-address refusal"
+
+	# AND A MALFORMED BODY IS STILL A 422 NAMING THE FIELD. Registration being
+	# closed must not swallow the answer a client can act on: 409 says stop
+	# trying, and 422 says fix the body.
+	step "A5c: POST /v1/auth/register with a malformed address — still 422, still names the field"
+	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
+		-d "$(body_json --arg e "not-an-address" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+	assert_eq 422 "$code" "register with a malformed address"
+	assert_eq email "$(jqbody .field)" "the field the 422 names"
 
 	step "A6: POST /v1/auth/session, address UPPERCASED — the functional lookup finds it"
 	code="$(req -X POST "$base/v1/auth/session" -H "$JSON_CT" \

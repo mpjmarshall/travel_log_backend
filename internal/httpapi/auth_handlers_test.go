@@ -37,6 +37,7 @@ type fakeStore struct {
 	owners     map[string]auth.Traveller
 	next       int
 	failWith   error
+	clock      func() time.Time
 }
 
 type stored struct {
@@ -95,9 +96,14 @@ func (f *fakeStore) CreateSession(_ context.Context, travellerID string, tokenHa
 		return "", f.failWith
 	}
 	id := fmt.Sprintf("session-%d", len(f.sessions)+1)
+	// LastUsedAt MIRRORS `sessions.last_used_at NOT NULL DEFAULT now()`, and
+	// it is not decoration: DEC-100 decides whether to stamp the column by
+	// comparing the STORED value against the clock, so a fake whose sessions
+	// are born at the zero time reports every one of them as infinitely stale.
 	f.sessions[string(tokenHash)] = auth.Session{
 		ID: id, TravellerID: travellerID,
-		TokenHash: append([]byte(nil), tokenHash...), ExpiresAt: expiresAt,
+		TokenHash:  append([]byte(nil), tokenHash...),
+		LastUsedAt: f.now(), ExpiresAt: expiresAt,
 	}
 	for _, held := range f.travellers {
 		if held.ID == travellerID {
@@ -124,6 +130,32 @@ func (f *fakeStore) TouchSession(context.Context, string, string, time.Time) err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.failWith
+}
+
+// TravellerExists is DEC-86's question, and the fake answers it the way the
+// table does: any row at all, whatever its address.
+//
+// THE FAKE HONOURS THE RULE RATHER THAN LEAVING IT TO POSTGRESQL, for the
+// reason fakeLogbook honours DEC-89's pointer contract: a fake that says yes
+// to everything makes every handler leg green against the contract the service
+// was just given. It is also what lets the 409 be asserted with no database,
+// which is where R4 measured a 164-leg gap.
+func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return false, f.failWith
+	}
+	return len(f.travellers) > 0, nil
+}
+
+// now is the clock `sessions.last_used_at` defaults to. The harness sets it to
+// the same fixed instant the service reads.
+func (f *fakeStore) now() time.Time {
+	if f.clock == nil {
+		return time.Time{}
+	}
+	return f.clock()
 }
 
 const fixedNow = "2027-10-12T09:00:00Z"
@@ -212,6 +244,12 @@ func newHarness(t *testing.T, opt options) *harness {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(logs, nil))
 	store := newStore()
+	// The same clock the service reads, so a session is born fresh — see
+	// fakeStore.TravellerExists's sibling comment on LastUsedAt.
+	store.clock = func() time.Time {
+		at, _ := time.Parse(time.RFC3339, fixedNow)
+		return at
+	}
 
 	gate, err := auth.NewGate(opt.maxConcurrent)
 	if err != nil {
@@ -429,19 +467,65 @@ func TestRegisterAnswers201WithTheTravellerAndNoTokenAnywhere(t *testing.T) {
 	}
 }
 
-func TestRegisteringAnAddressTwiceInAnotherCasingIs409(t *testing.T) {
+// DEC-86, ON THE WIRE: ANY second registration is 409, and the three are BYTE
+// IDENTICAL.
+//
+// It replaces TestRegisteringAnAddressTwiceInAnotherCasingIs409, whose name
+// promised the CASING was the reason and which would now pass against a build
+// that still handed a stranger an account. The byte comparison is the half
+// that matters: the security lens flagged the old 409-on-duplicate as an
+// enumeration surface, and what closes it is not the status but the response
+// being the same response — a caller cannot tell "that address is taken" from
+// "this instance is in use", because there is nothing left to tell them apart
+// with.
+func TestAnySecondRegistrationIs409AndTheThreeAreIndistinguishable(t *testing.T) {
+	answers := map[string]answer{}
+	for _, second := range []string{"a@b.com", "A@B.com", "a-total-stranger@example.com"} {
+		h := newHarness(t, options{})
+		if got := h.post(t, "/v1/auth/register",
+			`{"email":"A@B.com","passphrase":"a long enough passphrase"}`); got.status != http.StatusCreated {
+			t.Fatalf("the first register = %d %s", got.status, got.body)
+		}
+		got := h.post(t, "/v1/auth/register",
+			fmt.Sprintf(`{"email":%q,"passphrase":"a different long one"}`, second))
+		if got.status != http.StatusConflict {
+			t.Errorf("registering %q second = %d, want 409 — ruling 3 is single-user, "+
+				"and a stranger who registers on a deployed instance gets an "+
+				"authenticated account", second, got.status)
+		}
+		if string(got.body) != `{"code":"conflict"}` {
+			t.Errorf("registering %q second: body = %q, want %q", second, got.body, `{"code":"conflict"}`)
+		}
+		answers[second] = got
+	}
+
+	same := answers["a@b.com"]
+	for address, got := range answers {
+		if !bytes.Equal(got.body, same.body) || got.status != same.status {
+			t.Errorf("registering %q answered %d %q, and the same-address case answered %d %q.\n"+
+				"    A difference here is an enumeration oracle: it tells a caller whether\n"+
+				"    a particular address is the one this instance belongs to.",
+				address, got.status, got.body, same.status, same.body)
+		}
+	}
+}
+
+// AND THE FIELD CHECKS STILL COME FIRST ON A CLOSED INSTANCE. A malformed
+// address is a 422 naming the field whether or not registration is open;
+// answering 409 to it would tell a client to stop trying when what it needs to
+// do is fix the body.
+func TestAClosedRegistrationStillAnswers422ToABodyItCannotUse(t *testing.T) {
 	h := newHarness(t, options{})
-	if got := h.post(t, "/v1/auth/register",
-		`{"email":"A@B.com","passphrase":"a long enough passphrase"}`); got.status != http.StatusCreated {
+	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("the first register = %d %s", got.status, got.body)
 	}
 	got := h.post(t, "/v1/auth/register",
-		`{"email":"a@b.com","passphrase":"a different long one"}`)
-	if got.status != http.StatusConflict {
-		t.Errorf("the second register = %d, want 409", got.status)
+		`{"email":"not-an-address","passphrase":"a long enough passphrase"}`)
+	if got.status != http.StatusUnprocessableEntity {
+		t.Errorf("a malformed address on a closed instance = %d %s, want 422", got.status, got.body)
 	}
-	if string(got.body) != `{"code":"conflict"}` {
-		t.Errorf("body = %q, want %q", got.body, `{"code":"conflict"}`)
+	if field := got.decode(t)["field"]; field != "email" {
+		t.Errorf("the 422 names %v, want \"email\"", field)
 	}
 }
 

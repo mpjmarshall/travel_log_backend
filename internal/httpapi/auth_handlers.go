@@ -361,7 +361,14 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 	switch {
 	case errors.As(err, &invalid):
 		httpx.WriteFieldError(w, r, invalid.Field)
-	case errors.Is(err, auth.ErrEmailTaken):
+	case errors.Is(err, auth.ErrEmailTaken), errors.Is(err, auth.ErrRegistrationClosed):
+		// TWO SENTINELS, ONE WORD, AND THAT IS DEC-86's ORACLE SHRINKING
+		// RATHER THAN A COLLAPSE. `ErrEmailTaken` told a caller that THAT
+		// ADDRESS is registered here, which the security lens flagged as an
+		// enumeration surface; `ErrRegistrationClosed` tells them only that
+		// the instance is in use, which the sign-in page already tells them.
+		// They share a branch so that the two are indistinguishable on the
+		// wire — the same status, the same body, the same bytes.
 		httpx.WriteError(w, r, httpx.CodeConflict)
 	case errors.Is(err, auth.ErrBadCredentials), errors.Is(err, auth.ErrNoSession):
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)
