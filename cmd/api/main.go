@@ -305,11 +305,20 @@ func limiters(cfg config.Config) (credential, traveller *httpx.Limiter) {
 // by the mux itself; and it belongs inside the other three because an unknown
 // path is a request that happened and should be recovered, identified and
 // logged like any other.
+//
+// COMPRESS SITS BELOW THE ACCESS LOG AND ABOVE MuxErrors, and both boundaries
+// are decisions (DEC-94). Below the access log, so `bytes` counts what
+// actually went on the wire — the number an operator wants, and the one the
+// gzip measurement exists to support; outermost it would report the
+// uncompressed size and quietly undo it. Above MuxErrors, so the envelope
+// bodies MuxErrors writes go through the compressor's own small-body floor
+// rather than around it.
 func serverChain(mux *http.ServeMux, log *slog.Logger) http.Handler {
 	return httpx.Chain(mux,
 		httpx.Recover(log),
 		httpx.RequestID(),
 		httpx.AccessLog(log),
+		httpx.Compress(),
 		httpx.MuxErrors(),
 	)
 }
@@ -341,12 +350,43 @@ func healthzHandler(db pinger, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
+// writeTimeout IS A PROMISE ABOUT THE CLIENT'S DOWNLINK, AND THAT IS WHY IT IS
+// NAMED AND ARGUED RATHER THAN INLINE (DEC-94).
+//
+// It was 15s. At 15s the server was promising that no log will ever exceed
+// fifteen seconds of the client's downlink, and NOTHING ENFORCED THAT. The
+// performance lens measured what the broken promise looks like: against an
+// 11,102,597-byte log, `GET /v1/logbook` answers HTTP 200 with a VALID ETag and
+// a body cut mid-token — at 400 kB/s, 8,371,312 bytes received, curl exit 18,
+// `json.load` -> "Unterminated string starting at char 8371258"; at 500 kB/s,
+// 9,631,256 bytes, code 200; at 200 kB/s, 5,622,648 bytes, code 200.
+//
+// THREE THINGS ADDRESS THAT CLASS AND THIS IS ONE OF THEM. httpx.Compress
+// moves the threshold 5-15x (that same log gzips to 2,084,727 bytes at level
+// 1); DEC-93's 500-point cap on `Walk.points` removes the largest growth term;
+// and this raises the ceiling. None of the three alone removes it.
+//
+// SIXTY SECONDS, AND HERE IS THE PROMISE IT MAKES. Through the compressor, the
+// 11.1 MB worst case is 2.08 MB on the wire, so 60s covers a client sustaining
+// 35 kB/s — below any usable mobile link, and roughly 17x more headroom than
+// the 15s the same body had at 139 kB/s. It is deliberately NOT unbounded: a
+// WriteTimeout of 0 means a slow-read client can hold a connection and a
+// database-free goroutine indefinitely, which is the other failure this knob
+// exists for.
+//
+// IT IS NOT THE PER-REQUEST BOUND. REQUEST_TIMEOUT bounds how long the HANDLER
+// may take (httpx.Timeout, wired in run) and is 15s; this bounds how long the
+// RESPONSE may take to reach a client that may be on a train. Making them one
+// number would mean either a handler allowed a minute of database time or a
+// log that cannot be delivered over a slow link.
+const writeTimeout = 60 * time.Second
+
 func serve(addr string, h http.Handler, log *slog.Logger) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      writeTimeout,
 		IdleTimeout:       60 * time.Second,
 	}
 

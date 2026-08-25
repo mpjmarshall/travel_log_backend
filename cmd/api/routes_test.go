@@ -240,3 +240,56 @@ func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
 		}
 	}
 }
+
+// THE COMPRESSOR IS IN THE CHAIN AND IN THE RIGHT PLACE (DEC-94).
+//
+// A middleware written, tested and never wired is the exact state
+// `httpx.Timeout` was in for four steps — the acceptance check for this step
+// greps for its call site for that reason. This leg is the same guard for
+// Compress, and it asserts the OBSERVABLE consequence rather than the wiring:
+// a big body through the served handler comes back gzipped, and Vary names
+// Accept-Encoding whether or not the client asked.
+func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
+	log := quiet()
+	mux := wiredMux(t, log)
+	body := strings.Repeat(`{"id":"kyoto","name":"Kyoto in May"},`, 400)
+	mux.HandleFunc("GET /big", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	})
+
+	server := httptest.NewServer(serverChain(mux, log))
+	t.Cleanup(server.Close)
+
+	// DisableCompression, or net/http adds Accept-Encoding itself and
+	// transparently decompresses — which would make this leg pass against a
+	// server that never compressed anything.
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/big", nil)
+	if err != nil {
+		t.Fatalf("building the request: %v", err)
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+	got, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /big: %v", err)
+	}
+	defer got.Body.Close()
+
+	if enc := got.Header.Get("Content-Encoding"); enc != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip — the middleware is written and "+
+			"not wired, which is the state httpx.Timeout sat in for four steps", enc)
+	}
+	if !strings.Contains(got.Header.Get("Vary"), "Accept-Encoding") {
+		t.Errorf("Vary = %q, want it to name Accept-Encoding", got.Header.Get("Vary"))
+	}
+	raw, err := io.ReadAll(got.Body)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if len(raw) >= len(body) {
+		t.Errorf("the answer is %d bytes against a %d-byte body — it was not compressed",
+			len(raw), len(body))
+	}
+}
