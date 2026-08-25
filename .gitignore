@@ -39,3 +39,6 @@ deploy/.env
 # The command is kept literal because the gate is specified as those four
 # commands in that order; this line is the consequence.
 /api
+
+# `make backup` writes here. The dumps are the record and never the repository.
+/backups/

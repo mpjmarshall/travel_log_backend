@@ -100,16 +100,12 @@ func Load(ctx context.Context, db *sql.DB, d *Dataset, _ LoadOptions) (Report, e
 
 	// THE PREDICATE, INSIDE THE TRANSACTION. Outside it, two seeds racing each
 	// other both read zero and both insert.
-	var existingID, existingEmail string
-	err = tx.QueryRowContext(ctx,
-		`SELECT id::text, email FROM travellers ORDER BY created_at, id LIMIT 1`).
-		Scan(&existingID, &existingEmail)
-	switch {
-	case err == nil:
-		return report, &TravellerExistsError{TravellerID: existingID, Email: existingEmail}
-	case errors.Is(err, sql.ErrNoRows):
-	default:
-		return report, fmt.Errorf("seed: asking whether this database has a traveller: %w", err)
+	existing, err := firstTraveller(ctx, tx)
+	if err != nil {
+		return report, err
+	}
+	if existing != nil {
+		return report, existing
 	}
 
 	for _, step := range insertSteps(d) {
@@ -316,4 +312,34 @@ func shareLinkStep(d *Dataset) insertStep {
 		step.rows = append(step.rows, []any{s.TravellerID, s.TripID, s.Token, s.CreatedAt, s.RevokedAt})
 	}
 	return step
+}
+
+// ExistingTraveller answers the traveller this database already holds, or nil.
+//
+// IT IS THE SAME QUERY Load TAKES INSIDE ITS TRANSACTION, exported so a command
+// can refuse BEFORE it uploads two photographs to a bucket. The one inside the
+// transaction is the guard; this one is the courtesy, and having both is what
+// keeps a refused run from leaving bytes behind.
+func ExistingTraveller(ctx context.Context, db *sql.DB) (*TravellerExistsError, error) {
+	return firstTraveller(ctx, db)
+}
+
+// rowQuerier is *sql.DB and *sql.Tx, which is the whole of what firstTraveller
+// needs and is why it is not an interface with a name anybody has to learn.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+const firstTravellerSQL = `SELECT id::text, email FROM travellers ORDER BY created_at, id LIMIT 1`
+
+func firstTraveller(ctx context.Context, q rowQuerier) (*TravellerExistsError, error) {
+	var id, email string
+	switch err := q.QueryRowContext(ctx, firstTravellerSQL).Scan(&id, &email); {
+	case err == nil:
+		return &TravellerExistsError{TravellerID: id, Email: email}, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("seed: asking whether this database has a traveller: %w", err)
+	}
 }

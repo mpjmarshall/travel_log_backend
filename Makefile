@@ -39,7 +39,7 @@ BIN     := bin/api
 # guards.
 SLICE   := scripts/slice-arc.sh
 
-.PHONY: build run check fmt up down logs test-db test-s3 migrate slice
+.PHONY: build run check fmt up down logs test-db test-s3 migrate slice seed backup
 
 ## build — compile the server to bin/api
 build:
@@ -162,12 +162,127 @@ migrate:
 	$(COMPOSE) up -d --build --wait postgres
 	$(COMPOSE) run --rm --no-deps api -migrate-only
 
+## seed — the captured client log into a DEVELOPMENT database (DEC-75).
+##
+## IT IS NOT PART OF ANY OTHER TARGET AND NOTHING RUNS IT AT BOOT. `make up`
+## does not seed, the api image does not link it (cmd/api/imports_test.go is the
+## mechanism), and this recipe is the only thing in the repository that calls it.
+##
+## TWO REFUSALS, AND THEY ARE THE COMMAND'S RATHER THAN THIS FILE'S (DEC-97):
+## it refuses when ANY TRAVELLER ROW EXISTS — the same predicate DEC-86 puts on
+## register, so `make up && make seed` on a deployed box cannot burn the only
+## registration slot the deployment has — and it refuses without the explicit
+## dev-database marker below, because a DSN cannot tell a development database
+## from a production one. Both refusals print WHERE THEY WERE POINTED.
+##
+## EVERY VALUE IS DERIVED FROM THE RUNNING CONTAINER, which is the correction
+## `make test-db` and `make test-s3` already carry: a recipe that restates a
+## port or a credential prints the wrong one the first time somebody overrides
+## it, and here "the wrong one" means loading a captured log into a database
+## that is not the stack's.
+##
+## THE PASSPHRASE IS GENERATED PER RUN AND PRINTED ONCE. Nothing stores it.
+seed:
+	$(COMPOSE) up -d --build --wait
+	@port="$$($(COMPOSE) port postgres 5432 | sed 's/.*://')"; \
+	user="$$($(COMPOSE) exec -T postgres printenv POSTGRES_USER)"; \
+	pass="$$($(COMPOSE) exec -T postgres printenv POSTGRES_PASSWORD)"; \
+	db="$$($(COMPOSE) exec -T postgres printenv POSTGRES_DB)"; \
+	s3port="$$($(COMPOSE) port minio 9000 | sed 's/.*://')"; \
+	s3user="$$($(COMPOSE) exec -T minio printenv MINIO_ROOT_USER)"; \
+	s3pass="$$($(COMPOSE) exec -T minio printenv MINIO_ROOT_PASSWORD)"; \
+	bucket="$$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+		"$$($(COMPOSE) ps -q api)" 2>/dev/null | sed -n 's/^S3_BUCKET=//p')"; \
+	if [ -z "$$port" ] || [ -z "$$user" ] || [ -z "$$db" ] || [ -z "$$s3port" ] || [ -z "$$bucket" ]; then \
+		echo "make seed: the stack is up but did not answer for its own published" >&2; \
+		echo "port, credentials or bucket — refusing to aim a loader at a guess." >&2; \
+		echo "  postgres $$port  minio $$s3port  bucket '$$bucket'" >&2; \
+		exit 1; \
+	fi; \
+	go run ./cmd/seed \
+		-dsn "postgres://$$user:$$pass@127.0.0.1:$$port/$$db?sslmode=disable" \
+		--i-know-this-is-a-dev-database \
+		-s3-endpoint "http://127.0.0.1:$$s3port" \
+		-s3-bucket "$$bucket" \
+		-s3-access-key "$$s3user" \
+		-s3-secret-key "$$s3pass"
+
+## backup — a custom-format pg_dump of the stack's database, keeping 7 (DEC-92).
+##
+## R4 IS WHERE THE VOLUME STOPS BEING DISPOSABLE, and this is the target that
+## says so. The plan's own premise is that PostgreSQL is the record and the
+## phone is a cache; before this, `pg_dump` had zero hits across the whole plan
+## and `make slice`'s first step destroyed the volume the record lives in.
+##
+## `-Fc` AND NOT PLAIN SQL. Custom format is what `pg_restore` reads, and
+## pg_restore is version-tolerant in the direction that matters: a dump taken by
+## pg_dump 17 restores into 17 or later. A plain-SQL dump is also a single
+## `psql -f` with no way to restore one table, no compression, and no way to
+## list what is in it without reading all of it.
+##
+## THE DUMP IS TAKEN INSIDE THE CONTAINER, so the client and the server are the
+## same build by construction. A host pg_dump older than the server refuses
+## outright ("server version mismatch"), which is a failure mode that only shows
+## up on somebody else's machine.
+##
+## KEEP 7. Not a retention policy — a floor under "I broke it on Tuesday".
+## docs/BEFORE-A-PUBLIC-DEPLOY.md carries what this is NOT: it is not off-box,
+## it is not scheduled, and it does not include the BUCKET. A database restore
+## without a bucket restore is a log every reference of which resolves, pointing
+## at nothing (DEF-07).
+##
+## AND WHEN THE BUCKET IS BACKED UP, THE ORDER IS FIXED: bucket first, database
+## second. A dump newer than the bucket copy references objects that were never
+## copied; a bucket copy newer than the dump only leaves unreferenced garbage.
+backup:
+	@mkdir -p backups
+	$(COMPOSE) up -d --wait postgres
+	@user="$$($(COMPOSE) exec -T postgres printenv POSTGRES_USER)"; \
+	db="$$($(COMPOSE) exec -T postgres printenv POSTGRES_DB)"; \
+	if [ -z "$$user" ] || [ -z "$$db" ]; then \
+		echo "make backup: postgres is up but did not answer for its own user or" >&2; \
+		echo "database — refusing to dump from a guess." >&2; \
+		exit 1; \
+	fi; \
+	stamp="$$(date -u +%Y%m%dT%H%M%SZ)"; \
+	out="backups/travellog-$$stamp.dump"; \
+	$(COMPOSE) exec -T postgres pg_dump -Fc -U "$$user" "$$db" > "$$out"; \
+	if [ ! -s "$$out" ]; then \
+		echo "make backup: $$out is empty — pg_dump wrote nothing. Removing it," >&2; \
+		echo "because an empty file in backups/ is worse than no file." >&2; \
+		rm -f "$$out"; exit 1; \
+	fi; \
+	echo "wrote $$out ($$(wc -c < "$$out" | tr -d ' ') bytes)"; \
+	ls -1t backups/travellog-*.dump 2>/dev/null | tail -n +8 | while read -r old; do \
+		echo "rotating out $$old"; rm -f "$$old"; \
+	done; \
+	echo "kept: $$(ls -1 backups/travellog-*.dump 2>/dev/null | wc -l | tr -d ' ') of 7"
+
 ## slice — the whole arc against the live stack, from cold, plus the four
 ## standing legs that need something `make check` deliberately does not have.
 ##
-## IT DESTROYS THE NAMED VOLUME. `docker compose down -v` is its first step, on
-## purpose: a 201 against a database that already held the row proves nothing.
-## Run it against the local stack and expect to lose whatever is in it.
+## IT DESTROYS THE NAMED VOLUME OF WHATEVER PROJECT IT RUNS UNDER. `docker
+## compose down -v` is its first step, on purpose: a 201 against a database that
+## already held the row proves nothing.
+##
+## SO IT REFUSES THE DEFAULT PROJECT (DEC-92, and it is the whole reason this
+## guard exists). Before R4 the volume held nothing anybody would miss and the
+## only protection was a paragraph in this file; R4 is the step that puts a
+## record in it, and five of the eight steps' acceptance checks read
+## `make seed && make check && make slice` — a documented procedure teaching a
+## developer that seeding and then wiping is normal. The arc already ran two of
+## its five phases under their own COMPOSE_PROJECT_NAME, so the main phase using
+## the live project was the inconsistency rather than the pattern.
+##
+## Run it somewhere else, which is one variable:
+##
+##   COMPOSE_PROJECT_NAME=travellog-slice API_PORT=8085 POSTGRES_PORT=5464 \
+##     MINIO_PORT=9005 S3_PUBLIC_BASE_URL=http://127.0.0.1:9005 make slice
+##
+## SLICE_DESTROY_VOLUME=1 is the way to say "yes, destroy the live one". It is a
+## variable and not a prompt because the arc has to run unattended, and it is
+## required rather than defaulted because the failure it prevents is somebody
+## else's photographs.
 ##
 ## NOT PART OF `make check`, for the reason `test-image` is not: the gate is
 ## four commands and stays fast (4.4s measured at d7a6da9), and this builds an
