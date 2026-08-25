@@ -224,6 +224,41 @@
       "title": "RULED \u2014 photos.place_id / photos.visit_id coherence stays a Go rule, with a comment naming it",
       "reasoning": "EXECUTED: a photograph can name place P while naming a visit belonging to a different place, and the schema accepts it. Every route assumes the pair is coherent. The schema-level fix is a composite FK to `visits (traveller_id, place_id, id)`, but that CHANGES WHAT A VISIT DELETION DOES TO place_id \u2014 which is delete behaviour, and delete behaviour is decided by what the app's sheets promise, not by a DBA.",
       "consequence": "No schema change. A comment on the two columns in 0001 naming this as the SECOND integrity rule deliberately left in Go \u2014 DEC-02's cross-kind id uniqueness is the first \u2014 so the next reader does not read the omission as an oversight, which is exactly how the missing FK indexes got there. TRIGGER for revisiting: a sheet that says what happens to a photograph's pin when its occasion is deleted. Until such a sentence exists there is nothing to implement."
+    },
+    {
+      "id": "DEC-84",
+      "status": "ruled",
+      "title": "RULED \u2014 S3_PRESIGN_TTL_PUBLIC is 15 minutes, and it IS the revocation window the copy must be written against",
+      "reasoning": "The public presign lifetime had no number anywhere, and R2 cannot invent it because four sentences of client copy are written against it. 15 minutes is long enough to read a share page without a mid-scroll failure, short enough that 'stopped' means roughly stopped.",
+      "consequence": "`S3_PRESIGN_TTL_PUBLIC = 15m`, `S3_PRESIGN_TTL_PRIVATE` stays short (~2m, DEC-44). THE HONEST SENTENCE, and the copy must say it rather than imply instant revocation: stopping a share stops new links at once, and a photograph already loaded may keep working for up to fifteen minutes. That is FOUR client sentences (D1, D2, D3's 'the shared link stops working', and H1) and it goes in CLIENT-PREREQUISITES as one item, not four. R2's TTL leg was DELETED at v7.1 for being unfalsifiable (it compared the two values to each other); the replacement must assert the PUBLIC path uses the PUBLIC value \u2014 a handler reaching for the private one is the defect, and it would have reddened nothing."
+    },
+    {
+      "id": "DEC-85",
+      "status": "ruled",
+      "title": "RULED \u2014 share tokens are HASHED at rest, like session tokens; DEC-10's plaintext half is REVERSED",
+      "reasoning": "DEC-10 stored the share token in plaintext so `Trip.shareLinkId` could round-trip, and the trade was recorded \u2014 but the security lens noted it was never re-examined, while session tokens carry a whole argued section explaining why they are hashed. Under DEC-67's revoke-and-keep design a dump holds EVERY capability ever issued, live and revoked. Hashing costs that design nothing: store the hash, keep the row.",
+      "consequence": "`share_links.token_hash bytea` replacing the plaintext column, sha256 of the raw token, constant-time compared \u2014 the same shape `sessions` already uses. `share_links_token_key` becomes a unique index on the hash. THE COST, and it is real: the server can no longer emit `Trip.shareLinkId`, so a RESTORED device shows a live link as not-shared. That was DEC-10's whole reason for plaintext. It is accepted because the CLIENT HOLDS THE PLAINTEXT \u2014 it minted the token \u2014 so this only bites a device restoring from the server with no local cache, and the fix there is to mint a new link, which H1 already offers. RECORD IT IN CLIENT-PREREQUISITES rather than letting the client phase discover it. The revoked-vs-unknown 404 is unaffected: both still answer identically, and PD-12's equal-work requirement still applies."
+    },
+    {
+      "id": "DEC-86",
+      "status": "ruled",
+      "title": "RULED \u2014 registration closes after the first traveller",
+      "reasoning": "Ruling 3 has always been single-user, and the route already answers 409 when a traveller exists \u2014 but the security lens noted a stranger who registers first on a deployed instance gets an authenticated account, and after d5be39c that account carries a 600/min budget and, from R6, `?photos=delete`.",
+      "consequence": "`POST /v1/auth/register` refuses once any traveller row exists. It is one line and it removes the whole question rather than bounding it. NOTE THE ORACLE SHRINKS RATHER THAN GROWS: the 409-on-duplicate the lens flagged as an enumeration surface becomes a 409-on-any-second-registration, which tells an attacker only that the instance is in use \u2014 which the login page already tells them. TRIGGER for revisiting: a second traveller ever being wanted, which is ruling 3 and not this decision."
+    },
+    {
+      "id": "DEC-87",
+      "status": "ruled",
+      "title": "RULED \u2014 Content-Type is SIGNED into the presigned PUT, so the allowlist reaches the object and not only the row",
+      "reasoning": "MEASURED by the storage lens against MinIO: DEC-51's allowlist was described as a defence in three layers and is actually two \u2014 the Go 422 and the 0003 CHECK both constrain the DATABASE ROW, while the uploader sets Content-Type on the PUT and the bucket keeps it. A row reading `image/png`, passing both enforcement points, can address an object the bucket serves as `text/html`. Executed: PUT with `Content-Type: text/html` -> 200, StatObject -> ct=text/html, presigned GET returns it.",
+      "consequence": "Sign it, sourced from the SAME validated value the 422 and the CHECK see \u2014 one function, so the three cannot diverge. Measured working: SignedHeaders becomes `content-type;host;x-amz-checksum-sha256`, a mismatched type -> 403, the right one -> 200 with ct preserved. ACCEPT THE WORSE ERROR: a legitimate client that guesses its own MIME type wrongly now gets `403 SignatureDoesNotMatch` rather than a `422` naming the field. That is the trade, and the mitigation is DEC-88's uploadHeaders map \u2014 the client replays what it was given rather than deriving anything."
+    },
+    {
+      "id": "DEC-88",
+      "status": "ruled",
+      "title": "RULED \u2014 `If-None-Match: *` is signed too: a content address is WRITE-ONCE at the bucket. And the begin response carries an `uploadHeaders` map.",
+      "reasoning": "TWO FINDINGS, ONE FIX, and they must land together. (1) The checksum binds the header to the BODY; nothing bound it to the KEY. Executed: a PUT to key <traveller>/<digestA> carrying a self-consistent checksum for different bytes B succeeds, and with versioning off a second PUT at a committed key SILENTLY REPLACES the bytes \u2014 the address stops holding its own contents. (2) A presigned URL whose signature covers extra headers is UNUSABLE unless the caller replays each one exactly, and the begin response carried only `{id, uploadUrl, expiresAt, alreadyExists}`. A client handed only the URL gets 400 on every upload, forever, with no way to derive the base64 header from a hex id.",
+      "consequence": "`If-None-Match: *` signed into the PUT. Measured on MinIO: first PUT 200, any second 412 PreconditionFailed with the original bytes intact \u2014 including the replacement attack above. THE RETRY STORY MUST BE WRITTEN DOWN OR THIS IS A REGRESSION: a client re-uploading after an unacknowledged success gets 412, which means 'already there', NOT 'failed'. The commit path treats 412 as success. Put it in CLIENT-PREREQUISITES. AND the begin response gains `uploadHeaders` \u2014 a flat map of exactly the headers the signature covers, values already encoded server-side. The client replays it verbatim and never re-derives an encoding. Add the leg that keeps them honest: the map's key set equals the URL's `X-Amz-SignedHeaders` minus `host`. ALSO FREE, and it should be taken: `StatObject` with `Checksum: true` returns the stored digest, so commit can verify the DIGEST as well as the size at no extra call \u2014 and an object uploaded through the BANNED call has an empty checksum, which makes the ban a RUNTIME guard rather than a grep. Note the flag: without `Checksum: true` the field is silently empty and the check passes nothing."
     }
   ],
   "gate_l12": {
