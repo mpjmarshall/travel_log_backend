@@ -62,6 +62,20 @@ type fakeMoments struct {
 	// what the real store does when the client named an occasion the log does
 	// not hold.
 	mintOnRefile bool
+
+	// answerWithoutPoints is a STORE DEFECT, on purpose, and it is the only
+	// knob here that models something no correct store does.
+	//
+	// IT EXISTS BECAUSE THAT IS EXACTLY WHAT EmitWalk IS FOR. Since 0003's
+	// `walks_points_present_ck` no STORED walk can have an empty track, so a
+	// correct store never hands the handler a nil slice and a leg over a
+	// correct twin cannot see whether the emitter is there. What the emitter
+	// guards is a Walk that was ASSEMBLED rather than read back — a store
+	// answering the request instead of the row, a re-read that forgot to join
+	// the points, a zero value returned beside an error nobody checked. This
+	// knob is that shape, and it is what lets "return the bare Walk" redden a
+	// behavioural leg rather than only the AST sweep.
+	answerWithoutPoints bool
 }
 
 func (f *fakeMoments) PutPhoto(_ context.Context, _ string, w logbook.PhotoWrite) (logbook.Photo, int64, error) {
@@ -269,6 +283,9 @@ func (f *fakeMoments) PutWalk(_ context.Context, _ string, w logbook.WalkWrite) 
 		f.books.doc.Walks[found] = next
 	}
 	f.books.version++
+	if f.answerWithoutPoints {
+		next.Points = nil
+	}
 	return next, f.books.version, nil
 }
 
@@ -624,6 +641,27 @@ func TestAWalkAnswerCarriesItsPointsAndNeverNull(t *testing.T) {
 		t.Errorf("the store was handed a track of %d points on a `{dismissed:true}` "+
 			"body. Absent means LEAVE ALONE, and a List<LatLng> recorded on a day "+
 			"that has passed cannot be re-recorded", len(*h.moments().lastWalkWrite.Points))
+	}
+
+	// AND THE EMITTER IS THE NET UNDER A STORE THAT ANSWERS A WALK WITH NO
+	// TRACK AT ALL.
+	//
+	// THAT IS A DEFECT AND NOT A DATA STATE, which is the whole reason this
+	// half needs a knob: since 0003 no STORED walk can have an empty track, so
+	// a correct store never produces a nil slice and a leg over a correct twin
+	// cannot tell whether EmitWalk is there. The shapes that DO produce one
+	// are code — a store answering the request instead of the row, a re-read
+	// that forgot to join the points — and those are exactly what put
+	// `"cityIds":null` on a running server before EmitTrip existed.
+	h.moments().answerWithoutPoints = true
+	unread := h.do(t, http.MethodPut, "/v1/walks/w-busan", `{"dismissed":true}`, token)
+	if unread.status != http.StatusOK {
+		t.Fatalf("PUT = %d %s", unread.status, unread.body)
+	}
+	if !strings.Contains(string(unread.body), `"points":[]`) {
+		t.Errorf("a Walk with a nil track reached the wire as %s. `EmitWalk` normalises "+
+			"it to `[]`; without it the key is `null`, which is the one shape "+
+			"`(json['points'] as List<dynamic>)` throws on", unread.body)
 	}
 }
 
