@@ -46,6 +46,13 @@ type Deps struct {
 	// handlers cannot mint a capability. See logbook.ShareStore.
 	Share logbook.ShareStore
 
+	// THE GEOGRAPHY GROUP (R6): T5's city and C1's pin, and they are two ports
+	// rather than one for the reason Share is separate from Logbook. The city
+	// handler cannot remove a place — which is the only D2-scale destruction
+	// in this step — and the place handlers cannot attach anything to a trip.
+	Cities logbook.CityStore
+	Places logbook.PlaceStore
+
 	AuthLimit      *httpx.Limiter
 	TravellerLimit *httpx.Limiter
 
@@ -94,6 +101,19 @@ func (d Deps) Clock() func() time.Time {
 // struct of two interfaces, so building it per request costs nothing.
 func (d Deps) mediaService() logbook.Service {
 	return logbook.Service{Media: d.Media, Objects: d.Objects}
+}
+
+// places is the same Service built from the port D2's removal needs, and it is
+// a SECOND accessor rather than one that fills every field.
+//
+// A `Service{Media, Objects, Places}` handed to both routes would let the
+// media commit reach a place store and D2's removal reach the bucket, which is
+// the exact thing the two-port split on Deps exists to prevent one layer up.
+// Each accessor gives the operation the ports that operation names, and a
+// Service is a value struct of interfaces, so building one per request costs
+// nothing.
+func (d Deps) places() logbook.Service {
+	return logbook.Service{Places: d.Places}
 }
 
 // credentials is both request bodies. DEC-61 settles the field names and
@@ -184,6 +204,18 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.Share == nil {
 		panic("httpapi: the share routes need a store; a nil one is not 'no sharing', " +
 			"it is a panic the first time somebody presses Stop sharing")
+	}
+	// THE GEOGRAPHY PORTS PANIC FOR THE SAME REASON, and the place one has the
+	// sharper consequence: `DELETE /v1/places/{id}` is D2, and a nil store
+	// there is a panic on the one control in the app that asks the user
+	// whether thirty photographs live or die.
+	if deps.Cities == nil {
+		panic("httpapi: the city route needs a store; a nil one is not 'no cities', " +
+			"it is a panic the first time T5 adds one")
+	}
+	if deps.Places == nil {
+		panic("httpapi: the place routes need a store; a nil one is not 'no places', " +
+			"it is a panic inside D2's removal")
 	}
 	// THE MEDIA PORTS PANIC FOR THE REASON THE LIMITERS DO. A nil object store
 	// is not "no media": it is a nil-pointer dereference inside a handler on

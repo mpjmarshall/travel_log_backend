@@ -24,24 +24,27 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	// THIRTEEN AT R5, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
+	// SIXTEEN AT R6, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
 	// `len(Routes(...))` would make this line unfalsifiable — it would say
 	// "the table holds as many routes as the table holds". What it is for is
 	// that a route ARRIVING or LEAVING is a decision somebody made, and it
 	// should cost one line in a test rather than nothing at all. It was four
-	// at VS7; R3 added begin, commit and mint; R5 adds six — D3's cascade,
+	// at VS7; R3 added begin, commit and mint; R5 added six — D3's cascade,
 	// H1's three share writes, U1's pencil and the one revocation surface.
 	//
-	// SIX AND NOT SEVEN, BECAUSE "REVOKE THEM ALL" IS A QUERY PARAMETER. The
-	// plan's own table holds 23 rows at the end of R8 and allots this step
-	// six; `?scope=all` rides on `DELETE /v1/auth/session` rather than
-	// claiming a `DELETE /v1/auth/sessions` the table does not have. See the
-	// row's own comment.
-	if len(routes) != 13 {
-		t.Errorf("the table holds %d routes; R5's surface is thirteen — two credential "+
-			"routes, one conditional read, one whole-state write, D3's cascade, H1's "+
-			"three share writes, U1's pencil, the revocation surface, and the three "+
-			"media routes", len(routes))
+	// R5's SIX WAS NOT SEVEN BECAUSE "REVOKE THEM ALL" IS A QUERY PARAMETER,
+	// AND R6's THREE IS NOT FOUR FOR THE SAME REASON: `?photos=keep|delete`
+	// rides on `DELETE /v1/places/{id}`. The plan's own table holds 23 rows at
+	// the end of R8 — 22 of them here, because `/healthz` is cmd/api's — and
+	// allots this step three: T5's city, C1's pin and D2's removal. There is
+	// deliberately NO `DELETE /v1/cities/{id}`: the client has no
+	// delete-a-city control, so no sheet copy authorises the cascade (DEC-57),
+	// and the three city foreign keys are RESTRICT.
+	if len(routes) != 16 {
+		t.Errorf("the table holds %d routes; R6's surface is sixteen — two credential "+
+			"routes, one conditional read, one whole-state write, D3's cascade, T5's "+
+			"city, C1's pin, D2's removal, H1's three share writes, U1's pencil, the "+
+			"revocation surface, and the three media routes", len(routes))
 	}
 
 	for _, route := range routes {
@@ -94,23 +97,37 @@ func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
 // ceiling, TestEveryRouteInTheTableIsRateLimited would pass, and a phone
 // syncing a log would meet a limit built for a password guesser.
 func TestTheTwoBudgetsAreNotOneBudget(t *testing.T) {
-	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 60})
+	// THE TRAVELLER CEILING IS DERIVED FROM THE TABLE AND NOT A CONSTANT, and
+	// that is a correction R6 had to make rather than a preference. It was 60
+	// with a hard-coded `for range 6`, which is a ceiling this leg's OWN
+	// traffic outgrows the moment the table passes ten authenticated rows —
+	// and it did: at sixteen rows the loop spends 90 tokens against 60 and the
+	// last four routes are refused for a reason that has nothing to do with
+	// which budget they draw on. A leg that reddens when a route is ADDED is a
+	// leg somebody edits the number in; deriving it means the next step's
+	// routes cost nothing.
+	//
+	// THE CREDENTIAL CEILING STAYS A SMALL LITERAL, because being refused
+	// there is the assertion.
+	const tries = 6
+	ceiling := tries*len(Routes(Deps{})) + tries
+	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: ceiling})
 	token := bearer(t, h)
 
 	for _, route := range Routes(h.deps) {
 		path := strings.ReplaceAll(route.Pattern, "{id}", "kyoto")
 		limited := false
-		for range 6 {
+		for range tries {
 			if h.do(t, route.Method, path, aTrip, token).status == http.StatusTooManyRequests {
 				limited = true
 			}
 		}
 		if limited != !route.Auth {
-			t.Errorf("%s %s: refused inside a ceiling of 60 = %v, want %v.\n"+
+			t.Errorf("%s %s: refused inside a ceiling of %d = %v, want %v.\n"+
 				"    The authenticated routes must be spending the TRAVELLER budget and\n"+
 				"    the credential routes the ADDRESS budget; a route drawing on the\n"+
 				"    wrong one is either unusable or unbounded.",
-				route.Method, route.Pattern, limited, !route.Auth)
+				route.Method, route.Pattern, ceiling, limited, !route.Auth)
 		}
 	}
 }
