@@ -1,4 +1,4 @@
-// The wire's vocabulary: twelve words, closed, and no prose ever.
+// The wire's vocabulary: thirteen words, closed, and no prose ever.
 //
 // DEC-12. The client's design system has no toast, no snackbar and no error
 // colour; every failure surface is a fixed per-surface sentence the CLIENT
@@ -6,6 +6,15 @@
 // keep consistent with a design system it cannot see — so the body is
 // `{"code":"…"}` and the vocabulary is CLOSED, or it drifts into prose by
 // accretion.
+//
+// IT WAS TWELVE UNTIL DEC-103, AND THE REOPENING IS WORTH MORE THAN THE WORD.
+// The twelve were closed on ONE argument — that a client can ACT on each — and
+// `unsupported_route` is admitted on exactly that test rather than on need:
+// its action is "this needs a newer server", and no other word's is. Anything
+// reaching for a fourteenth makes the same argument in the same form, or the
+// block is closed against it. `method_not_allowed` was put and REFUSED on its
+// own merits, and that refusal survives DEC-103 unchanged: a 405 is a client
+// disagreeing about a verb, not a condition a user can be told about.
 //
 // THE BLOCK SHIPS WHOLE EVEN THOUGH THE SLICE USES TEN. `upload_incomplete`
 // belongs to media and `forbidden` to the share path, neither of which is in
@@ -58,6 +67,32 @@ const (
 	CodeInternal          Code = "internal"
 	CodeUploadIncomplete  Code = "upload_incomplete"
 	CodeUnsupportedFormat Code = "unsupported_format"
+
+	// CodeUnsupportedRoute is DEC-103's thirteenth word: this build does not
+	// have that route.
+	//
+	// MEASURED at R1 entry against a running container: `DELETE
+	// /v1/trips/{id}` -> `405 {"code":"not_found"}`, `PATCH /v1/me` -> `404
+	// {"code":"not_found"}`, `PUT /v1/places/x` -> `404 {"code":"not_found"}`.
+	// Every route this plan has not built yet answered the SAME WORD the
+	// vocabulary uses for "that trip is not in your log".
+	//
+	// THE BAD CONSEQUENCE IS NOT THE WRONG SENTENCE, IT IS THE WRONG BRANCH.
+	// The client treats an unknown id as SUCCESS on all three deletes by
+	// decision — `deletePhoto`, `removePlace` and `deleteTrip` each return
+	// `Future<bool>.value(true)`, verified on `wipe/mock-data` at
+	// logbook.dart:119, :156 and :201 — so the obvious network mapping of that
+	// rule makes a delete against an undeployed route report success, delete
+	// nothing, and advance the client's cache. R5, R6 and R7 each ship
+	// deletes.
+	//
+	// ITS STATUS IS 404 AND NOT 501. `Not Implemented` is the honest word for
+	// "this server does not do that", and it is wrong here twice: net/http has
+	// already chosen 404 or 405 by the time this is written, and a 501 in an
+	// intermediary's eyes is a server fault worth alerting on rather than a
+	// version skew. The STATUS is the stdlib's fact; the CODE is what the
+	// client acts on.
+	CodeUnsupportedRoute Code = "unsupported_route"
 )
 
 // statusByCode is the ONE runtime list. Codes() derives from it rather than
@@ -89,6 +124,7 @@ var statusByCode = map[Code]int{
 	CodeInternal:          http.StatusInternalServerError,
 	CodeUploadIncomplete:  http.StatusConflict,
 	CodeUnsupportedFormat: http.StatusNotAcceptable,
+	CodeUnsupportedRoute:  http.StatusNotFound,
 }
 
 // Coder is how a domain error names its own wire word (DEC-62). The domain
@@ -377,9 +413,9 @@ func WriteErrorFor(w http.ResponseWriter, r *http.Request, err error) {
 // TestThePrebuiltBodiesEqualWhatTheEncoderProduces, which asserts each is
 // byte-identical to what WriteJSON writes for the same payload.
 const (
-	bodyTimeout  = `{"code":"timeout"}`
-	bodyInternal = `{"code":"internal"}`
-	bodyNotFound = `{"code":"not_found"}`
+	bodyTimeout          = `{"code":"timeout"}`
+	bodyInternal         = `{"code":"internal"}`
+	bodyUnsupportedRoute = `{"code":"unsupported_route"}`
 )
 
 func prebuiltBody(c Code) string {
@@ -388,8 +424,8 @@ func prebuiltBody(c Code) string {
 		return bodyTimeout
 	case CodeInternal:
 		return bodyInternal
-	case CodeNotFound:
-		return bodyNotFound
+	case CodeUnsupportedRoute:
+		return bodyUnsupportedRoute
 	}
 	return ""
 }

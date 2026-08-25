@@ -212,7 +212,7 @@ func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 	if chained.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", chained.Code, http.StatusNotFound)
 	}
-	if got, want := chained.Body.String(), `{"code":"not_found"}`; got != want {
+	if got, want := chained.Body.String(), `{"code":"unsupported_route"}`; got != want {
 		t.Errorf("body = %q, want %q — net/http's own plain text reached the client", got, want)
 	}
 	if got, want := chained.Header().Get("Content-Type"), "application/json"; got != want {

@@ -20,6 +20,12 @@ import (
 // decision disagree in EITHER direction. The count is never carried: it is
 // len() of this literal, and a separate leg derives the same number from the
 // source with grep.
+//
+// THIRTEEN SINCE DEC-103, AND THE REOPENING IS THE POINT RATHER THAN THE
+// COUNT. The twelve were closed on the argument that a client can ACT on each
+// word, and `unsupported_route` passes that test because its action is "this
+// needs a newer server" and no other word's is. Anything reaching for a
+// fourteenth has to make the same argument in the same form.
 var decCodes = []string{
 	"conflict",
 	"forbidden",
@@ -32,18 +38,19 @@ var decCodes = []string{
 	"timeout",
 	"unauthenticated",
 	"unsupported_format",
+	"unsupported_route",
 	"upload_incomplete",
 }
 
-func TestTheVocabularyIsExactlyTheTwelveCodesDEC12Names(t *testing.T) {
+func TestTheVocabularyIsExactlyTheCodesDEC12Names(t *testing.T) {
 	got := make([]string, 0, len(httpx.Codes()))
 	for _, c := range httpx.Codes() {
 		got = append(got, string(c))
 	}
 	sort.Strings(got)
 
-	if len(got) != 12 {
-		t.Fatalf("the vocabulary holds %d codes, want 12: %v", len(got), got)
+	if len(got) != len(decCodes) {
+		t.Fatalf("the vocabulary holds %d codes, want %d: %v", len(got), len(decCodes), got)
 	}
 	for i := range decCodes {
 		if got[i] != decCodes[i] {
@@ -61,16 +68,23 @@ func TestEveryCodeHasAStatusAndNoStatusIsOrphaned(t *testing.T) {
 			t.Errorf("StatusFor(%q) = %d, want a 4xx or 5xx", c, got)
 		}
 	}
-	if got := len(httpx.Codes()); got != 12 {
-		t.Errorf("Codes() = %d entries, want 12", got)
+	if got := len(httpx.Codes()); got != len(decCodes) {
+		t.Errorf("Codes() = %d entries, want %d", got, len(decCodes))
 	}
 }
 
 func TestTheStatusOfEachCodeIsTheOneItsDecisionNames(t *testing.T) {
 	want := map[httpx.Code]int{
-		httpx.CodeUnauthenticated:   http.StatusUnauthorized,
-		httpx.CodeForbidden:         http.StatusForbidden,
-		httpx.CodeNotFound:          http.StatusNotFound,
+		httpx.CodeUnauthenticated: http.StatusUnauthorized,
+		httpx.CodeForbidden:       http.StatusForbidden,
+		httpx.CodeNotFound:        http.StatusNotFound,
+		// 404 AND NOT 501. "Not Implemented" is the honest word for "this
+		// server does not do that" and it is wrong here twice: net/http has
+		// already chosen 404 or 405 by the time the body is written, and a 501
+		// reads to an intermediary as a server fault worth alerting on rather
+		// than a version skew. The status is the stdlib's fact; the code is
+		// what the client acts on.
+		httpx.CodeUnsupportedRoute:  http.StatusNotFound,
 		httpx.CodeConflict:          http.StatusConflict,
 		httpx.CodeInvalidBody:       http.StatusBadRequest,
 		httpx.CodeInvalidField:      http.StatusUnprocessableEntity,
@@ -81,8 +95,10 @@ func TestTheStatusOfEachCodeIsTheOneItsDecisionNames(t *testing.T) {
 		httpx.CodeUploadIncomplete:  http.StatusConflict,
 		httpx.CodeUnsupportedFormat: http.StatusNotAcceptable,
 	}
-	if len(want) != 12 {
-		t.Fatalf("this table holds %d rows, want 12", len(want))
+	if len(want) != len(decCodes) {
+		t.Fatalf("this table holds %d rows, want %d — every word gets a row, or a "+
+			"code added without one is a 500 with nobody noticing",
+			len(want), len(decCodes))
 	}
 	for c, status := range want {
 		if got := httpx.StatusFor(c); got != status {

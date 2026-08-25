@@ -15,7 +15,9 @@
 //  2. inside json.go, exactly two FUNCTIONS use it: WriteJSON and DecodeJSON
 //  3. every Code handed to WriteError anywhere in lib code is a named constant
 //     from the block — not a string literal, not a conversion
-//  4. the const block and the runtime status map hold the same twelve words
+//  4. the const block and the runtime status map hold the same words
+//     (twelve at DEC-12, thirteen since DEC-103 — the number is derived from
+//     the decision list in errors_test.go rather than written here twice)
 //
 // TEST FILES ARE EXCLUDED FROM (3) AND THE EXCLUSION IS LOAD-BEARING, not
 // convenience: errors_test.go calls WriteError with `httpx.Code("banana")` ON
@@ -200,10 +202,11 @@ func constNamesInBlock(t *testing.T) map[string]string {
 	return out
 }
 
-func TestTheConstBlockAndTheRuntimeMapHoldTheSameTwelveWords(t *testing.T) {
+func TestTheConstBlockAndTheRuntimeMapHoldTheSameWords(t *testing.T) {
 	block := constNamesInBlock(t)
-	if len(block) != 12 {
-		t.Fatalf("the const block holds %d Code constants, want 12: %v", len(block), block)
+	if len(block) != len(decCodes) {
+		t.Fatalf("the const block holds %d Code constants, want %d: %v",
+			len(block), len(decCodes), block)
 	}
 
 	fromSource := make([]string, 0, len(block))
