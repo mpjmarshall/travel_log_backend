@@ -385,6 +385,22 @@
       "title": "RULED \u2014 the cap on Walk.points is FIVE HUNDRED, and it stops being provisional",
       "reasoning": "DEC-93 ruled 'capped low \u2014 a few hundred' and left the number to the plan, which implemented 500 with the derivation written out and marked it provisional. Confirmed at 500. MEASURED through the shipped types: 100 points 5,226 B; 1,000 points 51,004 B \u2014 so a 500-point track is roughly 26 KB, TWO ORDERS OF MAGNITUDE inside the 1 MiB body ceiling, against the 21,600 points (1,099,390 B) at which an uncapped 1 Hz six-hour walk goes over it. It is also enough to draw any city walk as a polyline, which is the only thing C2 does with the geometry.",
       "consequence": "500, enforced in `ValidateWalk` with its own 422 NAMING THE FIELD \u2014 not by `http.MaxBytesReader`, which answers `ErrBodyTooLarge` with no field name. Remove the provisional marking. The client decimates before sending, and that is a CLIENT-PREREQUISITES item: the server refusing an over-long track is not the same as the phone knowing to shorten one, and a user whose walk is refused with a 422 has lost a recording of a day."
+    },
+    {
+      "id": "DEC-107",
+      "status": "ruled",
+      "title": "RULED \u2014 DEC-86's check-then-insert race is ACCEPTED AND DOCUMENTED, not closed",
+      "reasoning": "Found and stated by R5 rather than discovered later. `Service.Register` reads whether any traveller exists and then inserts, as two statements; under READ COMMITTED two overlapping FIRST-EVER registrations can both see an empty table and both succeed. Moving the predicate into the INSERT does NOT close it \u2014 it is the same read under the same isolation. The two real fixes were named with their costs and both are out of proportion here. A transaction with an advisory lock gives up DEC-50's ONE NAMED EXCEPTION \u2014 auth is deliberately the one path that does not take the traveller lock, and that exemption is argued at length. A unique index on a constant expression closes it at the schema where it cannot be forgotten, and costs a FIFTH migration against a plan whose count of four is derived on DEC-85. The window is the width of a single Argon2 hash \u2014 measured at 20 ms \u2014 and it requires two simultaneous first-ever sign-ups on a single-traveller box.",
+      "consequence": "Left as written, with the race and both fixes already recorded in `auth.Store`'s comment and in CLAUDE.md. This is a DECISION and must read as one: an unstated race is a defect, and a stated one with its fixes priced is a choice. THE TRIGGER IS A SECOND TRAVELLER. The moment this stops being one person on one box, the unique-index fix is the one to take \u2014 it is the cheaper of the two, it survives somebody forgetting, and by then a fifth migration costs nothing."
+    },
+    {
+      "id": "DEC-108",
+      "status": "ruled",
+      "title": "RULED \u2014 ONE SWITCH governs both pins and photograph coordinates in the public envelope",
+      "reasoning": [
+        "R5 raised it rather than acting on it, which was right. H1's switch says 'share coordinates', and the envelope carries `places[].coordinates` and `photos[].coordinates` under it. Measured: 31 of a trip's 96 photographs carry a coordinate, so the photograph set is a MOVEMENT TRACE \u2014 where the traveller stood and when \u2014 rather than a set of places they chose to pin, and those are different kinds of fact. Three answers were weighed. A second switch is the honest decomposition and costs new copy on H1, a new column and a fifth migration, for a distinction THE CLIENT HAS NEVER DRAWN. Dropping photograph coordinates narrows the envelope with no new copy at all."
+      ],
+      "consequence": "One switch, as planned, and the reasoning is the sheet rather than the schema: H1 says 'share coordinates' and the user reading it means all of them. A control that silently governs less than its label says is the same defect as D2's subtitle promising more than the model could keep \u2014 the app's own rule is that the copy and the behaviour are one thing. What is shared is bounded twice over already: only a trip the traveller deliberately shared, and only places they photographed on it. PUBLIC-ENVELOPE.md keeps the reservation as a RECORD rather than a task, so a future H1 that does split the switch inherits the measurement (31 of 96) instead of re-deriving it. R8 builds the envelope; this closes the question it would otherwise have had to answer itself."
     }
   ],
   "gate_l12": {
