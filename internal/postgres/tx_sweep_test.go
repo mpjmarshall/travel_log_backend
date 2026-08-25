@@ -204,7 +204,8 @@ func TestTheSessionWritesTakeTheLockingHelperAndNotTheBumpingOne(t *testing.T) {
 		if made["WithTravellerTx"] {
 			t.Errorf("AuthStore.%s calls WithTravellerTx, which BUMPS logbook_version.\n"+
 				"    `last_used_at` is written on EVERY authenticated request, so counting it\n"+
-				"    invalidates the phone's whole 85 KB cached log every time it asks and\n"+
+				"    invalidates the phone's whole cached log — 95,586 bytes at fixture\n"+
+				"    scale, measured through this build — every time it asks, and\n"+
 				"    GET /v1/logbook never once answers 304 in real use.", method)
 		}
 	}

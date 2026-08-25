@@ -50,6 +50,7 @@ logbook.trips[].shareCoordinates
 logbook.trips[].shareLinkId
 logbook.trips[].shareNotes
 logbook.trips[].sharePhotos
+logbook.trips[].shared
 logbook.trips[].start
 logbook.trips[].summary
 logbook.walks

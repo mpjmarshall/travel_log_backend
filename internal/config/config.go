@@ -31,6 +31,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is the whole of what the binary reads. The parent plan's S03 lists
@@ -57,7 +58,26 @@ type Config struct {
 	AuthRateLimitPerMin      int
 	TravellerRateLimitPerMin int
 	Argon2MaxConcurrent      int
+	RequestTimeout           time.Duration
 }
+
+// MinRequestTimeout and MaxRequestTimeout bound REQUEST_TIMEOUT, and both ends
+// are refusals of a value that would silently switch something off.
+//
+// THE FLOOR IS ARGON2'S. DEC-08's parameters are 64 MiB, t=1, p=4, and one
+// hash does not finish in half a second on modest hardware — so a sub-second
+// request bound is a build where every sign-in answers 503 and nothing in the
+// logs says why. One second is the smallest number that is not that.
+//
+// THE CEILING IS THE CONNECTION'S. cmd/api's `writeTimeout` is 60s, and a
+// handler allowed to run longer than the response may take to be written is a
+// handler whose work is discarded by the server underneath it. cmd/api has a
+// leg asserting these two agree, because they live in two files and the
+// relationship is invisible from either one.
+const (
+	MinRequestTimeout = time.Second
+	MaxRequestTimeout = 60 * time.Second
+)
 
 // Load reads the environment and returns either a whole Config or a single
 // error naming every variable that is missing or invalid. It never returns a
@@ -77,6 +97,7 @@ func Load() (Config, error) {
 		AuthRateLimitPerMin:      l.atLeast("AUTH_RATE_LIMIT_PER_MIN", 1),
 		TravellerRateLimitPerMin: l.atLeast("TRAVELLER_RATE_LIMIT_PER_MIN", 1),
 		Argon2MaxConcurrent:      l.atLeast("ARGON2_MAX_CONCURRENT", 1),
+		RequestTimeout:           l.duration("REQUEST_TIMEOUT", MinRequestTimeout, MaxRequestTimeout),
 	}
 
 	l.refuseSilentIdleClamp(cfg)
@@ -227,4 +248,46 @@ func (l *loader) atLeast(name string, floor int) int {
 		return 0
 	}
 	return n
+}
+
+// duration parses a Go duration and enforces both ends.
+//
+// IT IS A DURATION AND NOT A NUMBER OF SECONDS, and that is the one decision in
+// this helper. Every other numeric variable here carries its unit in its name
+// — DB_MAX_OPEN_CONNS, AUTH_RATE_LIMIT_PER_MIN — and REQUEST_TIMEOUT does not,
+// so a bare `15` would be a value whose unit lives only in a comment. It also
+// buys a real refusal: time.ParseDuration rejects `15`, so the ambiguous
+// spelling is an error at boot rather than a build that times out after
+// fifteen nanoseconds.
+//
+// A NON-POSITIVE VALUE IS REFUSED RATHER THAN READ AS "no timeout", which is
+// the reading somebody expects and is the opposite of what happens:
+// http.TimeoutHandler with a duration <= 0 times out IMMEDIATELY, so `0s`
+// would be every request answering 503. The floor below catches it, and the
+// message says which of the two readings the code takes.
+func (l *loader) duration(name string, floor, ceiling time.Duration) time.Duration {
+	v := l.required(name)
+	if l.broke(name) {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		l.add(name, fmt.Sprintf("%q is not a duration — write it with a unit, like 15s", v))
+		return 0
+	}
+	if d < floor {
+		l.add(name, fmt.Sprintf(
+			"%s is below the minimum of %s; http.TimeoutHandler reads a non-positive "+
+				"duration as 'time out immediately', and one Argon2id hash at 64 MiB "+
+				"does not finish inside a fraction of a second either", d, floor))
+		return 0
+	}
+	if d > ceiling {
+		l.add(name, fmt.Sprintf(
+			"%s is above the maximum of %s, which is the server's own write deadline "+
+				"— a handler allowed to outlive it is a handler whose work is "+
+				"discarded underneath it", d, ceiling))
+		return 0
+	}
+	return d
 }

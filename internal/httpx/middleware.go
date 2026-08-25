@@ -57,14 +57,23 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 	return h
 }
 
-// Base is the four VS3 fixes, in order. Auth appends to it:
+// Base is the four VS3 fixes plus DEC-96's Retry-After, in order. Auth appends
+// to it:
 //
 //	httpx.Chain(mux, append(httpx.Base(log, d), auth.Require(store))...)
+//
+// RETRY-AFTER SITS ABOVE TIMEOUT AND THAT POSITION IS THE WHOLE OF IT.
+// http.TimeoutHandler writes its own 503 from inside net/http, so a header set
+// anywhere BELOW it never reaches the 503 a client is most likely to meet.
+// Above it, one wrapper covers that response and every handler-written 503 as
+// well — which is why the header is set here rather than at the call sites
+// that produce the status.
 func Base(log *slog.Logger, timeout time.Duration) []Middleware {
 	return []Middleware{
 		Recover(log),
 		RequestID(),
 		AccessLog(log),
+		RetryAfter(),
 		Timeout(timeout),
 	}
 }
@@ -165,21 +174,57 @@ func newRequestID() string {
 // deferred, but its shape is settled — a capability lives in the URL — and a
 // logger that records query strings records capabilities, in plain text,
 // for as long as the logs are kept.
-func AccessLog(log *slog.Logger) Middleware {
+//
+// `durationUs` AND NOT `durationMs`, WHICH IS ONE WORD AND THE DIFFERENCE
+// BETWEEN HAVING LATENCY DATA AND NOT (DEC-101). Measured over 21.35 hours of
+// the live stack, 15,960 lines: `durationMs` was an int64 of MILLISECONDS, so
+// 15,151 of them read `durationMs:0` and no latency question was answerable
+// from those logs at all. The only non-zero values in the whole sample were 4
+// and 9.
+//
+// TWO MORE FIELDS COME FROM BELOW AND ARE READ OFF A SLOT. `travellerId` is
+// resolved by auth and `route` by the route table, both of which sit UNDER
+// this middleware and hand their work to a new request this one never sees —
+// see requestFacts in context.go for why a pointer is the mechanism.
+//
+// `quiet` NAMES PATHS WHOSE HEALTHY LINES ARE DEMOTED TO Debug, and it is a
+// parameter rather than a literal because the path belongs to whoever mounted
+// the route. cmd/api passes "/healthz": the container probes every five
+// seconds for ever, and the cost is not disk, it is a 20:1 dilution of the one
+// file you read at 3am.
+func AccessLog(log *slog.Logger, quiet ...string) Middleware {
+	demote := make(map[string]bool, len(quiet))
+	for _, path := range quiet {
+		demote[path] = true
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			sw := &statusWriter{ResponseWriter: w}
+			ctx, facts := withFacts(r.Context())
+			r = r.WithContext(ctx)
 
 			defer func() {
-				log.LogAttrs(r.Context(), accessLevel(sw.status), "request",
+				travellerID, route := facts.read()
+				attrs := []slog.Attr{
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.Int("status", sw.status),
 					slog.Int("bytes", sw.bytes),
-					slog.Int64("durationMs", time.Since(start).Milliseconds()),
+					slog.Int64("durationUs", time.Since(start).Microseconds()),
 					slog.String("requestId", RequestIDFrom(r.Context())),
-				)
+				}
+				// ABSENT RATHER THAN EMPTY. `travellerId:""` on every
+				// unauthenticated line is a field every query has to
+				// special-case, and it reads as "a traveller with no id"
+				// rather than "no traveller".
+				if travellerID != "" {
+					attrs = append(attrs, slog.String("travellerId", travellerID))
+				}
+				if route != "" {
+					attrs = append(attrs, slog.String("route", route))
+				}
+				log.LogAttrs(r.Context(), accessLevel(sw.status, demote[r.URL.Path]), "request", attrs...)
 			}()
 
 			next.ServeHTTP(sw, r)
@@ -192,9 +237,16 @@ func AccessLog(log *slog.Logger) Middleware {
 // A status of 0 means the handler wrote nothing — a panic on its way up, or a
 // timeout that discarded the response. Both are worth the same attention as a
 // 500.
-func accessLevel(status int) slog.Level {
+//
+// A QUIET PATH IS DEMOTED ONLY WHILE IT IS HEALTHY, and that ordering is the
+// whole of it: a probe that FAILS is the most interesting line in the file, so
+// the 500-or-nothing branch is checked first and `quiet` can never hide one.
+func accessLevel(status int, quiet bool) slog.Level {
 	if status == 0 || status >= http.StatusInternalServerError {
 		return slog.LevelError
+	}
+	if quiet {
+		return slog.LevelDebug
 	}
 	return slog.LevelInfo
 }

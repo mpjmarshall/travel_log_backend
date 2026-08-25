@@ -27,15 +27,25 @@ package logbook
 
 import "errors"
 
-// EmitterVersion is DEC-49's first half. It starts at 1 and the shape is final
-// at VS7 — five lists and one object, with the unimplemented lists emitted
-// EMPTY rather than absent — so the re-plan inherits it without a bump.
+// EmitterVersion is DEC-49's first half.
 //
 // BUMP IT BY HAND whenever this package changes what the document looks like.
 // Without it a deploy that renames a key, adds a field or renders a date
 // differently moves no data, so every phone holding a cached body gets 304 for
 // ever and keeps serving the OLD SHAPE until somebody happens to write.
-const EmitterVersion int64 = 1
+//
+// IT IS 2 FROM R1, AND THAT INSTRUCTION IS WHY. It was 1, with the note "the
+// shape is final at VS7 ... so the re-plan inherits it without a bump" — and
+// then DEC-91 added `shared` to every emitted trip, which is precisely "adds a
+// field". A phone holding a body cached under `W/"1-<n>"` must be told the
+// shape moved even though its log did not, or H1 keeps reading a document with
+// no `shared` in it and `Trip.isShared` is false on a trip that is shared.
+//
+// FormatVersion did NOT move with it: the key is additive with a default, and
+// the client's own rule is that such a key needs no bump
+// (lib/src/logbook/logbook_format.dart:14-18). The two numbers answer
+// different questions and this is the change that shows it.
+const EmitterVersion int64 = 2
 
 // FormatVersion is DEC-40's `"version": 2`. The bump describes four fields
 // whose MEANING changed — Photo.asset and the three coverAssets, each a bundle
@@ -92,6 +102,11 @@ func Emit(formatVersion int, doc Document) (Envelope, error) {
 // document, for the ONE route that answers a bare entity: DEC-32's write
 // response, which the phone splices into its cached log rather than
 // re-fetching 85 KB.
+//
+// (That "85 KB" was the CLIENT's file on disk. Through this build the same log
+// emits 95,586 bytes once DEC-46's object ids are in it — measured, see
+// TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch. The argument
+// does not change; the number is bigger and grows with the photograph count.)
 //
 // IT EXISTS BECAUSE THE WRITE PATH DOES NOT GO THROUGH Emit AND THAT COST A
 // DEFECT. Measured against the running server before the fix:

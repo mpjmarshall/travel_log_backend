@@ -11,8 +11,11 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -59,15 +62,21 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 	}
 	f.lastWrite = w
 
-	next := logbook.Trip{
-		ID: w.ID, Name: w.Name, CityIDs: w.CityIDs, Start: w.Start, End: w.End,
-		Summary: w.Summary, CoverAsset: w.CoverAsset,
+	// THE FAKE HONOURS DEC-89 TOO, and it has to: a fake that applies every
+	// field regardless would make every handler leg green against the contract
+	// the store was just fixed to keep. `leave` is the one-line spelling of
+	// "absent means leave alone".
+	id := ""
+	if w.ID != nil {
+		id = *w.ID
 	}
+	next := logbook.Trip{ID: id}
 	replaced := false
 	for i, existing := range f.doc.Trips {
-		if existing.ID != w.ID {
+		if existing.ID != id {
 			continue
 		}
+		next = existing
 		// The sharing group survives a write that does not name it, exactly as
 		// the upsert's column list makes it survive in PostgreSQL.
 		next.ShareLinkID = existing.ShareLinkID
@@ -76,11 +85,41 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 		f.doc.Trips[i] = next
 		replaced = true
 	}
-	if !replaced {
+	applyTripWrite(&next, w)
+	if replaced {
+		for i, existing := range f.doc.Trips {
+			if existing.ID == id {
+				f.doc.Trips[i] = next
+			}
+		}
+	} else {
 		f.doc.Trips = append(f.doc.Trips, next)
 	}
 	f.version++
 	return next, f.version, nil
+}
+
+// applyTripWrite is the fake's half of DEC-89: only the fields the body
+// carried are written over the trip as it stands.
+func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
+	if w.Name != nil {
+		t.Name = *w.Name
+	}
+	if w.CityIDs != nil {
+		t.CityIDs = *w.CityIDs
+	}
+	if logbook.Sent(w.Start) {
+		t.Start = logbook.Value(w.Start)
+	}
+	if logbook.Sent(w.End) {
+		t.End = logbook.Value(w.End)
+	}
+	if logbook.Sent(w.Summary) {
+		t.Summary = logbook.Value(w.Summary)
+	}
+	if logbook.Sent(w.CoverAsset) {
+		t.CoverAsset = logbook.Value(w.CoverAsset)
+	}
 }
 
 func (f *fakeLogbook) assembleCount() int {
@@ -503,7 +542,9 @@ func TestAPutCarryingShareCoordinatesLeavesTheFlagAlone(t *testing.T) {
 }
 
 // THE SPLICE LEG (V4-B1). A phone that PUTs a trip splices the returned entity
-// into its cached document rather than re-fetching 85 KB (DEC-32). If the two
+// into its cached document rather than re-fetching the whole log — 95,586 bytes
+// at fixture scale through this build, measured, and NOT the 85,422 of the
+// client's own file (DEC-32, DEC-102). If the two
 // disagree, the cache is wrong and nothing on either side finds out.
 //
 // It compares DECODED DOCUMENTS rather than bytes, because DEC-30 disclaims
@@ -687,4 +728,232 @@ func decodeEnvelope(t *testing.T, raw []byte) logbook.Envelope {
 		t.Fatalf("decoding an envelope: %v", err)
 	}
 	return out
+}
+
+// DEC-89 AT THE WIRE, AND THE BODY IS THE ONE THE CLIENT SENDS. The store
+// legs prove the statement; this proves the DECODE — that a key the client
+// left out arrives at the store as nil rather than as a zero value, which is
+// the half a store test written against a Go literal cannot see.
+func TestATwoKeyRenameArrivesAtTheStoreAsAbsenceAndNotAsEmptiness(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
+		t.Fatalf("the create answered %d", got.status)
+	}
+	// T4's pencil. Two keys, and nothing else is in the body at all.
+	if got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","name":"Kyoto in May, renamed"}`, token); got.status != http.StatusOK {
+		t.Fatalf("the rename answered %d: %s", got.status, got.body)
+	}
+
+	w := h.logbook.lastWrite
+	if w.Name == nil || *w.Name != "Kyoto in May, renamed" {
+		t.Errorf("Name = %v, want the sent one — the field that WAS sent must arrive", w.Name)
+	}
+	for _, absent := range []struct {
+		field string
+		sent  bool
+	}{
+		{"cityIds", w.CityIDs != nil},
+		{"start", logbook.Sent(w.Start)},
+		{"end", logbook.Sent(w.End)},
+		{"summary", logbook.Sent(w.Summary)},
+		{"coverAsset", logbook.Sent(w.CoverAsset)},
+	} {
+		if absent.sent {
+			t.Errorf("%s arrived as SENT from a body that does not contain the key — "+
+				"absence and emptiness are the same value again, which is the whole "+
+				"of the defect", absent.field)
+		}
+	}
+}
+
+// AND THE ONE SHAPE THAT MUST STILL BE HEARD: an EMPTY list is a client saying
+// "this trip visits nowhere", which T5 can produce by removing the last city.
+// It is not the same as omitting the key, and a contract that conflated them
+// would make the itinerary un-emptyable — the mirror of the defect.
+func TestAnEmptyCityListIsHeardWhileAnAbsentOneIsNot(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
+		t.Fatalf("the create answered %d", got.status)
+	}
+	if got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","cityIds":[]}`, token); got.status != http.StatusOK {
+		t.Fatalf("the empty-list write answered %d: %s", got.status, got.body)
+	}
+	w := h.logbook.lastWrite
+	if w.CityIDs == nil {
+		t.Fatalf("cityIds arrived as absent from a body carrying `[]`")
+	}
+	if len(*w.CityIDs) != 0 {
+		t.Errorf("cityIds = %v, want an empty list", *w.CityIDs)
+	}
+}
+
+// === DEC-96: an outage is a 503 with Retry-After, not a 500 ===
+
+// MEASURED by the operations lens with Postgres killed: every route answered
+// `500 {"code":"internal"}` with no Retry-After. A 500 tells a client the
+// server has a bug and the request is poison; the truth is "the dependency is
+// down, try again shortly", and the difference decides whether a phone retries
+// or gives up. It is also unanswerable afterwards, because a 500 count then
+// conflates handler bugs with outages.
+//
+// THE LEG COVERS BOTH HALVES OF THE API. The store failure reaches the read and
+// the write through writeLogbookFailure, and it reaches the auth middleware
+// through a separate switch — three `default: CodeInternal` branches, and a fix
+// applied to one of them is the shape of miss this table exists to prevent.
+func TestAnUnreachableDatabaseIs503WithRetryAfterAndNot500(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"a driver connect failure", fmt.Errorf("postgres: reading trips: %w",
+			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})},
+		{"a connection database/sql has already closed", fmt.Errorf("postgres: %w", sql.ErrConnDone)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, options{})
+			token := bearer(t, h)
+			h.logbook.failWith = tc.err
+
+			for _, call := range []struct {
+				what string
+				got  answer
+			}{
+				{"GET /v1/logbook", h.get(t, "/v1/logbook", token, nil)},
+				{"PUT /v1/trips/kyoto", h.put(t, "/v1/trips/kyoto", aTrip, token)},
+			} {
+				if call.got.status != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503 — a request that cannot reach the "+
+						"database has not encountered a handler bug, and 500 tells "+
+						"a client not to retry", call.what, call.got.status)
+				}
+				if got := call.got.header.Get("Retry-After"); got != "5" {
+					t.Errorf("%s carries Retry-After %q, want \"5\" — 'try again "+
+						"shortly' is the whole difference between this and a "+
+						"poison request", call.what, got)
+				}
+			}
+		})
+	}
+}
+
+// AND THE CONTROL. A genuine handler fault is still a 500 with no Retry-After,
+// or the classification above is a classifier that calls everything an outage.
+func TestAGenuineFaultIsStill500WithNoRetryAfter(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	h.logbook.failWith = errors.New("sql: Scan error on column index 3")
+
+	got := h.get(t, "/v1/logbook", token, nil)
+	if got.status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", got.status)
+	}
+	if retry := got.header.Get("Retry-After"); retry != "" {
+		t.Errorf("Retry-After = %q on a handler fault — retrying a poison request "+
+			"fails identically for ever", retry)
+	}
+}
+
+// === DEC-101, and it is a rule for R5-R8 rather than a fact about this file ===
+
+// EVERY 500 EMITS EXACTLY ONE ERROR LINE CARRYING THE requestId AND THE
+// UNDERLYING ERROR, AND THE LEG COUNTS LINES RATHER THAN GREPPING FOR ONE.
+//
+// A grep passes against a handler that logs the same failure three times from
+// three layers, which is how a 3am log becomes unreadable; and it passes
+// against a handler that logs nothing, if any OTHER line happens to match. So
+// the assertion is a count. `auth_handlers.go` already did this and it was
+// observed working under a killed Postgres, joined by requestId; R5-R8 write
+// fourteen more handlers, and a 500 whose only line is the access line is a
+// dead end.
+func TestEvery500EmitsExactlyOneErrorLine(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	h.logs.Reset()
+	h.logbook.failWith = errors.New("sql: Scan error on column index 3")
+
+	got := h.get(t, "/v1/logbook", token, nil)
+	if got.status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 — this leg is about the 500's LOG", got.status)
+	}
+
+	var errorLines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("a log line is not JSON: %q", line)
+		}
+		// THE ACCESS LINE IS NOT ONE OF THEM, and excluding it is a
+		// definition rather than a convenience: a 500's access line is
+		// already at ERROR (accessLevel), and it carries no `err` — DEC-101
+		// asks for the line that carries the requestId AND THE UNDERLYING
+		// ERROR, which is the diagnostic one. Counting both would make the
+		// answer two for a correct handler and the leg meaningless.
+		if _, isAccess := decoded["durationUs"]; isAccess {
+			continue
+		}
+		if decoded["level"] == "ERROR" {
+			errorLines = append(errorLines, decoded)
+		}
+	}
+	if len(errorLines) != 1 {
+		t.Fatalf("%d diagnostic ERROR lines for one 500, want exactly 1 — a grep "+
+			"would have passed against both 0 and 3:\n%s",
+			len(errorLines), h.logs.String())
+	}
+	line := errorLines[0]
+	if id, _ := line["requestId"].(string); id == "" {
+		t.Errorf("the ERROR line carries no requestId, so nothing joins it to the "+
+			"access line: %v", line)
+	}
+	if detail, _ := line["err"].(string); !strings.Contains(detail, "Scan error") {
+		t.Errorf("the ERROR line does not carry the underlying error: %v — the "+
+			"body cannot, so this is the only place the detail exists", line)
+	}
+}
+
+// AND THE ACCESS LINE NAMES THE ROUTE PATTERN AND THE TRAVELLER, through the
+// real Mount and the real auth middleware rather than through a hand-recorded
+// slot. The httpx legs prove the mechanism; this proves the WIRING, which is
+// the half that was missing — `route` comes from the table in Mount and
+// `travellerId` from RequireTraveller, and neither is reachable from httpx.
+func TestTheAccessLineForARealRouteNamesThePatternAndTheTraveller(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	h.logs.Reset()
+
+	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
+		t.Fatalf("PUT = %d %s", got.status, got.body)
+	}
+
+	var access map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			continue
+		}
+		if _, isAccess := decoded["durationUs"]; isAccess {
+			access = decoded
+		}
+	}
+	if access == nil {
+		t.Fatalf("no access line:\n%s", h.logs.String())
+	}
+	if access["route"] != "PUT /v1/trips/{id}" {
+		t.Errorf("route = %v, want the matched pattern — `path` alone is the raw "+
+			"URL, so every trip is its own line and nothing aggregates",
+			access["route"])
+	}
+	if access["path"] != "/v1/trips/kyoto" {
+		t.Errorf("path = %v, want the raw path beside the pattern", access["path"])
+	}
+	if id, _ := access["travellerId"].(string); id == "" {
+		t.Errorf("no travellerId on an authenticated line: %v", access)
+	}
 }

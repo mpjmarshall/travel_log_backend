@@ -34,8 +34,15 @@ optional** — it is what enforces the language floor.
 ## What it is
 
 **The server owns the data.** PostgreSQL is the record. The phone caches the whole
-log — 85,422 bytes, measured — and reads it off disk before its first frame, so its
-provider stays synchronous. Writes go to the server and wait; blocked offline.
+log — **95,586 bytes at fixture scale through this build**, measured — and reads it
+off disk before its first frame, so its provider stays synchronous.
+
+*(This line said 85,422 until R1, which is the size of the CLIENT's own format-1
+file on disk and not of what the server sends. DEC-46 replaces 31-32 character
+bundle paths with 64-hex object ids and DEC-91 adds `shared` to every trip; both
+make the wire bigger, and the first grows with the photograph count. The number is
+derived by `go test ./internal/logbook/ -run TestTheEmittedSizeIsLarger -v`, which
+logs all three figures rather than asserting any of them.)* Writes go to the server and wait; blocked offline.
 Photographs go to S3-compatible storage, uploaded direct-to-bucket, read through
 presigned URLs.
 

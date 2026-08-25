@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"travellog/internal/auth"
 	"travellog/internal/config"
@@ -117,7 +118,7 @@ func TestTheServedHandlerCarriesARequestIdAndSurvivesAPanic(t *testing.T) {
 	mux.HandleFunc("GET /panics", func(http.ResponseWriter, *http.Request) {
 		panic("a handler panicked")
 	})
-	server := httptest.NewServer(serverChain(mux, log))
+	server := httptest.NewServer(serverChain(mux, log, testRequestTimeout))
 	t.Cleanup(server.Close)
 
 	healthy, err := server.Client().Get(server.URL + "/healthz")
@@ -161,7 +162,7 @@ func TestTheChainLeavesHealthzsBodyExactlyAsItWas(t *testing.T) {
 	mux.ServeHTTP(bare, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	chained := httptest.NewRecorder()
-	serverChain(mux, log).ServeHTTP(chained, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	serverChain(mux, log, testRequestTimeout).ServeHTTP(chained, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if bare.Body.String() != chained.Body.String() {
 		t.Errorf("the chain changed /healthz's body:\n  bare:    %q\n  chained: %q",
@@ -205,13 +206,13 @@ func TestTheMountedRegisterRouteIsTheRealHandler(t *testing.T) {
 func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 	log := quiet()
 	chained := httptest.NewRecorder()
-	serverChain(wiredMux(t, log), log).ServeHTTP(chained,
+	serverChain(wiredMux(t, log), log, testRequestTimeout).ServeHTTP(chained,
 		httptest.NewRequest(http.MethodGet, "/v1/nothing-here", nil))
 
 	if chained.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", chained.Code, http.StatusNotFound)
 	}
-	if got, want := chained.Body.String(), `{"code":"not_found"}`; got != want {
+	if got, want := chained.Body.String(), `{"code":"unsupported_route"}`; got != want {
 		t.Errorf("body = %q, want %q — net/http's own plain text reached the client", got, want)
 	}
 	if got, want := chained.Header().Get("Content-Type"), "application/json"; got != want {
@@ -238,5 +239,119 @@ func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
 			t.Errorf("%s %s resolves to %q, want %q — the slice arc cannot get past it",
 				route.method, route.path, pattern, route.pattern)
 		}
+	}
+}
+
+// THE COMPRESSOR IS IN THE CHAIN AND IN THE RIGHT PLACE (DEC-94).
+//
+// A middleware written, tested and never wired is the exact state
+// `httpx.Timeout` was in for four steps — the acceptance check for this step
+// greps for its call site for that reason. This leg is the same guard for
+// Compress, and it asserts the OBSERVABLE consequence rather than the wiring:
+// a big body through the served handler comes back gzipped, and Vary names
+// Accept-Encoding whether or not the client asked.
+func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
+	log := quiet()
+	mux := wiredMux(t, log)
+	body := strings.Repeat(`{"id":"kyoto","name":"Kyoto in May"},`, 400)
+	mux.HandleFunc("GET /big", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	})
+
+	server := httptest.NewServer(serverChain(mux, log, testRequestTimeout))
+	t.Cleanup(server.Close)
+
+	// DisableCompression, or net/http adds Accept-Encoding itself and
+	// transparently decompresses — which would make this leg pass against a
+	// server that never compressed anything.
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/big", nil)
+	if err != nil {
+		t.Fatalf("building the request: %v", err)
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+	got, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /big: %v", err)
+	}
+	defer got.Body.Close()
+
+	if enc := got.Header.Get("Content-Encoding"); enc != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip — the middleware is written and "+
+			"not wired, which is the state httpx.Timeout sat in for four steps", enc)
+	}
+	if !strings.Contains(got.Header.Get("Vary"), "Accept-Encoding") {
+		t.Errorf("Vary = %q, want it to name Accept-Encoding", got.Header.Get("Vary"))
+	}
+	raw, err := io.ReadAll(got.Body)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if len(raw) >= len(body) {
+		t.Errorf("the answer is %d bytes against a %d-byte body — it was not compressed",
+			len(raw), len(body))
+	}
+}
+
+// testRequestTimeout is what the legs in this file pass where the server
+// passes cfg.RequestTimeout. Generous, because none of them is about the
+// timeout: a leg that flaked on a slow machine would be a leg about the
+// machine.
+const testRequestTimeout = 30 * time.Second
+
+// THE PER-REQUEST BOUND IS WIRED, AND THE LEG ASSERTS THE ANSWER RATHER THAN
+// THE CALL SITE (DEC-96).
+//
+// `httpx.Timeout` was written at VS3 and had ZERO production call sites for
+// four steps; main.go's own comment said the only reason was a missing config
+// variable. A grep for `httpx.Timeout` is what this step's acceptance check
+// runs, and a grep cannot tell a wired middleware from a mentioned one — so
+// this hangs a handler and asserts the request comes back.
+func TestASlowHandlerIsBoundedAndTheAnswerCarriesRetryAfter(t *testing.T) {
+	log := quiet()
+	mux := wiredMux(t, log)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	})
+
+	server := httptest.NewServer(serverChain(mux, log, 150*time.Millisecond))
+	t.Cleanup(server.Close)
+
+	got, err := server.Client().Get(server.URL + "/slow")
+	if err != nil {
+		t.Fatalf("GET /slow: %v — the request did not come back at all, which is "+
+			"the state this middleware exists to prevent", err)
+	}
+	defer got.Body.Close()
+
+	if got.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", got.StatusCode)
+	}
+	if retry := got.Header.Get("Retry-After"); retry != "5" {
+		t.Errorf("Retry-After = %q, want \"5\" — http.TimeoutHandler writes its own "+
+			"503 from inside net/http, so a header set below it never reaches "+
+			"the 503 a client is most likely to meet", retry)
+	}
+	body, _ := io.ReadAll(got.Body)
+	if string(body) != `{"code":"timeout"}` {
+		t.Errorf("body = %q, want the envelope", body)
+	}
+}
+
+// THE TWO BOUNDS LIVE IN TWO FILES AND THE RELATIONSHIP IS INVISIBLE FROM
+// EITHER. config refuses a REQUEST_TIMEOUT above its own ceiling; that ceiling
+// is only correct while it equals the server's write deadline. A handler
+// allowed to run longer than the response may take to be written is a handler
+// whose work is discarded underneath it.
+func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
+	if config.MaxRequestTimeout != writeTimeout {
+		t.Errorf("config.MaxRequestTimeout = %s and cmd/api's writeTimeout = %s — "+
+			"raise one and the other has to move, or config accepts a handler "+
+			"budget the connection will not honour",
+			config.MaxRequestTimeout, writeTimeout)
 	}
 }

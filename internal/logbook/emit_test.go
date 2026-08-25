@@ -69,6 +69,24 @@ func emitted(t *testing.T, doc logbook.Document) []byte {
 	return out
 }
 
+// serverAddedKeys is EVERY KEY THE SERVER EMITS THAT THE CLIENT'S OWN DOCUMENT
+// DOES NOT HAVE, named once and read by the three legs below.
+//
+// IT IS A LIST RATHER THAN A FUDGE IN EACH LEG, and that is the point. The
+// round trip, the golden and the golden-against-the-fixture leg all have to
+// know about an additive key, and three independent exceptions is how a shape
+// drifts one key at a time with every leg still green. Adding a key to this
+// list is a deliberate act with a ruling beside it; adding one without is
+// three red legs.
+//
+// `logbook.trips[].shared` is DEC-91's: derived from share_links, additive
+// with a default, and therefore NOT a format-version move by the client's own
+// rule ("an added key that is nullable or defaulted needs no bump",
+// lib/src/logbook/logbook_format.dart:14-18, read on `wipe/mock-data`). It IS
+// an EmitterVersion move, which is a different number — see
+// TestTheEmitterVersionMovedWhenTheShapeDid.
+var serverAddedKeys = []string{"logbook.trips[].shared"}
+
 // THE ROUND TRIP. Every date string, every coordinate, every null and every
 // key, in one assertion against a document this repository did not author.
 func TestTheClientsOwnLogRoundTripsThroughTheseTypes(t *testing.T) {
@@ -85,6 +103,11 @@ func TestTheClientsOwnLogRoundTripsThroughTheseTypes(t *testing.T) {
 	if err := json.Unmarshal(clientLogbook(t), &want); err != nil {
 		t.Fatalf("re-decoding the client's log: %v", err)
 	}
+
+	// The server-added keys are stripped rather than added to the reference:
+	// the reference is the CLIENT'S document and nothing in this repository
+	// may edit it, which is the whole reason the round trip means anything.
+	stripServerAdded(t, got.Logbook)
 
 	if reflect.DeepEqual(got.Logbook, want) {
 		return
@@ -284,10 +307,25 @@ func TestFormatsNamesWhatTheEmitterCanWrite(t *testing.T) {
 }
 
 // DEC-49's first half, asserted on the constant so it cannot be dropped.
-func TestTheEmitterVersionStartsAtOne(t *testing.T) {
-	if logbook.EmitterVersion != 1 {
-		t.Errorf("EmitterVersion = %d, want 1 — the shape is final at VS7, so the "+
-			"re-plan inherits it without a bump", logbook.EmitterVersion)
+//
+// IT WAS 1 UNTIL R1 AND THE LEG SAID SO IN TERMS: "the shape is final at VS7,
+// so the re-plan inherits it without a bump". DEC-91 added `shared` to every
+// emitted trip, which is exactly the event emit.go's own instruction describes
+// — "BUMP IT BY HAND whenever this package changes what the document looks
+// like. Without it a deploy that renames a key, adds a field or renders a date
+// differently moves no data, so every phone holding a cached body gets 304 for
+// ever and keeps serving the OLD SHAPE until somebody happens to write."
+//
+// So the number is tied to the list rather than written twice: one server-added
+// key, one bump past the shape VS7 froze.
+func TestTheEmitterVersionMovedWhenTheShapeDid(t *testing.T) {
+	want := int64(1 + len(serverAddedKeys))
+	if logbook.EmitterVersion != want {
+		t.Errorf("EmitterVersion = %d, want %d — VS7 froze the shape at emitter 1 and "+
+			"serverAddedKeys names %d key(s) added since; a cached body under an "+
+			"unmoved emitter version is a phone that keeps serving the old shape "+
+			"until somebody happens to write",
+			logbook.EmitterVersion, want, len(serverAddedKeys))
 	}
 }
 
@@ -331,9 +369,49 @@ func TestTheGoldenKeySetIsTheClientFixturesKeySet(t *testing.T) {
 		t.Fatalf("reading %s: %v", clientFixture, err)
 	}
 	fixture := keyPaths(t, raw)
-	if !reflect.DeepEqual(got, fixture) {
-		t.Errorf("the golden and the client's own log disagree:\n  only in the golden:  %v\n  only in the client's: %v",
-			missing(got, fixture), missing(fixture, got))
+
+	// The golden is the client's key set PLUS exactly serverAddedKeys, and the
+	// assertion is two-directional on purpose: a key the golden gained without
+	// a ruling shows up in the first list, and a key the client has that the
+	// server stopped emitting shows up in the second.
+	if extra := missing(got, fixture); !reflect.DeepEqual(extra, serverAddedKeys) {
+		t.Errorf("the golden holds %v beyond the client's own log, want exactly %v — "+
+			"every server-added key needs a line in serverAddedKeys and a ruling "+
+			"behind it", extra, serverAddedKeys)
+	}
+	if gone := missing(fixture, got); len(gone) != 0 {
+		t.Errorf("the client's log holds %v and the server does not emit them", gone)
+	}
+}
+
+// stripServerAdded removes exactly the keys in serverAddedKeys from a decoded
+// document, so the round trip compares like with like. It understands only the
+// `logbook.<list>[].<key>` shape, which is every entry in the list today; a
+// key at another depth is a Fatalf rather than a silent no-op, because a strip
+// that quietly does nothing turns the round trip back into a leg that cannot
+// fail.
+func stripServerAdded(t *testing.T, doc map[string]any) {
+	t.Helper()
+	for _, path := range serverAddedKeys {
+		parts := strings.Split(strings.TrimPrefix(path, "logbook."), "[].")
+		if len(parts) != 2 {
+			t.Fatalf("serverAddedKeys holds %q, which stripServerAdded cannot read — "+
+				"it understands `logbook.<list>[].<key>` and nothing else", path)
+		}
+		list, ok := doc[parts[0]].([]any)
+		if !ok {
+			t.Fatalf("%q names %q, which is not a list in the emitted document", path, parts[0])
+		}
+		for _, item := range list {
+			entry, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("%q holds something that is not an object", parts[0])
+			}
+			if _, held := entry[parts[1]]; !held {
+				t.Fatalf("%q is in serverAddedKeys and the emitter does not write it", path)
+			}
+			delete(entry, parts[1])
+		}
 	}
 }
 
@@ -515,4 +593,76 @@ func firstDifferences(t *testing.T, got, want map[string]any, limit int) []strin
 	}
 	walk("logbook", any(got), any(want))
 	return out
+}
+
+// THE SIZE PREMISE, MEASURED THROUGH THIS BUILD RATHER THAN CARRIED (DEC-102).
+//
+// Every size argument in the plan carried 85,422 bytes, which is the CLIENT's
+// format-1 file on disk — a fact about `testdata/client_sample_log.json` and
+// NOT about what this server sends. Two things make the emitted body bigger,
+// and both are structural rather than incidental: DEC-46 replaces 31-32
+// character bundle paths with 64-hex object ids on `Photo.asset` and the three
+// coverAssets, and DEC-91 adds `shared` to every trip. The drift GROWS with the
+// photograph count, which is why carrying the old number understates every
+// argument that rests on it — DEC-31's conditional read most of all.
+//
+// SO THE LEG COMPUTES IT INSTEAD OF ASSERTING A CONSTANT. A byte count written
+// down here would be a number to be wrong about; what is asserted is the
+// RELATIONSHIP — the emitted body is larger than the client's file, and the
+// object-id form is larger again — and the numbers are logged so a reader gets
+// the measurement without a leg that reddens on an unrelated change.
+func TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch(t *testing.T) {
+	clientFile, err := os.ReadFile(clientFixture)
+	if err != nil {
+		t.Fatalf("reading %s: %v", clientFixture, err)
+	}
+	doc := clientDocument(t)
+
+	asIs := len(emitted(t, doc))
+	withObjectIDs := len(emitted(t, withContentAddresses(doc)))
+
+	t.Logf("the client's file on disk:            %d bytes", len(clientFile))
+	t.Logf("emitted through THIS build, as-is:    %d bytes", asIs)
+	t.Logf("emitted with DEC-46 object ids:       %d bytes", withObjectIDs)
+
+	if asIs <= len(clientFile) {
+		t.Errorf("the emitted body is %d bytes against a %d-byte client file — "+
+			"DEC-91's `shared` alone makes it bigger, so an argument resting on "+
+			"the file size is understating the wire", asIs, len(clientFile))
+	}
+	if withObjectIDs <= asIs {
+		t.Errorf("object ids made the body SMALLER (%d against %d) — a 64-hex id is "+
+			"longer than every bundle path in the fixture, so this cannot happen "+
+			"unless the substitution did nothing", withObjectIDs, asIs)
+	}
+}
+
+// withContentAddresses is the fixture as it will be AFTER DEC-46: every asset
+// locator a 64-character hex object id. It is a size experiment and nothing
+// else — the ids are not real digests and nothing reads them.
+func withContentAddresses(doc logbook.Document) logbook.Document {
+	id := func(n int) string {
+		return fmt.Sprintf("%064x", n)
+	}
+	n := 0
+	next := func() string { n++; return id(n) }
+	swap := func(p **string) {
+		if *p != nil {
+			v := next()
+			*p = &v
+		}
+	}
+	for i := range doc.Photos {
+		doc.Photos[i].Asset = next()
+	}
+	for i := range doc.Trips {
+		swap(&doc.Trips[i].CoverAsset)
+	}
+	for i := range doc.Cities {
+		swap(&doc.Cities[i].CoverAsset)
+	}
+	for i := range doc.Places {
+		swap(&doc.Places[i].CoverAsset)
+	}
+	return doc
 }

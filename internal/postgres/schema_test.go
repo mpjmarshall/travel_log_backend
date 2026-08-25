@@ -13,10 +13,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 
+	"travellog/internal/logbook"
 	"travellog/internal/postgres/testdb"
 	"travellog/migrations"
 )
@@ -1055,4 +1058,170 @@ func explain(t *testing.T, db *sql.DB, q string) string {
 		lines = append(lines, l)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// === migration 0002: the share defaults, and the rows written before it ===
+
+// LEG SIX. A trip created through the store carries THE CLIENT'S OWN
+// DEFAULTS, which are not the schema's.
+//
+// The client ships `sharePhotos: true, shareNotes: true, shareCoordinates:
+// false` and 0001 defaulted all three to false, so a trip created by the
+// server was born with photo and note sharing off — a setting nobody chose,
+// differing from the same trip created on the phone. `share_coordinates`
+// stays false on both sides and for the client's own stated reason: a pin on
+// your accommodation is not something to hand out by link, so it has to be
+// actively turned on.
+//
+// EXPECTED RED BEFORE 0002: exactly TWO failures, with the third assertion
+// PASSING. Three failures would mean the upsert is writing the columns, which
+// is a different defect that 0002 would not fix.
+func TestACreatedTripCarriesTheClientsOwnSharingDefaults(t *testing.T) {
+	db := migrated(t)
+	store := LogbookStore{DB: db}
+	id := aTraveller(t, db)
+
+	trip, _, err := store.PutTrip(context.Background(), id, logbook.TripWrite{
+		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"),
+	})
+	if err != nil {
+		t.Fatalf("PutTrip: %v", err)
+	}
+
+	if !trip.SharePhotos {
+		t.Errorf("sharePhotos = false on a new trip, want true — the client ships " +
+			"true and a trip created on the server would differ from the same " +
+			"trip created on the phone")
+	}
+	if !trip.ShareNotes {
+		t.Errorf("shareNotes = false on a new trip, want true — same reason")
+	}
+	if trip.ShareCoordinates {
+		t.Errorf("shareCoordinates = true on a new trip, want false — a pin on your " +
+			"accommodation is not something to hand out by link, so it has to be " +
+			"actively turned on")
+	}
+}
+
+// LEG SEVEN. 0002 BACKFILLS THE TRIPS THAT WERE ALREADY THERE (DEC-82).
+//
+// After the two ALTERs alone, pre-existing rows stay f|f|f while every new row
+// reads t|t|f, and NOTHING IN THE TABLE CAN DISTINGUISH "written before 0002"
+// from "the user turned sharing off". Those rows carry a default the client
+// never had, so they are wrong data rather than a choice.
+//
+// THE `[false false false]` ASSERTION IS A PRECONDITION AND IS A Fatalf. Without
+// it, a harness that silently migrated to head makes this leg pass while
+// proving nothing at all.
+func TestMigration0002BackfillsTheTripsThatWereAlreadyThere(t *testing.T) {
+	db, schema := testdb.Open(t)
+	m := Migrator{Schema: schema, Logger: quietLogger()}
+	ctx := context.Background()
+
+	if _, err := m.Migrate(ctx, db, onlyMigration(t, "0001")); err != nil {
+		t.Fatalf("applying 0001 alone: %v", err)
+	}
+	id := aTraveller(t, db)
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trips (traveller_id, id, name) VALUES ($1::uuid, 'before', 'Before 0002')`,
+		id); err != nil {
+		t.Fatalf("writing a trip under 0001: %v", err)
+	}
+
+	if got := sharingOf(t, db, id, "before"); got != [3]bool{false, false, false} {
+		t.Fatalf("a trip written under 0001 alone reads %v, want [false false false] — "+
+			"this is the PRECONDITION, and without it a harness that silently "+
+			"migrated to head would make the rest of this leg pass while proving "+
+			"nothing", got)
+	}
+
+	applied, err := m.Migrate(ctx, db, migrations.FS)
+	if err != nil {
+		t.Fatalf("applying 0002: %v", err)
+	}
+	if len(applied) != 1 || applied[0] != "0002" {
+		t.Fatalf("the second run applied %v, want [0002]", applied)
+	}
+
+	if got := sharingOf(t, db, id, "before"); got != [3]bool{true, true, false} {
+		t.Errorf("the pre-existing trip reads %v after 0002, want [true true false] — "+
+			"a DEFAULT applies to rows written AFTER it, and nothing in the table "+
+			"can tell 'written before 0002' from 'the user turned sharing off'", got)
+	}
+}
+
+// LEG EIGHT, CATALOG TIER. The defaults are read out of pg_attrdef BY NAME.
+//
+// It exists because leg six goes through the store and would go green if
+// somebody "fixed" the defaults in Go — which would leave every other writer,
+// including a psql session and R4's seed, still producing f|f|f.
+func TestTheShareDefaultsAreInTheCatalogAndNotInGo(t *testing.T) {
+	db := migrated(t)
+
+	want := map[string]string{
+		"share_photos":      "true",
+		"share_notes":       "true",
+		"share_coordinates": "false",
+	}
+	rows, err := db.QueryContext(context.Background(),
+		`SELECT a.attname, pg_get_expr(d.adbin, d.adrelid)
+		   FROM pg_attrdef d
+		   JOIN pg_attribute a ON (a.attrelid, a.attnum) = (d.adrelid, d.adnum)
+		  WHERE d.adrelid = 'trips'::regclass AND a.attname LIKE 'share\_%'`)
+	if err != nil {
+		t.Fatalf("reading pg_attrdef: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var name, expr string
+		if err := rows.Scan(&name, &expr); err != nil {
+			t.Fatalf("scanning pg_attrdef: %v", err)
+		}
+		got[name] = expr
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading pg_attrdef: %v", err)
+	}
+	for column, expr := range want {
+		if got[column] != expr {
+			t.Errorf("%s DEFAULT is %q, want %q — a default the catalog does not "+
+				"carry is a default only this codebase's writers get",
+				column, got[column], expr)
+		}
+	}
+}
+
+func sharingOf(t *testing.T, db *sql.DB, travellerID, tripID string) [3]bool {
+	t.Helper()
+	var out [3]bool
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT share_photos, share_notes, share_coordinates FROM trips
+		  WHERE traveller_id = $1::uuid AND id = $2`,
+		travellerID, tripID).Scan(&out[0], &out[1], &out[2]); err != nil {
+		t.Fatalf("reading the sharing flags of %s: %v", tripID, err)
+	}
+	return out
+}
+
+// onlyMigration is migrations.FS cut down to one version's pair, so a leg can
+// stand at an intermediate schema. It reads the REAL files rather than
+// restating them: a hand-written copy of 0001 would drift, and this leg's
+// whole point is what the real 0001 leaves behind.
+func onlyMigration(t *testing.T, version string) fs.FS {
+	t.Helper()
+	out := fstest.MapFS{}
+	for _, suffix := range []string{"up", "down"} {
+		matches, err := fs.Glob(migrations.FS, version+"_*."+suffix+".sql")
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("globbing %s_*.%s.sql: %v (matched %v)", version, suffix, err, matches)
+		}
+		body, err := fs.ReadFile(migrations.FS, matches[0])
+		if err != nil {
+			t.Fatalf("reading %s: %v", matches[0], err)
+		}
+		out[matches[0]] = &fstest.MapFile{Data: body}
+	}
+	return out
 }

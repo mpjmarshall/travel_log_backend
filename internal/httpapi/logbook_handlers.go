@@ -95,11 +95,16 @@ func putTrip(deps Deps) http.HandlerFunc {
 			return
 		}
 
+		// THE PATH FILLS AN ABSENT ID AND CONTRADICTS NOTHING ELSE. Under
+		// DEC-89 an absent id is `nil` rather than the empty string, and the
+		// two have stopped being the same value: `{"id":""}` is now a client
+		// naming a trip it cannot have, which ValidateTrip refuses by pattern
+		// instead of the path quietly supplying one.
 		id := r.PathValue("id")
-		if body.ID == "" {
-			body.ID = id
+		if body.ID == nil {
+			body.ID = &id
 		}
-		if body.ID != id {
+		if *body.ID != id {
 			httpx.WriteFieldError(w, r, "id")
 			return
 		}
@@ -191,6 +196,14 @@ func writeLogbookFailure(w http.ResponseWriter, r *http.Request, log *slog.Logge
 	case errors.Is(err, logbook.ErrUnsupportedFormat):
 		w.Header().Set(formatHeader, emittableFormats())
 		httpx.WriteError(w, r, httpx.CodeUnsupportedFormat)
+	case httpx.DependencyIsDown(err):
+		// DEC-96. A request that could not reach the database has not
+		// encountered a handler bug, and 500 tells the client the opposite:
+		// do not retry, the request is poison. `timeout` is 503 and
+		// httpx.RetryAfter puts the header on. It is still logged — an
+		// outage is worth a line — but it is not a fault.
+		logFailure(r, log, err)
+		httpx.WriteError(w, r, httpx.CodeTimeout)
 	default:
 		logFailure(r, log, err)
 		httpx.WriteError(w, r, httpx.CodeInternal)

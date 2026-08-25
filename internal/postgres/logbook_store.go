@@ -1,4 +1,19 @@
-// The storage half of logbook.Store, and the six queries one read is made of.
+// The storage half of logbook.Store, and the TEN queries one read is made of.
+//
+// TEN, NOT SIX, AND THE CORRECTION IS WORTH MORE THAN THE NUMBER (DEC-102).
+// This line said "six queries" from the day it was written, and six is the
+// count of LISTS in the document rather than of statements: read_tx.go's "six
+// lists" is a fair description of the payload and this was a COUNT, so this
+// one was wrong. Measured with pg_stat_statements reset around exactly one
+// whole-log read, each `calls = 1`: photos, visits, trip_cities, places,
+// cities, trips, walk_points, walks, logbook_version, traveller name. It is
+// also what makes the ~3ms 304 legible — nine round trips at roughly 0.3ms
+// against 0.176ms of server work, so the cost is round trips and not work.
+//
+// AND THE SPLIT, SO NOBODY OPTIMISES THE WRONG HALF: at 100x fixture scale,
+// 37.06ms of a 61.20ms read is Postgres and 24.1ms is row-to-struct scanning
+// through database/sql. The query plans are already sane and the planner is
+// right to decline indexes on the small tables.
 //
 // EVERY ONE OF THEM RUNS INSIDE ONE REPEATABLE-READ SNAPSHOT, and the version
 // was read inside it before any of them (read_tx.go). Under READ COMMITTED
@@ -39,6 +54,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"travellog/internal/logbook"
 )
@@ -46,9 +62,16 @@ import (
 // LogbookStore is logbook.Store over *sql.DB.
 type LogbookStore struct{ DB *sql.DB }
 
-const readTripsSQL = `SELECT id, name, started_on, ended_on, summary, cover_asset,
-		share_photos, share_notes, share_coordinates
-	FROM trips WHERE traveller_id = $1::uuid ORDER BY id`
+// sharedSQL is DEC-91's derived flag, spelled once and used by both trip
+// reads. `revoked_at IS NULL` is the whole of it: DEC-67 revokes and KEEPS, so
+// a bare EXISTS would report every trip that was ever shared as still shared,
+// and 'Stop sharing' would appear to do nothing.
+const sharedSQL = `EXISTS (SELECT 1 FROM share_links s
+		WHERE s.traveller_id = t.traveller_id AND s.trip_id = t.id AND s.revoked_at IS NULL)`
+
+const readTripsSQL = `SELECT t.id, t.name, t.started_on, t.ended_on, t.summary, t.cover_asset,
+		t.share_photos, t.share_notes, t.share_coordinates, ` + sharedSQL + `
+	FROM trips t WHERE t.traveller_id = $1::uuid ORDER BY t.id`
 
 const readTripCitiesSQL = `SELECT trip_id, city_id
 	FROM trip_cities WHERE traveller_id = $1::uuid ORDER BY trip_id, ordinal`
@@ -147,7 +170,7 @@ func readTrips(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.T
 		var started, ended sql.NullTime
 		var summary, cover sql.NullString
 		if err := rows.Scan(&t.ID, &t.Name, &started, &ended, &summary, &cover,
-			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates); err != nil {
+			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates, &t.Shared); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a trip: %w", err)
 		}
 		t.Start, t.End = instantOrNil(started), instantOrNil(ended)
@@ -234,12 +257,21 @@ func readVisits(ctx context.Context, tx *sql.Tx, travellerID string) (map[string
 	out := map[string][]logbook.Visit{}
 	for rows.Next() {
 		var v logbook.Visit
-		var at sql.NullTime
+		// THE THREE NOT NULL DATE COLUMNS ARE SCANNED INTO time.Time DIRECTLY
+		// (DEC-102). They were `sql.NullTime` with `.Valid` never checked,
+		// which is correct only while the constraint holds — and the
+		// constraint was doing 100% of the work while this same file is
+		// careful with `instantOrNil` and with `if lat.Valid && lng.Valid`.
+		// The failure it hid: a NULL scans as the zero time, the emitter
+		// writes `0001-01-01T00:00:00.000Z`, `DateTime.parse` accepts it
+		// happily, and every screen renders a year-1 date with nothing
+		// reporting a fault. Into time.Time the driver errors instead.
+		var at time.Time
 		var note sql.NullString
 		if err := rows.Scan(&v.ID, &v.PlaceID, &v.TripID, &at, &note); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a visit: %w", err)
 		}
-		v.At = logbook.At(at.Time)
+		v.At = logbook.At(at)
 		v.Note = textOrNil(note)
 		out[v.PlaceID] = append(out[v.PlaceID], v)
 	}
@@ -256,7 +288,10 @@ func readPhotos(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.
 	var out []logbook.Photo
 	for rows.Next() {
 		var p logbook.Photo
-		var takenAt, filedLater sql.NullTime
+		// taken_at is NOT NULL and is scanned as such; filed_later is
+		// nullable and keeps its sql.NullTime. DEC-102.
+		var takenAt time.Time
+		var filedLater sql.NullTime
 		var placeID, visitID, caption sql.NullString
 		var lat, lng sql.NullFloat64
 		var accuracy sql.NullInt64
@@ -264,7 +299,7 @@ func readPhotos(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.
 			&placeID, &visitID, &caption, &lat, &lng, &accuracy, &filedLater); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a photo: %w", err)
 		}
-		p.TakenAt = logbook.At(takenAt.Time)
+		p.TakenAt = logbook.At(takenAt)
 		p.PlaceID, p.VisitID, p.Caption = textOrNil(placeID), textOrNil(visitID), textOrNil(caption)
 		p.FiledLater = instantOrNil(filedLater)
 		p.AccuracyMetres = intOrNil(accuracy)
@@ -291,13 +326,14 @@ func readWalks(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.W
 	var out []logbook.Walk
 	for rows.Next() {
 		var w logbook.Walk
-		var recordedOn sql.NullTime
+		// recorded_on is NOT NULL. DEC-102.
+		var recordedOn time.Time
 		var name sql.NullString
 		if err := rows.Scan(&w.ID, &w.TripID, &w.CityID, &recordedOn, &w.DistanceKm,
 			&name, &w.Dismissed); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a walk: %w", err)
 		}
-		w.RecordedOn = logbook.At(recordedOn.Time)
+		w.RecordedOn = logbook.At(recordedOn)
 		w.Name = textOrNil(name)
 		w.Points = points[w.ID]
 		out = append(out, w)
@@ -341,21 +377,67 @@ func readTravellerName(ctx context.Context, tx *sql.Tx, travellerID string) (*lo
 	return &logbook.Traveller{Name: name.String}, nil
 }
 
-// upsertTripSQL is DEC-32's whole-state write, and WHAT IT DOES NOT NAME IS
-// THE POINT. share_photos, share_notes and share_coordinates appear in neither
-// the column list nor the SET clause, so a create leaves them at their schema
-// defaults and an update leaves them exactly as they were. Naming them in
-// EXCLUDED-form would silently reset a group this route does not own (SF6) on
-// every rename.
+// upsertTripSQL is DEC-33's idempotent write on a client-minted key, and WHAT
+// IT DOES NOT WRITE IS THE POINT — twice over now.
+//
+// share_photos, share_notes and share_coordinates appear in neither the column
+// list nor the SET clause, so a create leaves them at their schema defaults and
+// an update leaves them exactly as they were. Naming them in EXCLUDED-form
+// would silently reset a group this route does not own (SF6) on every rename.
+//
+// AND THE OTHER FIVE COLUMNS NOW GET THE SAME ANSWER (DEC-89). Each is written
+// only when its `sent` flag says the key was in the body; otherwise the CASE
+// keeps `trips.<column>`, the value already stored. That is what makes T4's
+// two-key rename leave an itinerary and two dates alone, and what makes an
+// accidental re-PUT harmless.
+//
+// THE FLAGS ARE PARAMETERS RATHER THAN A BUILT STRING, and that is a decision.
+// Assembling a SET clause per request would make the statement text vary with
+// the body — thirty-two shapes for five optional columns — so nothing is
+// prepared twice, pg_stat_statements shows thirty-two rows where it should show
+// one, and the one place a column name could be interpolated is the one place
+// this file must never interpolate. One statement, five booleans.
+//
+// EXCLUDED.<column> IS STILL THE SOURCE ON THE WRITTEN BRANCH. It is the row
+// the INSERT proposed, so a sent null lands as NULL and a sent value lands as
+// itself, with no second set of parameters.
 const upsertTripSQL = `INSERT INTO trips
 		(traveller_id, id, name, started_on, ended_on, summary, cover_asset)
 	VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
 	ON CONFLICT ON CONSTRAINT trips_pkey DO UPDATE SET
-		name = EXCLUDED.name,
-		started_on = EXCLUDED.started_on,
-		ended_on = EXCLUDED.ended_on,
-		summary = EXCLUDED.summary,
-		cover_asset = EXCLUDED.cover_asset`
+		name        = CASE WHEN $8::boolean  THEN EXCLUDED.name        ELSE trips.name        END,
+		started_on  = CASE WHEN $9::boolean  THEN EXCLUDED.started_on  ELSE trips.started_on  END,
+		ended_on    = CASE WHEN $10::boolean THEN EXCLUDED.ended_on    ELSE trips.ended_on    END,
+		summary     = CASE WHEN $11::boolean THEN EXCLUDED.summary     ELSE trips.summary     END,
+		cover_asset = CASE WHEN $12::boolean THEN EXCLUDED.cover_asset ELSE trips.cover_asset END`
+
+// readTripForWriteSQL is the row as it stands BEFORE the upsert, and it answers
+// two questions the pointer contract asks that nothing else can.
+//
+// WHETHER THE TRIP EXISTS decides whether an absent `name` is legal. Absent
+// means leave alone on an update; on a create there is nothing to leave, and
+// trips.name is NOT NULL, so without this the answer is a constraint violation
+// reaching the client as a 500 with no field on it.
+//
+// WHAT ITS DATES ARE decides whether a body carrying ONE date is orderable.
+// trips_dates_ordered_ck compares the two columns after the write, so
+// `{"id":"autumn","start":"2027-12-01T00:00:00.000Z"}` against a trip that ends
+// in October is a violation ValidateTrip cannot see — it holds one date and the
+// other is in the database. This is NEW under DEC-89: a whole-state upsert
+// always carried both.
+//
+// Both reads are free of races: the write already holds the traveller's
+// advisory lock, so the row cannot move between this SELECT and the INSERT.
+// AND IT READS name AS WELL, FOR A REASON THAT IS PURE POSTGRES. The proposed
+// INSERT row is checked against NOT NULL before the conflict is resolved, so
+// `VALUES (…, NULL, …)` on a rename that omits the name answers `null value in
+// column "name" of relation "trips" violates not-null constraint (SQLSTATE
+// 23502)` — measured, and it is the first thing a name-only PUT does. The CASE
+// would have discarded that NULL a moment later, but the tuple never gets
+// there. So an unsent name proposes the name the row already has: the write
+// is a no-op on that column by two independent mechanisms rather than one.
+const readTripForWriteSQL = `SELECT name, started_on, ended_on FROM trips
+	WHERE traveller_id = $1::uuid AND id = $2`
 
 const deleteTripCitiesSQL = `DELETE FROM trip_cities WHERE traveller_id = $1::uuid AND trip_id = $2`
 
@@ -366,9 +448,9 @@ const cityExistsSQL = `SELECT 1 FROM cities WHERE traveller_id = $1::uuid AND id
 
 const mediaObjectExistsSQL = `SELECT 1 FROM media_objects WHERE traveller_id = $1::uuid AND id = $2`
 
-const readOneTripSQL = `SELECT id, name, started_on, ended_on, summary, cover_asset,
-		share_photos, share_notes, share_coordinates
-	FROM trips WHERE traveller_id = $1::uuid AND id = $2`
+const readOneTripSQL = `SELECT t.id, t.name, t.started_on, t.ended_on, t.summary, t.cover_asset,
+		t.share_photos, t.share_notes, t.share_coordinates, ` + sharedSQL + `
+	FROM trips t WHERE t.traveller_id = $1::uuid AND t.id = $2`
 
 const readOneTripsCitiesSQL = `SELECT city_id FROM trip_cities
 	WHERE traveller_id = $1::uuid AND trip_id = $2 ORDER BY ordinal`
@@ -394,23 +476,48 @@ const readOneTripsCitiesSQL = `SELECT city_id FROM trip_cities
 // constraint fires, and the constraint is still what enforces it.
 func (s LogbookStore) PutTrip(ctx context.Context, travellerID string, w logbook.TripWrite) (logbook.Trip, int64, error) {
 	var trip logbook.Trip
+	if w.ID == nil {
+		return logbook.Trip{}, 0, logbook.InvalidFieldError{Field: "id", Why: "a write names its trip"}
+	}
+	id := *w.ID
 
 	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
-		if err := requireCities(ctx, tx, travellerID, w.CityIDs); err != nil {
+		before, err := requireWritableTrip(ctx, tx, travellerID, id, w)
+		if err != nil {
 			return err
 		}
-		if err := requireCover(ctx, tx, travellerID, w.CoverAsset); err != nil {
+		if w.CityIDs != nil {
+			if err := requireCities(ctx, tx, travellerID, *w.CityIDs); err != nil {
+				return err
+			}
+		}
+		if err := requireCover(ctx, tx, travellerID, logbook.Value(w.CoverAsset)); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, upsertTripSQL, travellerID, w.ID, w.Name,
-			timeOrNil(w.Start), timeOrNil(w.End), w.Summary, w.CoverAsset); err != nil {
-			return fmt.Errorf("postgres: upserting the trip %s: %w", w.ID, err)
+		name := before.name
+		if w.Name != nil {
+			name = *w.Name
 		}
-		if err := replaceTripCities(ctx, tx, travellerID, w.ID, w.CityIDs); err != nil {
-			return err
+		if _, err := tx.ExecContext(ctx, upsertTripSQL, travellerID, id,
+			name,
+			timeOrNil(logbook.Value(w.Start)), timeOrNil(logbook.Value(w.End)),
+			logbook.Value(w.Summary), logbook.Value(w.CoverAsset),
+			w.Name != nil,
+			logbook.Sent(w.Start), logbook.Sent(w.End),
+			logbook.Sent(w.Summary), logbook.Sent(w.CoverAsset),
+		); err != nil {
+			return fmt.Errorf("postgres: upserting the trip %s: %w", id, err)
+		}
+		// ABSENT MEANS LEAVE ALONE HERE TOO, and this is the branch DEC-89 was
+		// measured on: a nil CityIDs skips the delete-then-insert entirely
+		// rather than replacing the list with an empty one.
+		if w.CityIDs != nil {
+			if err := replaceTripCities(ctx, tx, travellerID, id, *w.CityIDs); err != nil {
+				return err
+			}
 		}
 
-		read, err := readOneTrip(ctx, tx, travellerID, w.ID)
+		read, err := readOneTrip(ctx, tx, travellerID, id)
 		if err != nil {
 			return err
 		}
@@ -421,6 +528,55 @@ func (s LogbookStore) PutTrip(ctx context.Context, travellerID string, w logbook
 		return logbook.Trip{}, 0, travellerError(err, travellerID)
 	}
 	return trip, version, nil
+}
+
+// requireWritableTrip is the half of DEC-89's validation that needs the stored
+// row, and it names a field rather than letting a constraint answer.
+//
+// It reads the trip as it stands and refuses two bodies ValidateTrip cannot
+// see: a CREATE with no `name`, and a partial date write whose result would be
+// out of order. Both are reachable only because absence is now a value —
+// see readTripForWriteSQL for why each one is a 422 and not a 500.
+func requireWritableTrip(ctx context.Context, tx *sql.Tx, travellerID, id string, w logbook.TripWrite) (tripBeforeWrite, error) {
+	var before tripBeforeWrite
+	err := tx.QueryRowContext(ctx, readTripForWriteSQL, travellerID, id).
+		Scan(&before.name, &before.started, &before.ended)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if w.Name == nil {
+			return before, logbook.InvalidFieldError{Field: "name",
+				Why: "a trip that is not in this log yet has no name to leave alone"}
+		}
+	case err != nil:
+		return before, fmt.Errorf("postgres: reading the trip %s before writing it: %w", id, err)
+	}
+
+	start, end := before.started, before.ended
+	if logbook.Sent(w.Start) {
+		start = nullTimeOf(logbook.Value(w.Start))
+	}
+	if logbook.Sent(w.End) {
+		end = nullTimeOf(logbook.Value(w.End))
+	}
+	if start.Valid && end.Valid && end.Time.Before(start.Time) {
+		return before, logbook.InvalidFieldError{Field: "end", Why: "a trip cannot end before it starts"}
+	}
+	return before, nil
+}
+
+// tripBeforeWrite is the three columns the upsert has to know about the row it
+// is replacing. It is a type rather than three return values because two of
+// the three are only read to be handed straight back to the statement.
+type tripBeforeWrite struct {
+	name           string
+	started, ended sql.NullTime
+}
+
+func nullTimeOf(i *logbook.Instant) sql.NullTime {
+	if i == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: i.Time(), Valid: true}
 }
 
 // replaceTripCities is DELETE-THEN-INSERT, which is the mandated strategy and
@@ -479,7 +635,7 @@ func readOneTrip(ctx context.Context, tx *sql.Tx, travellerID, tripID string) (l
 
 	switch err := tx.QueryRowContext(ctx, readOneTripSQL, travellerID, tripID).
 		Scan(&t.ID, &t.Name, &started, &ended, &summary, &cover,
-			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates); {
+			&t.SharePhotos, &t.ShareNotes, &t.ShareCoordinates, &t.Shared); {
 	case errors.Is(err, sql.ErrNoRows):
 		return logbook.Trip{}, fmt.Errorf("%w: %s", logbook.ErrNoTrip, tripID)
 	case err != nil:

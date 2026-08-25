@@ -36,6 +36,12 @@ services:
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-10}
       TRAVELLER_RATE_LIMIT_PER_MIN: ${TRAVELLER_RATE_LIMIT_PER_MIN:-600}
       ARGON2_MAX_CONCURRENT: ${ARGON2_MAX_CONCURRENT:-2}
+      # DEC-96's per-request bound. httpx.Timeout was written at VS3 and had
+      # ZERO production call sites for four steps, because main.go had no
+      # variable to read and inventing one there would have been a
+      # configuration value nobody chose, silently in force. This is that
+      # variable.
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-15s}
     ports:
       # Loopback-bound: local-only target (DEC-21). Nothing here is reachable
       # from the network without an explicit change.

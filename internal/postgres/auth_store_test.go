@@ -277,7 +277,8 @@ func TestCreateSessionStoresTheHashAndTheExpiryAndAnswersAnId(t *testing.T) {
 
 // THE LEG THE SLICE EXISTS FOR (DEC-50, and the slice's own definition of
 // done). Creating a session and touching one must move logbook_version by
-// ZERO. Count them and the phone's whole 85 KB cached log is invalidated on
+// ZERO. Count them and the phone's whole cached log — 95,586 bytes at fixture
+// scale through this build, measured — is invalidated on
 // every authenticated request, so GET /v1/logbook never once answers 304 in
 // real use — which was a real defect (V3-B4) and is invisible until somebody
 // measures the cache.

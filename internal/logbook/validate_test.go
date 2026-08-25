@@ -10,18 +10,27 @@ import (
 	"travellog/internal/logbook"
 )
 
-func day(y int, m time.Month, d int) *logbook.Instant {
+func day(y int, m time.Month, d int) **logbook.Instant {
 	i := logbook.At(time.Date(y, m, d, 0, 0, 0, 0, time.UTC))
-	return &i
+	p := &i
+	return &p
 }
 
-func text(s string) *string { return &s }
+func text(s string) **string {
+	p := &s
+	return &p
+}
+
+// ptr is the one-line helper DEC-89's pointer contract costs every caller. It
+// is here rather than in a shared package because a test helper that crosses
+// packages is a test helper somebody changes for one caller.
+func ptr[T any](v T) *T { return &v }
 
 func validTrip() logbook.TripWrite {
 	return logbook.TripWrite{
-		ID:      "autumn-crossing",
-		Name:    "Autumn crossing",
-		CityIDs: []string{"kyoto", "matsumoto"},
+		ID:      ptr("autumn-crossing"),
+		Name:    ptr("Autumn crossing"),
+		CityIDs: ptr([]string{"kyoto", "matsumoto"}),
 		Start:   day(2027, time.September, 17),
 		End:     day(2027, time.October, 2),
 		Summary: text("Down the length of Japan"),
@@ -60,16 +69,16 @@ func TestEachRefusalNamesTheFieldTheClientCanShow(t *testing.T) {
 		mutate func(*logbook.TripWrite)
 		field  string
 	}{
-		{"an empty id", func(w *logbook.TripWrite) { w.ID = "" }, "id"},
-		{"an id with a capital in it", func(w *logbook.TripWrite) { w.ID = "Kyoto" }, "id"},
-		{"an id with a slash in it", func(w *logbook.TripWrite) { w.ID = "kyoto/2027" }, "id"},
-		{"an id over 64 characters", func(w *logbook.TripWrite) { w.ID = strings.Repeat("a", 65) }, "id"},
-		{"an empty name", func(w *logbook.TripWrite) { w.Name = "" }, "name"},
-		{"a name of nothing but spaces", func(w *logbook.TripWrite) { w.Name = "   " }, "name"},
-		{"a name past the ceiling", func(w *logbook.TripWrite) { w.Name = strings.Repeat("a", logbook.MaxNameBytes+1) }, "name"},
+		{"an empty id", func(w *logbook.TripWrite) { w.ID = ptr("") }, "id"},
+		{"an id with a capital in it", func(w *logbook.TripWrite) { w.ID = ptr("Kyoto") }, "id"},
+		{"an id with a slash in it", func(w *logbook.TripWrite) { w.ID = ptr("kyoto/2027") }, "id"},
+		{"an id over 64 characters", func(w *logbook.TripWrite) { w.ID = ptr(strings.Repeat("a", 65)) }, "id"},
+		{"an empty name", func(w *logbook.TripWrite) { w.Name = ptr("") }, "name"},
+		{"a name of nothing but spaces", func(w *logbook.TripWrite) { w.Name = ptr("   ") }, "name"},
+		{"a name past the ceiling", func(w *logbook.TripWrite) { w.Name = ptr(strings.Repeat("a", logbook.MaxNameBytes+1)) }, "name"},
 		{"a summary past the ceiling", func(w *logbook.TripWrite) { w.Summary = text(strings.Repeat("a", logbook.MaxSummaryBytes+1)) }, "summary"},
-		{"a city id that is not a slug", func(w *logbook.TripWrite) { w.CityIDs = []string{"kyoto", "MATSUMOTO"} }, "cityIds"},
-		{"the same city twice", func(w *logbook.TripWrite) { w.CityIDs = []string{"kyoto", "kyoto"} }, "cityIds"},
+		{"a city id that is not a slug", func(w *logbook.TripWrite) { w.CityIDs = ptr([]string{"kyoto", "MATSUMOTO"}) }, "cityIds"},
+		{"the same city twice", func(w *logbook.TripWrite) { w.CityIDs = ptr([]string{"kyoto", "kyoto"}) }, "cityIds"},
 		{"a cover asset that is not a content hash", func(w *logbook.TripWrite) { w.CoverAsset = text("assets/imagery/hero-mountain.png") }, "coverAsset"},
 		{"a cover asset in the wrong case", func(w *logbook.TripWrite) { w.CoverAsset = text(strings.Repeat("A", 64)) }, "coverAsset"},
 		{"a trip that ends before it starts", func(w *logbook.TripWrite) { w.End = day(2027, time.September, 16) }, "end"},
@@ -134,7 +143,7 @@ func TestTheWriteTypeCannotCarryTheSharingFields(t *testing.T) {
 				"why the client has a dedicated copyWithShare", key)
 		}
 	}
-	if got.ID != "kyoto" || got.Name != "Kyoto" {
+	if got.ID == nil || *got.ID != "kyoto" || got.Name == nil || *got.Name != "Kyoto" {
 		t.Errorf("the seven fields it DOES own did not survive: %+v", got)
 	}
 }

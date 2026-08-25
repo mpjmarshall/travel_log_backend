@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -35,12 +37,24 @@ func TestTheRunnerAppliesEachFileExactlyOnceAcrossTwoRuns(t *testing.T) {
 	m := Migrator{Schema: schema, Logger: quietLogger()}
 	ctx := context.Background()
 
+	// EVERY VERSION IN THE DIRECTORY, IN ORDER, DERIVED RATHER THAN LISTED.
+	// This used to read `want [0001]` and went red the moment 0002 landed —
+	// correctly, but for the wrong reason: the claim is "each file exactly
+	// once, in lexical order", and a literal turns that into "there is one
+	// file". Deriving it means the next migration reddens this leg only if it
+	// is applied twice, out of order, or not at all.
+	want := versionsIn(t, migrations.FS)
+	if len(want) < 2 {
+		t.Fatalf("the migrations directory holds %v — this leg is about ORDER and "+
+			"needs at least two files to be about anything", want)
+	}
+
 	first, err := m.Migrate(ctx, db, migrations.FS)
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if len(first) != 1 || first[0] != "0001" {
-		t.Fatalf("first run applied %v, want [0001]", first)
+	if strings.Join(first, ",") != strings.Join(want, ",") {
+		t.Fatalf("first run applied %v, want %v in that order", first, want)
 	}
 
 	second, err := m.Migrate(ctx, db, migrations.FS)
@@ -50,9 +64,28 @@ func TestTheRunnerAppliesEachFileExactlyOnceAcrossTwoRuns(t *testing.T) {
 	if len(second) != 0 {
 		t.Errorf("second run applied %v, want nothing", second)
 	}
-	if n := count(t, db, `SELECT count(*) FROM schema_migrations WHERE version='0001'`); n != 1 {
-		t.Errorf("schema_migrations holds %d rows for 0001, want 1", n)
+	for _, version := range want {
+		if n := count(t, db,
+			`SELECT count(*) FROM schema_migrations WHERE version='`+version+`'`); n != 1 {
+			t.Errorf("schema_migrations holds %d rows for %s, want 1", n, version)
+		}
 	}
+}
+
+// versionsIn is every .up.sql version in an fs.FS, in the lexical order the
+// runner promises to apply them in.
+func versionsIn(t *testing.T, fsys fs.FS) []string {
+	t.Helper()
+	names, err := fs.Glob(fsys, "*.up.sql")
+	if err != nil {
+		t.Fatalf("globbing the migrations: %v", err)
+	}
+	sort.Strings(names)
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = strings.SplitN(name, "_", 2)[0]
+	}
+	return out
 }
 
 // A file edited after it was applied fails LOUDLY: neither silently re-run nor
@@ -288,5 +321,118 @@ func TestARefusedMigrationsDirectoryNeverReachesTheDatabase(t *testing.T) {
 	if n := count(t, db, `SELECT count(*) FROM information_schema.tables
 		WHERE table_schema=current_schema() AND table_name='schema_migrations'`); n != 0 {
 		t.Error("the ledger was created before the directory was validated")
+	}
+}
+
+// LEG NINE. A migration that cannot take its table lock FAILS INSIDE
+// lock_timeout rather than stalling.
+//
+// MEASURED by the operations lens against a synthetic 0002 of exactly R1's
+// shape: with an ALTER queued behind an open reader, one `GET /v1/logbook`
+// returned curl http=000 at its own 30s limit — no status, no body, no error —
+// and ten concurrent ones all returned 000 after 18.8s, with 9 backends
+// active/Lock. /healthz answered 200 in 4.7ms throughout and docker said
+// healthy, because /healthz pings and never touches `trips`.
+//
+// WHAT THIS LEG DOES NOT PROVE, and OE-19 is the correction: lock_timeout
+// bounds the MIGRATION'S WAIT and does nothing for the requests queued behind
+// the migration's pending ACCESS EXCLUSIVE lock. It is the THIRD OF THREE
+// bounds and not the whole; the other two are REQUEST_TIMEOUT and the DSN's
+// statement_timeout, and the pair-mutation that keeps them separate is
+// recorded in CLAUDE.md.
+//
+// IT ANSWERS FROM A GOROUTINE BEHIND A `select` WITH A DEADLINE. A leg whose
+// only failure mode is a hang is a leg somebody eventually deletes with the
+// suite red and no diagnosis, so the deadline is here to turn "it stalled"
+// into a sentence.
+func TestAMigrationThatCannotTakeItsLockFailsWithinTheTimeout(t *testing.T) {
+	db, schema := testdb.Open(t)
+	m := Migrator{Schema: schema, Logger: quietLogger()}
+	ctx := context.Background()
+
+	first := fstest.MapFS{
+		"0001_one.up.sql":   &fstest.MapFile{Data: []byte("CREATE TABLE one (x int);\n")},
+		"0001_one.down.sql": &fstest.MapFile{Data: []byte("DROP TABLE one;\n")},
+	}
+	if _, err := m.Migrate(ctx, db, first); err != nil {
+		t.Fatalf("applying 0001: %v", err)
+	}
+
+	// A REAL LOCK, HELD, ON A SECOND SESSION. testdb.Second is what makes this
+	// a different backend rather than the same pooled connection, which would
+	// not block at all.
+	holder := testdb.Second(t, schema)
+	held, err := holder.Conn(ctx)
+	if err != nil {
+		t.Fatalf("taking a second connection: %v", err)
+	}
+	defer held.Close()
+	tx, err := held.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("beginning the holding transaction: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE one IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("taking the lock: %v", err)
+	}
+
+	second := fstest.MapFS{
+		"0001_one.up.sql":   first["0001_one.up.sql"],
+		"0001_one.down.sql": first["0001_one.down.sql"],
+		"0002_two.up.sql":   &fstest.MapFile{Data: []byte("ALTER TABLE one ADD COLUMN y int;\n")},
+		"0002_two.down.sql": &fstest.MapFile{Data: []byte("ALTER TABLE one DROP COLUMN y;\n")},
+	}
+
+	errc := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := m.Migrate(ctx, db, second)
+		errc <- err
+	}()
+
+	// Twice the bound plus a second of slack. The assertion is on the ANSWER,
+	// not on the elapsed time — a leg asserting "under 3.2 seconds" is a leg
+	// that goes red on a loaded machine and gets deleted for flaking.
+	deadline := 2*migrateLockTimeout + time.Second
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatalf("the migration succeeded while another session held ACCESS " +
+				"EXCLUSIVE on the table it alters — it cannot have")
+		}
+		if !strings.Contains(err.Error(), "lock timeout") {
+			t.Errorf("error = %v, want it to name a lock timeout — a migration that "+
+				"failed for some other reason inside the window would satisfy a "+
+				"leg that only checked for an error", err)
+		}
+		t.Logf("answered in %s against a %s bound", time.Since(started).Round(time.Millisecond),
+			migrateLockTimeout)
+	case <-time.After(deadline):
+		t.Fatalf("no answer at all within %s — the migration is stalling on the "+
+			"lock, which is the measured shape: nothing in any log, and every "+
+			"request behind it silent", deadline)
+	}
+}
+
+// AND THE CONTROL, WITHOUT WHICH LEG NINE IS SATISFIED BY A RUNNER THAT
+// REFUSES EVERY MIGRATION. The same second file, applied with nothing holding
+// the lock, must succeed.
+func TestTheSameMigrationAppliesWhenNothingHoldsTheLock(t *testing.T) {
+	db, schema := testdb.Open(t)
+	m := Migrator{Schema: schema, Logger: quietLogger()}
+	ctx := context.Background()
+
+	set := fstest.MapFS{
+		"0001_one.up.sql":   &fstest.MapFile{Data: []byte("CREATE TABLE one (x int);\n")},
+		"0001_one.down.sql": &fstest.MapFile{Data: []byte("DROP TABLE one;\n")},
+		"0002_two.up.sql":   &fstest.MapFile{Data: []byte("ALTER TABLE one ADD COLUMN y int;\n")},
+		"0002_two.down.sql": &fstest.MapFile{Data: []byte("ALTER TABLE one DROP COLUMN y;\n")},
+	}
+	applied, err := m.Migrate(ctx, db, set)
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if len(applied) != 2 {
+		t.Errorf("applied %v, want both", applied)
 	}
 }

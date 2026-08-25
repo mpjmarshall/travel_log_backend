@@ -131,8 +131,29 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		} else {
 			handler = perAddress(handler)
 		}
-		mux.Handle(route.Method+" "+route.Pattern, handler)
+		mux.Handle(route.Method+" "+route.Pattern, recordRoute(route, handler))
 	}
+}
+
+// recordRoute puts the route's PATTERN on the access line beside the raw path
+// (DEC-101). Without it `path` is the raw URL, so once `/v1/trips/{id}` exists
+// nothing aggregates and "how slow is the trip write" has no query that
+// answers it.
+//
+// IT COMES FROM THE TABLE AND NOT FROM `r.Pattern`. http.ServeMux fills that
+// field on a request it CLONES on the way down, so the outer request the
+// access log holds never carries it — and the table is already the authority
+// for the string.
+//
+// IT IS OUTSIDE THE LIMITERS AND THE AUTH CHECK, so a 429 and a 401 are
+// attributed to the route they were aimed at. A rate limit nobody can
+// attribute is a rate limit nobody can tune.
+func recordRoute(route Route, next http.Handler) http.Handler {
+	pattern := route.Method + " " + route.Pattern
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpx.RecordRoute(r.Context(), pattern)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // limitByTraveller counts against the traveller the credential named.
@@ -207,12 +228,25 @@ func RequireTraveller(service *auth.Service, log *slog.Logger) httpx.Middleware 
 			case errors.Is(err, auth.ErrNoSession):
 				httpx.WriteError(w, r, httpx.CodeUnauthenticated)
 				return
+			case httpx.DependencyIsDown(err):
+				// DEC-96, and this is the site that matters most: EVERY
+				// authenticated request passes through here, so an outage
+				// that answered 500 here answered 500 for the whole API.
+				logFailure(r, log, err)
+				httpx.WriteError(w, r, httpx.CodeTimeout)
+				return
 			case err != nil:
 				logFailure(r, log, err)
 				httpx.WriteError(w, r, httpx.CodeInternal)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(auth.WithTraveller(r.Context(), tr)))
+			// DEC-101. The access log sits ABOVE this and its deferred line
+			// runs against the request it was handed, not the one made below
+			// — so the id is written into a slot rather than into a new
+			// context value, which would never travel back up.
+			ctx := auth.WithTraveller(r.Context(), tr)
+			httpx.RecordTraveller(ctx, tr.ID)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -242,6 +276,11 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)
 	case errors.Is(err, auth.ErrBusy):
 		httpx.WriteError(w, r, httpx.CodeRateLimited)
+	case httpx.DependencyIsDown(err):
+		// DEC-96. Sign-in against a database that is down is not a bad
+		// passphrase and is not a server bug.
+		logFailure(r, log, err)
+		httpx.WriteError(w, r, httpx.CodeTimeout)
 	default:
 		logFailure(r, log, err)
 		httpx.WriteError(w, r, httpx.CodeInternal)

@@ -18,12 +18,44 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // migrateLockKey is arbitrary and must never change: two builds using different
 // keys do not exclude each other, which is the one failure this lock prevents.
 const migrateLockKey int64 = 5602251094132771329
+
+// migrateLockTimeout bounds how long ONE statement in a migration waits for a
+// table lock, and it is the THIRD OF THREE bounds rather than the whole thing
+// (DEC-96, correcting OE-19).
+//
+// WHAT IT DOES NOT DO IS THE PART WORTH WRITING DOWN. It bounds the
+// MIGRATION'S WAIT. It does nothing at all for the requests queued behind the
+// migration's PENDING ACCESS EXCLUSIVE lock — a pending exclusive request
+// blocks every later lock request on that table, so the queue forms whether or
+// not the migration is patient. Measured by the operations lens against a
+// synthetic ALTER of exactly R1's shape: one `GET /v1/logbook` returned curl
+// http=000 at its own 30s limit, ten concurrent ones all returned 000 after
+// 18.8s with 9 backends active/Lock, and /healthz answered 200 in 4.7ms
+// throughout because it pings and never touches `trips`. Docker reported
+// healthy through all of it. The other two bounds — REQUEST_TIMEOUT and the
+// DSN's statement_timeout — are what answer those requests.
+//
+// THREE SECONDS, DERIVED RATHER THAN CHOSEN. The wait is not the cost; the
+// QUEUE BEHIND IT is, so the number bounds an outage rather than a migration.
+// It sits well under the per-request bound (REQUEST_TIMEOUT, 15s) so that a
+// migration's lock wait can never be the thing that times a request out, and
+// well under migrateTimeout (120s), which bounds the whole run including the
+// advisory lock — that wait IS legitimate, because a second replica booting
+// behind the first should queue.
+//
+// A MIGRATION THAT LOSES THE RACE FAILS AND THE CONTAINER RETRIES. That is
+// deliberate: `restart: unless-stopped` brings it back, the health start
+// period is 150s, and three seconds of noise in a log beats an unbounded stall
+// with nothing in any log at all.
+const migrateLockTimeout = 3 * time.Second
 
 // migrationsTable has THREE columns, not two. DEC-17's own text describes
 // `schema_migrations(version, applied_at)` while S05's work field describes
@@ -131,6 +163,15 @@ func (m Migrator) Migrate(ctx context.Context, db *sql.DB, fsys fs.FS) ([]string
 
 	if _, err := conn.ExecContext(ctx, `SELECT pg_catalog.set_config('search_path', $1, false)`, schema); err != nil {
 		return nil, fmt.Errorf("postgres: pinning search_path to %q: %w", schema, err)
+	}
+	// BESIDE THE search_path PIN AND FOR THE SAME REASON: the whole run is on
+	// this one pinned connection, so a session setting made here holds for
+	// every statement in it — which `db.ExecContext` could not promise,
+	// because database/sql is a pool and the setting would land on whichever
+	// connection answered.
+	if _, err := conn.ExecContext(ctx, `SELECT pg_catalog.set_config('lock_timeout', $1, false)`,
+		strconv.FormatInt(migrateLockTimeout.Milliseconds(), 10)); err != nil {
+		return nil, fmt.Errorf("postgres: setting lock_timeout for the migration: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrateLockKey); err != nil {
 		return nil, fmt.Errorf("postgres: taking the migration lock: %w", err)

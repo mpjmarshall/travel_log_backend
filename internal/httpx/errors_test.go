@@ -1,9 +1,12 @@
 package httpx_test
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -17,6 +20,12 @@ import (
 // decision disagree in EITHER direction. The count is never carried: it is
 // len() of this literal, and a separate leg derives the same number from the
 // source with grep.
+//
+// THIRTEEN SINCE DEC-103, AND THE REOPENING IS THE POINT RATHER THAN THE
+// COUNT. The twelve were closed on the argument that a client can ACT on each
+// word, and `unsupported_route` passes that test because its action is "this
+// needs a newer server" and no other word's is. Anything reaching for a
+// fourteenth has to make the same argument in the same form.
 var decCodes = []string{
 	"conflict",
 	"forbidden",
@@ -29,18 +38,19 @@ var decCodes = []string{
 	"timeout",
 	"unauthenticated",
 	"unsupported_format",
+	"unsupported_route",
 	"upload_incomplete",
 }
 
-func TestTheVocabularyIsExactlyTheTwelveCodesDEC12Names(t *testing.T) {
+func TestTheVocabularyIsExactlyTheCodesDEC12Names(t *testing.T) {
 	got := make([]string, 0, len(httpx.Codes()))
 	for _, c := range httpx.Codes() {
 		got = append(got, string(c))
 	}
 	sort.Strings(got)
 
-	if len(got) != 12 {
-		t.Fatalf("the vocabulary holds %d codes, want 12: %v", len(got), got)
+	if len(got) != len(decCodes) {
+		t.Fatalf("the vocabulary holds %d codes, want %d: %v", len(got), len(decCodes), got)
 	}
 	for i := range decCodes {
 		if got[i] != decCodes[i] {
@@ -58,16 +68,23 @@ func TestEveryCodeHasAStatusAndNoStatusIsOrphaned(t *testing.T) {
 			t.Errorf("StatusFor(%q) = %d, want a 4xx or 5xx", c, got)
 		}
 	}
-	if got := len(httpx.Codes()); got != 12 {
-		t.Errorf("Codes() = %d entries, want 12", got)
+	if got := len(httpx.Codes()); got != len(decCodes) {
+		t.Errorf("Codes() = %d entries, want %d", got, len(decCodes))
 	}
 }
 
 func TestTheStatusOfEachCodeIsTheOneItsDecisionNames(t *testing.T) {
 	want := map[httpx.Code]int{
-		httpx.CodeUnauthenticated:   http.StatusUnauthorized,
-		httpx.CodeForbidden:         http.StatusForbidden,
-		httpx.CodeNotFound:          http.StatusNotFound,
+		httpx.CodeUnauthenticated: http.StatusUnauthorized,
+		httpx.CodeForbidden:       http.StatusForbidden,
+		httpx.CodeNotFound:        http.StatusNotFound,
+		// 404 AND NOT 501. "Not Implemented" is the honest word for "this
+		// server does not do that" and it is wrong here twice: net/http has
+		// already chosen 404 or 405 by the time the body is written, and a 501
+		// reads to an intermediary as a server fault worth alerting on rather
+		// than a version skew. The status is the stdlib's fact; the code is
+		// what the client acts on.
+		httpx.CodeUnsupportedRoute:  http.StatusNotFound,
 		httpx.CodeConflict:          http.StatusConflict,
 		httpx.CodeInvalidBody:       http.StatusBadRequest,
 		httpx.CodeInvalidField:      http.StatusUnprocessableEntity,
@@ -78,8 +95,10 @@ func TestTheStatusOfEachCodeIsTheOneItsDecisionNames(t *testing.T) {
 		httpx.CodeUploadIncomplete:  http.StatusConflict,
 		httpx.CodeUnsupportedFormat: http.StatusNotAcceptable,
 	}
-	if len(want) != 12 {
-		t.Fatalf("this table holds %d rows, want 12", len(want))
+	if len(want) != len(decCodes) {
+		t.Fatalf("this table holds %d rows, want %d — every word gets a row, or a "+
+			"code added without one is a 500 with nobody noticing",
+			len(want), len(decCodes))
 	}
 	for c, status := range want {
 		if got := httpx.StatusFor(c); got != status {
@@ -227,5 +246,163 @@ func TestWriteErrorForGoesThroughTheSameMapping(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != `{"code":"payload_too_large"}` {
 		t.Errorf("body = %s", got)
+	}
+}
+
+// === DEC-96: a dependency that is down is a 503, not a 500 ===
+
+// A 500 TELLS A CLIENT THE SERVER HAS A BUG — do not retry, the request is
+// poison — WHEN THE TRUTH IS "the dependency is down, try again shortly".
+// Measured by the operations lens: with Postgres killed, every route answered
+// `500 {"code":"internal"}` with no Retry-After. It is also unanswerable
+// afterwards, because a 500 count then conflates handler bugs with outages.
+//
+// THIS BRANCH ADDS NO WORD TO THE VOCABULARY. `timeout` is already 503 and
+// already means "try again"; what was missing was the classification and the
+// header. The block stays at twelve for this ruling — DEC-103 grows it, for a
+// different reason, and that is a separate decision.
+//
+// THE THREE SHAPES ARE THE THREE DEC-96 NAMES, and each is reachable from the
+// standard library, which is what keeps this classification out of pgconn's
+// way: spec L20 has pgx as a blank import driver only, and internal/postgres'
+// own comment records that reading SQLSTATE off the driver is not available
+// here. Measured against a real pool pointed at a dead port: a pgconn connect
+// error unwraps to *net.OpError and satisfies errors.As(err, &net.Error).
+func TestADependencyThatIsDownIsATimeoutAndNotAnInternalError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"a driver connect failure", fmt.Errorf("postgres: reading trips: %w",
+			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})},
+		{"a connection database/sql has already closed", fmt.Errorf("postgres: %w", sql.ErrConnDone)},
+		{"a pool acquire that ran out of time", fmt.Errorf("postgres: taking a connection: %w",
+			context.DeadlineExceeded)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := httpx.CodeFor(tc.err); got != httpx.CodeTimeout {
+				t.Errorf("CodeFor(%v) = %q, want %q — a 500 tells a client the request "+
+					"is poison and must not be retried, which is the opposite of "+
+					"the truth", tc.err, got, httpx.CodeTimeout)
+			}
+			if got := httpx.StatusFor(httpx.CodeTimeout); got != http.StatusServiceUnavailable {
+				t.Errorf("status = %d, want 503", got)
+			}
+		})
+	}
+}
+
+// AND THE CONTROL, WITHOUT WHICH THE ABOVE IS SATISFIED BY A CLASSIFIER THAT
+// CALLS EVERYTHING A TIMEOUT. A genuine handler fault is still `internal`, and
+// 500 is still what a client is told not to retry.
+func TestAnOrdinaryFailureIsStillInternal(t *testing.T) {
+	for _, err := range []error{
+		errors.New("a handler dereferenced nothing"),
+		fmt.Errorf("postgres: scanning a trip: %w", errors.New("sql: Scan error")),
+	} {
+		if got := httpx.CodeFor(err); got != httpx.CodeInternal {
+			t.Errorf("CodeFor(%v) = %q, want %q", err, got, httpx.CodeInternal)
+		}
+	}
+}
+
+// RETRY-AFTER IS A FUNCTION OF THE STATUS AND NOT OF THE CALLER, which is the
+// whole of why it is set where it is. Two different mechanisms produce a 503
+// here — this classification, and http.TimeoutHandler, which writes its own
+// response and takes no part in any of this — and a header set at each call
+// site would be set at one of them.
+func TestEvery503CarriesRetryAfter(t *testing.T) {
+	h := httpx.RetryAfter()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpx.WriteErrorFor(w, r, fmt.Errorf("postgres: %w", sql.ErrConnDone))
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q, want \"5\" — 'the dependency is down, try again "+
+			"shortly' is the whole difference between this and a poison request", got)
+	}
+	if got := rec.Body.String(); got != `{"code":"timeout"}` {
+		t.Errorf("body = %s", got)
+	}
+}
+
+// AND IT IS NOT SET ON ANYTHING ELSE. A Retry-After on a 422 or a 404 is an
+// instruction to retry a request that will fail identically for ever.
+func TestRetryAfterIsNotSetOnAnswersThatWillNotChange(t *testing.T) {
+	for _, code := range httpx.Codes() {
+		if httpx.StatusFor(code) == http.StatusServiceUnavailable {
+			continue
+		}
+		h := httpx.RetryAfter()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpx.WriteError(w, r, code)
+		}))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+		if got := rec.Header().Get("Retry-After"); got != "" {
+			t.Errorf("%s (%d) carries Retry-After: %s — retrying will fail identically",
+				code, rec.Code, got)
+		}
+	}
+}
+
+// pgLike is a driver error that carries a SQLSTATE the way *pgconn.PgError
+// does. It is a stand-in rather than the real thing for the reason
+// httpx.sqlStater is an interface rather than an import: this package must not
+// name pgconn, and the whole claim is that it does not have to.
+type pgLike struct{ state string }
+
+func (e pgLike) Error() string    { return "ERROR: something (SQLSTATE " + e.state + ")" }
+func (e pgLike) SQLState() string { return e.state }
+
+// THE SECOND HALF OF THE CLASSIFICATION, AND IT IS THE HALF DEC-96'S OWN LIST
+// DOES NOT NAME. Measured while writing the ruling's lock leg: with a lock held
+// on `trips`, the blocked read is cut off by statement_timeout and comes back
+// as SQLSTATE 57014 — not a net error, not a context deadline — so it landed
+// in `default` and answered 500, and the ruling's own leg could not pass.
+func TestAServerThatGaveUpOnTheStatementIsAlsoATimeout(t *testing.T) {
+	for _, tc := range []struct{ state, what string }{
+		{"57014", "statement_timeout, which is DEC-96's own second bound firing"},
+		{"55P03", "lock_timeout, which is the third bound firing"},
+		{"53300", "too many connections"},
+		{"08006", "the connection failed mid-statement"},
+		{"57P01", "the administrator shut the server down"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			err := fmt.Errorf("postgres: reading trips: %w", pgLike{tc.state})
+			if got := httpx.CodeFor(err); got != httpx.CodeTimeout {
+				t.Errorf("CodeFor(SQLSTATE %s) = %q, want %q — %s",
+					tc.state, got, httpx.CodeTimeout, tc.what)
+			}
+		})
+	}
+}
+
+// AND THE CLASSES THAT MUST STAY 500, WHICH IS WHERE THE LINE IS DRAWN.
+//
+// A constraint violation is the server having a bug and a client must not
+// retry it. The two SERIALIZATION states are the interesting exclusions: both
+// are retryable in principle and neither is a dependency being unavailable —
+// they are this application's own concurrency, and this build takes one
+// advisory lock per traveller precisely so it does not meet them. One in a log
+// is a defect to fix, not an outage to wait out.
+func TestAConstraintViolationAndADeadlockAreStillInternal(t *testing.T) {
+	for _, tc := range []struct{ state, what string }{
+		{"23503", "a foreign key violation — the server wrote something incoherent"},
+		{"22012", "division by zero"},
+		{"40001", "serialization_failure — this app's own concurrency, not an outage"},
+		{"40P01", "deadlock_detected — a defect to fix, not something to wait out"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			err := fmt.Errorf("postgres: upserting the trip: %w", pgLike{tc.state})
+			if got := httpx.CodeFor(err); got != httpx.CodeInternal {
+				t.Errorf("CodeFor(SQLSTATE %s) = %q, want %q — %s",
+					tc.state, got, httpx.CodeInternal, tc.what)
+			}
+		})
 	}
 }

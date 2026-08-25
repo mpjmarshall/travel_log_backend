@@ -275,8 +275,8 @@ func TestAccessLogWritesOneLineWithTheRequestsFacts(t *testing.T) {
 	if line["requestId"] != rec.Header().Get("X-Request-Id") {
 		t.Errorf("requestId = %v, want %q", line["requestId"], rec.Header().Get("X-Request-Id"))
 	}
-	if _, ok := line["durationMs"]; !ok {
-		t.Errorf("no durationMs: %v", line)
+	if _, ok := line["durationUs"]; !ok {
+		t.Errorf("no durationUs: %v", line)
 	}
 }
 
@@ -383,10 +383,40 @@ func TestAFastHandlerPassesThroughTheTimeoutUntouched(t *testing.T) {
 
 // === The chain as it actually ships ===
 
-func TestBaseIsTheFourMiddlewaresInTheOrderVS3Fixes(t *testing.T) {
+// FIVE SINCE DEC-96. It was four, and the count is asserted rather than
+// derived on purpose: a middleware silently added to the shipped chain is a
+// behaviour nothing else in this package would notice.
+func TestBaseIsTheFiveMiddlewaresInTheOrderTheChainNeeds(t *testing.T) {
 	log, _ := testLogger()
-	if got := len(httpx.Base(log, time.Minute)); got != 4 {
-		t.Fatalf("Base has %d middlewares, want 4 — recover, request id, access log, timeout", got)
+	if got := len(httpx.Base(log, time.Minute)); got != 5 {
+		t.Fatalf("Base has %d middlewares, want 5 — recover, request id, access log, "+
+			"retry-after, timeout", got)
+	}
+}
+
+// AND THE POSITION, PROVEN BY WHAT IT PRODUCES. Retry-After must be ABOVE
+// Timeout: http.TimeoutHandler writes its own 503 from inside net/http, so a
+// wrapper below it never sees that status at all. A leg reading the slice
+// order would pass against a chain folded the other way; this one hangs a
+// handler and reads the header off the answer.
+func TestTheTimeoutsOwn503CarriesRetryAfter(t *testing.T) {
+	log, _ := testLogger()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	rec := httptest.NewRecorder()
+	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}), httpx.Base(log, 10*time.Millisecond)...).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q on the timeout's own 503, want \"5\" — this is "+
+			"the 503 a client meets most often, and it is the one a header set "+
+			"below TimeoutHandler cannot reach", got)
 	}
 }
 
@@ -420,7 +450,7 @@ func TestThroughTheWholeChainAPanicIsAJSON500WithACorrelatedAccessLine(t *testin
 	id := rec.Header().Get("X-Request-Id")
 	var access, panicLine map[string]any
 	for _, line := range logLines(t, buf) {
-		if _, isAccess := line["durationMs"]; isAccess {
+		if _, isAccess := line["durationUs"]; isAccess {
 			access = line
 		}
 		if _, isPanic := line["panic"]; isPanic {
@@ -453,7 +483,7 @@ func TestThroughTheWholeChainATimeoutIsLoggedAndAnswered(t *testing.T) {
 	}
 	var access map[string]any
 	for _, line := range logLines(t, buf) {
-		if _, isAccess := line["durationMs"]; isAccess {
+		if _, isAccess := line["durationUs"]; isAccess {
 			access = line
 		}
 	}
@@ -462,5 +492,171 @@ func TestThroughTheWholeChainATimeoutIsLoggedAndAnswered(t *testing.T) {
 	}
 	if access["status"] != float64(http.StatusServiceUnavailable) {
 		t.Errorf("access status = %v, want 503", access["status"])
+	}
+}
+
+// === DEC-101: the access log answers a latency question ===
+
+// MEASURED over 21.35 hours of the live stack, 15,960 access lines:
+// `durationMs` is an int64 of MILLISECONDS, so 15,151 of them read
+// `durationMs:0` and NO LATENCY QUESTION IS ANSWERABLE FROM THOSE LOGS AT ALL.
+// The only non-zero values in the whole sample were 4 and 9.
+//
+// THE NON-ZERO ASSERTION IS THE ONE THAT MATTERS. A leg asserting only that
+// the field EXISTS would have passed against the defect for 21 hours, which is
+// exactly what happened.
+//
+// AND THE HANDLER SLEEPS FOR LESS THAN A MILLISECOND, WHICH IS THE WHOLE
+// DESIGN OF THIS LEG. The first draft slept 2ms and the mutation — rename the
+// field and keep `Milliseconds()` — SURVIVED IT, because two milliseconds is
+// two milliseconds either way. That mutation is the one the ruling calls "a
+// rename that looks like a fix and is not", so the leg has to run in the range
+// where the two units disagree: 95% of this API's requests, and 15,151 of the
+// 15,960 lines that were measured. 200µs is comfortably under one millisecond
+// and comfortably over one microsecond, so neither assertion is a race.
+func TestTheAccessLineCarriesMicrosecondsAndTheyAreNotZero(t *testing.T) {
+	log, buf := testLogger()
+	rec := httptest.NewRecorder()
+
+	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Microsecond)
+		httpx.WriteJSON(w, r, http.StatusOK, trip{ID: "kyoto"})
+	}), httpx.RequestID(), httpx.AccessLog(log)).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+	line := firstLine(t, buf)
+	if _, stale := line["durationMs"]; stale {
+		t.Errorf("the line still carries durationMs: %v — milliseconds round a "+
+			"sub-millisecond request to zero, which is 95%% of them", line)
+	}
+	got, held := line["durationUs"].(float64)
+	if !held {
+		t.Fatalf("no durationUs: %v", line)
+	}
+	if got <= 0 {
+		t.Errorf("durationUs = %v after a 200µs sleep — a rename that keeps the "+
+			"unit is a rename that looks like a fix and is not, and this is the "+
+			"range where the two units disagree", got)
+	}
+}
+
+// `travellerId` ON THE LINE WHERE AUTH RESOLVED ONE, AND ABSENT WHERE IT DID
+// NOT. It costs nothing at one traveller, and it is the field that has to
+// thread through middleware — which is the whole difficulty: the access log is
+// ABOVE auth, and its deferred line runs against the request auth was HANDED,
+// not the one auth created. A slot in the context is what closes that, and a
+// leg that only checked the authenticated case would pass against a slot that
+// is never cleared between requests.
+//
+// The redactor is keyed on substrings of token/passphrase/authorization, so an
+// id is safe to log.
+func TestTheAccessLineNamesTheTravellerWhenThereIsOne(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		want    string
+	}{
+		{"an authenticated request", func(w http.ResponseWriter, r *http.Request) {
+			httpx.RecordTraveller(r.Context(), "6f0f8e12-0000-4000-8000-000000000001")
+			w.WriteHeader(http.StatusOK)
+		}, "6f0f8e12-0000-4000-8000-000000000001"},
+		{"a request nobody signed in", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log, buf := testLogger()
+			httpx.Chain(tc.handler, httpx.RequestID(), httpx.AccessLog(log)).
+				ServeHTTP(httptest.NewRecorder(),
+					httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+			line := firstLine(t, buf)
+			got, _ := line["travellerId"].(string)
+			if got != tc.want {
+				t.Errorf("travellerId = %q, want %q", got, tc.want)
+			}
+			if tc.want == "" {
+				if _, held := line["travellerId"]; held {
+					t.Errorf("travellerId is PRESENT and empty on an unauthenticated "+
+						"line: %v — an empty field is a field a query has to "+
+						"special-case", line)
+				}
+			}
+		})
+	}
+}
+
+// THE MATCHED PATTERN BESIDE THE RAW PATH. `path` alone is the raw URL, so once
+// `/v1/trips/{id}` exists nothing aggregates: every trip is its own line and
+// "how slow is the trip write" has no query that answers it.
+//
+// IT IS RECORDED AND NOT DERIVED, because `http.ServeMux` sets `r.Pattern` on a
+// CLONE it passes downwards — the outer request the access log holds never sees
+// it. httpapi.Mount records it from the route table, which is the same string
+// and is the one the table is already the authority for.
+func TestTheAccessLineCarriesTheMatchedPatternBesideTheRawPath(t *testing.T) {
+	log, buf := testLogger()
+
+	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpx.RecordRoute(r.Context(), "PUT /v1/trips/{id}")
+		w.WriteHeader(http.StatusOK)
+	}), httpx.RequestID(), httpx.AccessLog(log)).
+		ServeHTTP(httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodPut, "/v1/trips/autumn-crossing", nil))
+
+	line := firstLine(t, buf)
+	if line["route"] != "PUT /v1/trips/{id}" {
+		t.Errorf("route = %v, want the matched pattern", line["route"])
+	}
+	if line["path"] != "/v1/trips/autumn-crossing" {
+		t.Errorf("path = %v, want the raw path — the pattern is BESIDE it and not "+
+			"instead of it, or a request for one particular trip becomes "+
+			"untraceable", line["path"])
+	}
+}
+
+// /healthz OFF THE INFO LOG. The disk cost is survivable anywhere; the SIGNAL
+// cost is a 20:1 dilution of the one file you read at 3am — the container
+// probes every five seconds forever.
+//
+// IT IS DEMOTED AND NOT DROPPED, and it is demoted only while it is HEALTHY. A
+// probe that fails is the most interesting line in the file.
+func TestHealthzIsOffTheInfoLogWhileItIsHealthy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   string
+	}{
+		{"a healthy probe", http.StatusOK, "DEBUG"},
+		{"a probe that failed", http.StatusServiceUnavailable, "ERROR"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log, buf := testLogger()
+			httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+			}), httpx.RequestID(), httpx.AccessLog(log, "/healthz")).
+				ServeHTTP(httptest.NewRecorder(),
+					httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+			line := firstLine(t, buf)
+			if line["level"] != tc.want {
+				t.Errorf("level = %v, want %v", line["level"], tc.want)
+			}
+		})
+	}
+}
+
+// AND THE CONTROL: an ordinary route is NOT demoted. Without it the leg above
+// is satisfied by an access log that writes everything at Debug.
+func TestAnOrdinaryRequestStaysAtInfo(t *testing.T) {
+	log, buf := testLogger()
+	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), httpx.RequestID(), httpx.AccessLog(log, "/healthz")).
+		ServeHTTP(httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+	if got := firstLine(t, buf)["level"]; got != "INFO" {
+		t.Errorf("level = %v, want INFO", got)
 	}
 }
