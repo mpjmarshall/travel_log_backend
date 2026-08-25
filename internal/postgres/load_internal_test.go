@@ -119,7 +119,13 @@ func TestLoadMigrationsReadsTheNoTransactionDirectiveOnTheFirstLineOnly(t *testi
 		body string
 		want bool
 	}{
-		{"first line", "-- migrate:no-transaction\nCREATE INDEX CONCURRENTLY i ON t (c);\n", true},
+		// The re-runnability declaration rides along on the first case
+		// because loadMigrations REFUSES a no-transaction file without it
+		// (DEC-99(b)) — so a case testing the directive has to be a file the
+		// runner would actually accept. The other two carry no directive, so
+		// the requirement does not reach them, which is the point of the
+		// third case: a directive on the second line is not a directive.
+		{"first line", "-- migrate:no-transaction\n-- migrate:re-runnable\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (c);\n", true},
 		{"absent", "CREATE TABLE t (x int);\n", false},
 		{"second line", "-- a header\n-- migrate:no-transaction\nCREATE TABLE t (x int);\n", false},
 	}
