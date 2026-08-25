@@ -95,11 +95,16 @@ func putTrip(deps Deps) http.HandlerFunc {
 			return
 		}
 
+		// THE PATH FILLS AN ABSENT ID AND CONTRADICTS NOTHING ELSE. Under
+		// DEC-89 an absent id is `nil` rather than the empty string, and the
+		// two have stopped being the same value: `{"id":""}` is now a client
+		// naming a trip it cannot have, which ValidateTrip refuses by pattern
+		// instead of the path quietly supplying one.
 		id := r.PathValue("id")
-		if body.ID == "" {
-			body.ID = id
+		if body.ID == nil {
+			body.ID = &id
 		}
-		if body.ID != id {
+		if *body.ID != id {
 			httpx.WriteFieldError(w, r, "id")
 			return
 		}

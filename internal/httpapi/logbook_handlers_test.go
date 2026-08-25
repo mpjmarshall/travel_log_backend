@@ -59,15 +59,21 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 	}
 	f.lastWrite = w
 
-	next := logbook.Trip{
-		ID: w.ID, Name: w.Name, CityIDs: w.CityIDs, Start: w.Start, End: w.End,
-		Summary: w.Summary, CoverAsset: w.CoverAsset,
+	// THE FAKE HONOURS DEC-89 TOO, and it has to: a fake that applies every
+	// field regardless would make every handler leg green against the contract
+	// the store was just fixed to keep. `leave` is the one-line spelling of
+	// "absent means leave alone".
+	id := ""
+	if w.ID != nil {
+		id = *w.ID
 	}
+	next := logbook.Trip{ID: id}
 	replaced := false
 	for i, existing := range f.doc.Trips {
-		if existing.ID != w.ID {
+		if existing.ID != id {
 			continue
 		}
+		next = existing
 		// The sharing group survives a write that does not name it, exactly as
 		// the upsert's column list makes it survive in PostgreSQL.
 		next.ShareLinkID = existing.ShareLinkID
@@ -76,11 +82,41 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 		f.doc.Trips[i] = next
 		replaced = true
 	}
-	if !replaced {
+	applyTripWrite(&next, w)
+	if replaced {
+		for i, existing := range f.doc.Trips {
+			if existing.ID == id {
+				f.doc.Trips[i] = next
+			}
+		}
+	} else {
 		f.doc.Trips = append(f.doc.Trips, next)
 	}
 	f.version++
 	return next, f.version, nil
+}
+
+// applyTripWrite is the fake's half of DEC-89: only the fields the body
+// carried are written over the trip as it stands.
+func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
+	if w.Name != nil {
+		t.Name = *w.Name
+	}
+	if w.CityIDs != nil {
+		t.CityIDs = *w.CityIDs
+	}
+	if logbook.Sent(w.Start) {
+		t.Start = logbook.Value(w.Start)
+	}
+	if logbook.Sent(w.End) {
+		t.End = logbook.Value(w.End)
+	}
+	if logbook.Sent(w.Summary) {
+		t.Summary = logbook.Value(w.Summary)
+	}
+	if logbook.Sent(w.CoverAsset) {
+		t.CoverAsset = logbook.Value(w.CoverAsset)
+	}
 }
 
 func (f *fakeLogbook) assembleCount() int {
@@ -687,4 +723,65 @@ func decodeEnvelope(t *testing.T, raw []byte) logbook.Envelope {
 		t.Fatalf("decoding an envelope: %v", err)
 	}
 	return out
+}
+
+// DEC-89 AT THE WIRE, AND THE BODY IS THE ONE THE CLIENT SENDS. The store
+// legs prove the statement; this proves the DECODE — that a key the client
+// left out arrives at the store as nil rather than as a zero value, which is
+// the half a store test written against a Go literal cannot see.
+func TestATwoKeyRenameArrivesAtTheStoreAsAbsenceAndNotAsEmptiness(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
+		t.Fatalf("the create answered %d", got.status)
+	}
+	// T4's pencil. Two keys, and nothing else is in the body at all.
+	if got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","name":"Kyoto in May, renamed"}`, token); got.status != http.StatusOK {
+		t.Fatalf("the rename answered %d: %s", got.status, got.body)
+	}
+
+	w := h.logbook.lastWrite
+	if w.Name == nil || *w.Name != "Kyoto in May, renamed" {
+		t.Errorf("Name = %v, want the sent one — the field that WAS sent must arrive", w.Name)
+	}
+	for _, absent := range []struct {
+		field string
+		sent  bool
+	}{
+		{"cityIds", w.CityIDs != nil},
+		{"start", logbook.Sent(w.Start)},
+		{"end", logbook.Sent(w.End)},
+		{"summary", logbook.Sent(w.Summary)},
+		{"coverAsset", logbook.Sent(w.CoverAsset)},
+	} {
+		if absent.sent {
+			t.Errorf("%s arrived as SENT from a body that does not contain the key — "+
+				"absence and emptiness are the same value again, which is the whole "+
+				"of the defect", absent.field)
+		}
+	}
+}
+
+// AND THE ONE SHAPE THAT MUST STILL BE HEARD: an EMPTY list is a client saying
+// "this trip visits nowhere", which T5 can produce by removing the last city.
+// It is not the same as omitting the key, and a contract that conflated them
+// would make the itinerary un-emptyable — the mirror of the defect.
+func TestAnEmptyCityListIsHeardWhileAnAbsentOneIsNot(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
+		t.Fatalf("the create answered %d", got.status)
+	}
+	if got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","cityIds":[]}`, token); got.status != http.StatusOK {
+		t.Fatalf("the empty-list write answered %d: %s", got.status, got.body)
+	}
+	w := h.logbook.lastWrite
+	if w.CityIDs == nil {
+		t.Fatalf("cityIds arrived as absent from a body carrying `[]`")
+	}
+	if len(*w.CityIDs) != 0 {
+		t.Errorf("cityIds = %v, want an empty list", *w.CityIDs)
+	}
 }
