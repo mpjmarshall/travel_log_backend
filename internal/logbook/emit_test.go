@@ -666,3 +666,88 @@ func withContentAddresses(doc logbook.Document) logbook.Document {
 	}
 	return doc
 }
+
+// EmitPlace IS THE SECOND HALF OF THE SAME RULE, AND THE MEASUREMENT IS IN THE
+// FAILURE MESSAGE (CF-BLO-3, PD-15).
+//
+// A bare `Place` marshals `"visits":null`, and `place.g.dart:30-32` reads it as
+// `(json['visits'] as List<dynamic>).map(...)` — non-nullable, no null branch —
+// so the app throws on the answer to its own write. This is not an edge case on
+// `PUT /v1/places/{id}`: C1's pin is a WISHLIST PLACE with no visits, which is
+// the one client control that drives the route.
+//
+// THE INPUT OMITS THE LIST RATHER THAN CARRYING AN EMPTY ONE, which is the
+// distinction the request contract makes arriving on the response — a `Place`
+// built with `Visits: []logbook.Visit{}` would already marshal as `[]` and the
+// leg would prove nothing.
+func TestAPlacesVisitsAreEmptyRatherThanNull(t *testing.T) {
+	wishlist := logbook.Place{ID: "tofuku-ji", CityID: "kyoto", Name: "Tofuku-ji"}
+	if wishlist.Visits != nil {
+		t.Fatalf("this leg's input already carries a list, so it proves nothing")
+	}
+
+	inside := emitted(t, logbook.Document{Places: []logbook.Place{wishlist}})
+	if !strings.Contains(string(inside), `"visits":[]`) {
+		t.Errorf("inside the document: %s, want `\"visits\":[]`", inside)
+	}
+
+	bare, err := json.Marshal(wishlist)
+	if err != nil {
+		t.Fatalf("marshalling a bare place: %v", err)
+	}
+	if !strings.Contains(string(bare), `"visits":null`) {
+		t.Fatalf("a bare Place no longer marshals `\"visits\":null` (%s), so the rest of "+
+			"this leg is about nothing — re-derive the reason EmitPlace exists before "+
+			"deleting it", bare)
+	}
+
+	answered, err := json.Marshal(logbook.EmitPlace(wishlist))
+	if err != nil {
+		t.Fatalf("marshalling the write's answer: %v", err)
+	}
+	if !strings.Contains(string(answered), `"visits":[]`) {
+		t.Errorf("the write's answer: %s, want `\"visits\":[]`", answered)
+	}
+}
+
+// AND THE TWO ENTITIES THAT NEED NO EmitX ARE ASSERTED TO NEED NONE, so nobody
+// adds two functions that are noise and nobody deletes the reason.
+//
+// `City` and `Traveller` carry no list field at all, so there is no nil slice
+// for encoding/json to write as null — which is a fact about the STRUCT rather
+// than about a call site, and the day somebody adds a list to either, this leg
+// is what says an emitter has to arrive with it.
+func TestACityAndATravellerCarryNoListAndThereforeNeedNoEmitter(t *testing.T) {
+	for _, entity := range []struct {
+		name  string
+		value any
+	}{
+		{"City", logbook.City{ID: "kyoto", Name: "Kyoto"}},
+		{"Traveller", logbook.Traveller{Name: "Matt"}},
+	} {
+		raw, err := json.Marshal(entity.value)
+		if err != nil {
+			t.Fatalf("marshalling a bare %s: %v", entity.name, err)
+		}
+		if strings.Contains(string(raw), "null") && strings.Contains(string(raw), "[") {
+			t.Errorf("a bare %s = %s", entity.name, raw)
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			t.Fatalf("re-decoding a bare %s: %v", entity.name, err)
+		}
+		for key, value := range keys {
+			if len(value) > 0 && value[0] == '[' {
+				t.Errorf("%s.%s is a list, so this entity now needs an Emit%s and this "+
+					"leg is what says so: a nil slice marshals to null, and every list "+
+					"key in this document is read by the client as a non-nullable List",
+					entity.name, key, entity.name)
+			}
+			if string(value) == "null" && key != "coverAsset" {
+				t.Errorf("%s.%s is null and is not the nullable cover — check whether it "+
+					"is a list before assuming this entity still needs no emitter",
+					entity.name, key)
+			}
+		}
+	}
+}

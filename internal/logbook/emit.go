@@ -125,6 +125,43 @@ func EmitTrip(t Trip) Trip {
 	return t
 }
 
+// EmitPlace is the same normalisation for `PUT /v1/places/{id}`, and it is the
+// SECOND time this rule has had to be written down (CF-BLO-3, PD-15).
+//
+// MEASURED, ON THIS MODULE, AT THIS COMMIT:
+//
+//	bare Place = {"id":"x","cityId":"kyoto","name":"n",
+//	              "coordinates":{"lat":0,"lng":0},"visits":null,
+//	              "plan":null,"coverAsset":null}
+//
+// and `place.g.dart:30-32` reads it as
+// `(json['visits'] as List<dynamic>).map(...)` — non-nullable, with no null
+// branch — so the app throws on the answer to its own write. C1's pin is
+// precisely the request that produces it: a wishlist place has no visits at
+// all, so the nil slice is not an edge case on this route, it is the ordinary
+// create.
+//
+// CITY NEEDS NONE AND THE REASON IS STATED SO NOBODY ADDS ONE FOR SYMMETRY.
+// `City` carries no list field, so there is no nil slice for the marshaller to
+// write as null — measured at the same commit:
+//
+//	bare City = {"id":"kyoto","name":"Kyoto","country":{"code":"","name":""},
+//	             "centre":{"lat":0,"lng":0},"coverAsset":null}
+//
+// No list key at all, therefore nothing to normalise. An `EmitCity` would be
+// the empty forwarding method DEC-62 warns against one layer up, with a test
+// over it proving nothing. The same holds for `Traveller`, which
+// `PATCH /v1/me` already answers bare and which marshals to exactly
+// `{"name":"Matt"}`.
+//
+// IT NORMALISES THE VISITS AND NOTHING ELSE, because a `Visit` has no list
+// field either — unlike Emit, which has to reach into every walk for its
+// points.
+func EmitPlace(p Place) Place {
+	p.Visits = orEmpty(p.Visits)
+	return p
+}
+
 // Formats is what a 406 names: every version this build can write.
 func Formats() []int { return []int{FormatVersion} }
 

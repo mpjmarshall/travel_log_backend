@@ -4,7 +4,8 @@
 // DEC-62 ruled it and named the three — `RefilePhoto`, `RemovePlace` and the
 // media commit flow — and ruled in the same breath that most routes are plain
 // CRUD where a service method forwards to the repository, and that such a file
-// is noise. This is the first of the three; the other two land in R6 and R7.
+// is noise. R3 built the first, R6 builds the second, and RefilePhoto lands in
+// R7.
 //
 // SO A FOURTH METHOD IS A DECISION AND NOT DRIFT. The three land in three
 // different steps, so nobody ever sees the pattern in one sitting, and a
@@ -66,6 +67,55 @@ type Objects interface {
 type Service struct {
 	Media   MediaStore
 	Objects Objects
+
+	// Places is R6's port, and it is the WHOLE PlaceStore rather than a
+	// one-method narrowing like Objects above. The narrowing on Objects exists
+	// to stop a Service ever presigning — minting a capability is the
+	// handler's — and there is no equivalent thing to keep away from here: the
+	// other method on this port is `PutPlace`, which is the same traveller's
+	// own log and is plain CRUD the handler reaches directly. A second
+	// interface declaring one of two methods would be ceremony.
+	Places PlaceStore
+}
+
+// RemovePlace is D2, and it is the SECOND of the three operations DEC-62 named
+// (PD-05). CommitMedia is R3's and RefilePhoto is R7's.
+//
+// WHAT IT OWNS IS THE QUESTION, NOT THE STATEMENTS. The statement ORDER that
+// makes D2's delete branch mean what the sheet says has to live inside one
+// transaction and is therefore internal/postgres's — the sheet's promise is
+// written out beside the two statements there. What is here is the thing no
+// layer below can hold: `?photos=keep|delete` IS REQUIRED, and a
+// `PhotoDisposition` with no usable zero value is how "there is no default"
+// stops being a rule a handler remembers and becomes a fact about the call.
+//
+// SO THIS IS DELIBERATELY THIN, AND THE THINNESS IS ARGUED RATHER THAN
+// APOLOGISED FOR. DEC-62 warns in terms against "empty forwarding methods for
+// symmetry", and the test of a forwarding method is whether deleting it
+// changes anything. Delete this one and `photosUnspecified` reaches the store
+// as `deletePhotos == false`, which is D2's KEEP branch: a caller that never
+// answered the question gets one of the two answers, silently, and the sheet's
+// own reason for asking — that the two branches destroy different amounts — is
+// gone. That is the same defect class as `[]Visit` making absent and empty one
+// value, one route over.
+//
+// THE REFUSAL IS AN InvalidFieldError NAMING `photos`, so it reaches the
+// client as the 422 that says which field, through the same mapping every
+// other refusal in this API goes through.
+func (s Service) RemovePlace(ctx context.Context, travellerID, placeID string, photos PhotoDisposition) (Snapshot, error) {
+	if s.Places == nil {
+		return Snapshot{}, errors.New("logbook: the place service has no store")
+	}
+	switch photos {
+	case KeepPhotos, DeletePhotos:
+	default:
+		// The same sentence ParsePhotoDisposition gives, because to a caller
+		// they are one condition: this route will not guess how far a deletion
+		// reaches.
+		_, err := ParsePhotoDisposition(photos.String())
+		return Snapshot{}, err
+	}
+	return s.Places.RemovePlace(ctx, travellerID, placeID, photos == DeletePhotos)
 }
 
 // CommitMedia is `POST /v1/media/{id}/commit`: HEAD the bucket, verify what
