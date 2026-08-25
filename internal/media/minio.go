@@ -168,6 +168,19 @@ func (m *MinIO) EnsureBucket(ctx context.Context) error {
 // in halves, with an AST walk that puts the ban inside `make check` instead of
 // leaving it in a document.
 //
+// WHAT THIS SIGNATURE COVERS, IN THE SPELLING THAT GOES ON THE WIRE, because
+// this is the signing site and a reader here should not have to go looking:
+//
+//	x-amz-checksum-sha256   the digest             (DEC-38)
+//	content-length          the EXACT size         (DEC-51)
+//	content-type            the validated type     (DEC-87)
+//	if-none-match: *        write-once at the key  (DEC-88)
+//
+// plus `host`, which SigV4 always covers. The values come from uploadHeaders
+// in keys.go — ONE construction, so the map the client replays and the map
+// the signature covers cannot drift, and a leg asserts the key set equals
+// this URL's own X-Amz-SignedHeaders minus host.
+//
 // THE LIFETIME IS THE PRIVATE ONE AND THERE IS NO AUDIENCE PARAMETER. An
 // upload capability belongs to the authenticated traveller who asked for it;
 // nothing public ever writes. X-Amz-Expires bounds when the request must
