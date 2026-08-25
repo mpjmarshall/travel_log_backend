@@ -198,6 +198,7 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 	httpapi.Mount(mux, httpapi.Deps{
 		Auth:           service,
 		Logbook:        postgres.LogbookStore{DB: db},
+		Share:          postgres.ShareStore{DB: db},
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),

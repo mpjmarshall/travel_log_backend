@@ -191,6 +191,12 @@ func TestNoAllowlistEntryIsStale(t *testing.T) {
 
 // The membership split of DEC-50, as a walk over the file that implements it.
 //
+// IT IS ONE METHOD SINCE DEC-100, NOT TWO. TouchSession left
+// WithTravellerLock: it writes one row keyed by session id, and what the
+// advisory lock protects is MULTI-STATEMENT work. See
+// TestTouchSessionTakesNeitherHelper below, which is the other half and asserts
+// the opposite about the same file.
+//
 // IT IS SYNTACTIC, like the sweep above and for the same reason: proving a
 // receiver's type needs go/types and therefore golang.org/x/tools, which this
 // project has not had the dependency conversation for. Matching on the NAME
@@ -205,7 +211,7 @@ func TestNoAllowlistEntryIsStale(t *testing.T) {
 func TestTheSessionWritesTakeTheLockingHelperAndNotTheBumpingOne(t *testing.T) {
 	calls := callsByFunction(t, "internal/postgres/auth_store.go")
 
-	for _, method := range []string{"CreateSession", "TouchSession"} {
+	for _, method := range []string{"CreateSession"} {
 		made, defined := calls[method]
 		if !defined {
 			t.Errorf("AuthStore.%s is not in auth_store.go", method)
@@ -223,6 +229,41 @@ func TestTheSessionWritesTakeTheLockingHelperAndNotTheBumpingOne(t *testing.T) {
 				"    scale, measured through this build — every time it asks, and\n"+
 				"    GET /v1/logbook never once answers 304 in real use.", method)
 		}
+	}
+}
+
+// DEC-100, AS A RULE ABOUT THE CODE RATHER THAN A MEASUREMENT OF ONE 304.
+//
+// The behavioural leg is in auth_store_test.go — it holds the traveller's
+// advisory lock in a second session and watches TouchSession complete anyway —
+// and it can only see what happens with the lock held. This asserts the rule,
+// so a future edit that "restores consistency" by wrapping the touch back up in
+// WithTravellerLock is red at the file rather than at a timing.
+//
+// AND IT NAMES WithTravellerTx SEPARATELY, because the two mistakes are
+// different sizes. Going back to WithTravellerLock costs four round trips per
+// authenticated request and serialises against the phone's own writes. Reaching
+// for WithTravellerTx instead bumps logbook_version on every request, which
+// invalidates the phone's whole cached log and means GET /v1/logbook never once
+// answers 304 in real use.
+func TestTouchSessionTakesNeitherHelper(t *testing.T) {
+	made := callsByFunction(t, "internal/postgres/auth_store.go")["TouchSession"]
+	if made == nil {
+		t.Fatalf("AuthStore.TouchSession is not in auth_store.go")
+	}
+	if made["WithTravellerLock"] {
+		t.Errorf("AuthStore.TouchSession calls WithTravellerLock.\n" +
+			"    DEC-100, measured with pg_stat_statements around exactly one 304:\n" +
+			"    stamping last_used_at was FIVE of NINE round trips — begin, the\n" +
+			"    advisory lock, SELECT 1 FROM travellers, the UPDATE, commit — against\n" +
+			"    0.176ms of total server exec time. It also serialised every\n" +
+			"    authenticated request against the phone's own in-flight writes.")
+	}
+	if made["WithTravellerTx"] {
+		t.Errorf("AuthStore.TouchSession calls WithTravellerTx, which BUMPS logbook_version.\n" +
+			"    `last_used_at` is written on some authenticated requests, so counting it\n" +
+			"    invalidates the phone's whole cached log and GET /v1/logbook never once\n" +
+			"    answers 304 in real use.")
 	}
 }
 

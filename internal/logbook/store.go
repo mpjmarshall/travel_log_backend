@@ -46,6 +46,80 @@ type Snapshot struct {
 type Store interface {
 	Read(ctx context.Context, travellerID string, assemble func(version int64) bool) (Snapshot, error)
 	PutTrip(ctx context.Context, travellerID string, w TripWrite) (Trip, int64, error)
+
+	// DeleteTrip implements D3's own table and nothing more, and ANSWERS THE
+	// WHOLE LOG rather than the trip it removed.
+	//
+	// THE CACHE CANNOT SPLICE A CASCADE, which is why this is the one write in
+	// the plan that does not answer a bare entity. DEC-32's write response
+	// exists so the phone can patch one object into its cached document; D3
+	// removes rows from FIVE tables — the trip, its photographs, its walks,
+	// its visits and its itinerary — and clears a column on rows in a sixth.
+	// A client handed a 204 would have to re-derive all of that from a sheet's
+	// copy, which is the definition of two implementations of one rule.
+	//
+	// AN UNKNOWN TRIP IS NOT AN ERROR AND MOVES NO VERSION. The client's own
+	// contract is that a delete of something absent has succeeded — "the
+	// caller asked for that trip to be absent and it is" — so this answers the
+	// log as it stands. Moving the version anyway would be defensible and is
+	// wrong in one specific way: a retried delete would invalidate the phone's
+	// whole cached document, and DEC-103 exists precisely because deletes get
+	// retried against servers that did not have the route.
+	DeleteTrip(ctx context.Context, travellerID, tripID string) (Snapshot, error)
+
+	// SetTravellerName is U1's pencil, and it BUMPS logbook_version because
+	// the traveller's name is in the emitted document — `traveller: {name}` is
+	// the sixth key, and a phone holding a cached log would otherwise never
+	// see the change.
+	//
+	// AN EMPTY NAME IS REFUSED AND IS NOT A WAY TO CLEAR IT, matching the
+	// client exactly: `setTravellerName` returns false on a trimmed-empty
+	// name, and the reason is stated there — "a log with an owner keeps one,
+	// and 'no traveller' is a state a log arrives in and never returns to".
+	// The refusal is a named field, so the store answers InvalidFieldError
+	// rather than letting travellers_name_present_ck produce a 500.
+	SetTravellerName(ctx context.Context, travellerID, name string) (Traveller, int64, error)
+}
+
+// ShareStore is H1's three writes, declared here and satisfied by
+// internal/postgres.
+//
+// IT IS SEPARATE FROM Store FOR THE REASON MediaStore IS: not because of the
+// transaction helper — all three of these DO bump logbook_version, because
+// `sharePhotos`, `shareNotes` and `shareCoordinates` are emitted fields and
+// DEC-91's `shared` is derived from the row these writes move — but because
+// the SHARE LINK IS A CAPABILITY and the logbook is a record. Every method
+// here handles a token; no method on Store ever sees one. Keeping them apart
+// is what makes "the plaintext exists in exactly two places" checkable by
+// reading one file.
+//
+// ALL THREE ANSWER A WHOLE Trip (DEC-32), which the phone splices into its
+// cached log. They are the only writes in the plan that can leave
+// `shareLinkId` non-nil, and only one of them does — see NewShareLink.
+type ShareStore interface {
+	// SetShareOptions writes only the flags that were sent (DEC-89) and
+	// touches no share link at all. H1's three switches are about what the
+	// link SHOWS, not about whether there is one.
+	SetShareOptions(ctx context.Context, travellerID, tripID string, w ShareWrite) (Trip, int64, error)
+
+	// NewShareLink revokes whatever link is live and inserts the client's
+	// token, IN ONE TRANSACTION (DEC-67). Two statements and not one: the
+	// table revokes and keeps, so `share_links_one_live` — the partial unique
+	// index that is the only thing enforcing the 0..1 the class diagram claims
+	// — refuses the insert unless the revoke lands first.
+	//
+	// THE ANSWER CARRIES THE PLAINTEXT TOKEN, and it is ECHOED rather than
+	// recovered: the caller sent it in the request body. This is the only
+	// response in the whole API that can, and it is what leaves DEC-32's
+	// splice a usable `shareLinkId` on the one write that has one.
+	NewShareLink(ctx context.Context, travellerID, tripID, token string) (Trip, int64, error)
+
+	// StopSharing revokes the live link AND resets all three flags EXPLICITLY
+	// to true/true/false — the client's own defaults, which `stopSharing`
+	// writes. The switches belong to the LINK and not to the trip's history:
+	// leaving `shareCoordinates` on after a link is killed means the NEXT link
+	// hands out exact pins without anybody turning that on.
+	StopSharing(ctx context.Context, travellerID, tripID string) (Trip, int64, error)
 }
 
 // ErrNoMediaObject is a media route asking about a digest this traveller has

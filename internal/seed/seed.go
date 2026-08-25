@@ -236,10 +236,19 @@ type Walk struct {
 
 // ShareLink mirrors share_links (DEC-67): history is kept, and
 // share_links_one_live allows at most one unrevoked row per trip.
+//
+// IT CARRIES THE DIGEST AND NOT THE TOKEN, SINCE MIGRATION 0004 (DEC-85), AND
+// THE FIELD IS `TokenHash` RATHER THAN `Token` SO THAT THE CHANGE COULD NOT BE
+// MADE SILENTLY. Renaming it is what turned "the seed writes a column that no
+// longer exists" from a runtime error deep inside one INSERT into a compile
+// error at the one place the value is derived — `fixture.go`, where the
+// client's plaintext `shareLinkId` is hashed on its way in. The plaintext is
+// in the captured document and is deliberately not carried any further than
+// that line.
 type ShareLink struct {
 	TravellerID string
 	TripID      string
-	Token       string
+	TokenHash   []byte
 	CreatedAt   time.Time
 	RevokedAt   *time.Time
 }

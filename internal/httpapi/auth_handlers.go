@@ -34,9 +34,18 @@ import (
 
 // Deps is what the routes need. Neither limiter is optional — see Mount.
 type Deps struct {
-	Auth           *auth.Service
-	Logbook        logbook.Store
-	Log            *slog.Logger
+	Auth    *auth.Service
+	Logbook logbook.Store
+	Log     *slog.Logger
+
+	// Share is H1's three writes, and it is a SEPARATE PORT from Logbook
+	// rather than three more methods on it. Both are satisfied by a struct
+	// over the same pool, so this costs nothing at wiring time; what it buys
+	// is that the interface a handler is handed says what that handler can
+	// reach — the share handlers cannot read the whole log, and the logbook
+	// handlers cannot mint a capability. See logbook.ShareStore.
+	Share logbook.ShareStore
+
 	AuthLimit      *httpx.Limiter
 	TravellerLimit *httpx.Limiter
 
@@ -168,6 +177,14 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
 	}
+	// THE SHARE PORT PANICS FOR THE REASON EVERY OTHER NIL HERE DOES: an
+	// optional field left unset reads as working software, and the first
+	// symptom would be a nil-pointer dereference inside H1's 'Stop sharing' —
+	// on the one control in the app whose job is to revoke a live capability.
+	if deps.Share == nil {
+		panic("httpapi: the share routes need a store; a nil one is not 'no sharing', " +
+			"it is a panic the first time somebody presses Stop sharing")
+	}
 	// THE MEDIA PORTS PANIC FOR THE REASON THE LIMITERS DO. A nil object store
 	// is not "no media": it is a nil-pointer dereference inside a handler on
 	// the first upload, wearing a 500 that says nothing, on a route whose
@@ -297,6 +314,101 @@ func signIn(deps Deps) http.HandlerFunc {
 	}
 }
 
+// revokeSession is `DELETE /v1/auth/session`, AND ITS SIBLING RIDES ON A QUERY
+// PARAMETER RATHER THAN ON A SECOND PATH.
+//
+// The security lens's argument for "revoke them all" is short and right: A
+// STOLEN TOKEN IS PRECISELY THE CASE WHERE YOU DO NOT KNOW WHICH ROW TO
+// DELETE, and 'this token' is the one thing the thief will not use. Against a
+// thirty-day untuned TTL it is the only recovery a user has.
+//
+// WHY `?scope=all` AND NOT `DELETE /v1/auth/sessions`. A plural path would be
+// a route the plan's own table does not hold — the surface is counted at 23 at
+// the end of R8 and this step is allotted six rows — and, more usefully, the
+// two are one decision with two answers rather than two resources. The
+// precedent is R6's `?photos=keep|delete` on D2's delete, which is the same
+// shape: one destructive act, a parameter choosing how far it reaches.
+//
+// WHERE IT DIFFERS FROM THAT PRECEDENT IS THAT THE PARAMETER IS OPTIONAL, and
+// the reason is which way the default is safe. R6's is REQUIRED because "a
+// default is a silent answer to the question D2 makes the user answer on
+// screen" — there the two branches destroy different amounts and neither is
+// the obvious one. Here the route's name is singular, the default is the
+// SMALLER act, and a caller who omits the parameter gets exactly what the path
+// says. A required parameter would also break the plainest possible sign-out.
+//
+// IT ANSWERS 204 AND NO BODY, EVEN FOR `all`. There is nothing to splice: a
+// session is not in the emitted log, so no version moves and no ETag changes.
+// A count of revoked sessions was put and declined — it is a number with no
+// reader, and this project's own standard is that a field is real when
+// something READS it. The count is still returned by the STORE, where a leg
+// reads it.
+//
+// A SECOND REVOKE OF THE SAME TOKEN CANNOT REACH THIS HANDLER, because
+// RequireTraveller resolves the credential first and a revoked token is not a
+// live session — so the honest answer to "is this idempotent?" is that the
+// second attempt is a 401, which is the same thing the caller wanted.
+func revokeSession(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		traveller, held := auth.TravellerFrom(r.Context())
+		if !held {
+			httpx.WriteError(w, r, httpx.CodeInternal)
+			return
+		}
+
+		everywhere, ok := revokeScope(r)
+		if !ok {
+			httpx.WriteFieldError(w, r, "scope")
+			return
+		}
+
+		if everywhere {
+			// IT REVOKES THE CALLER'S OWN TOKEN TOO, and that is the point
+			// rather than a side effect: "sign out everywhere" that leaves the
+			// device you pressed it on signed in is a control that has not
+			// done what it says.
+			if _, err := deps.Auth.RevokeEverySession(r.Context(), traveller.ID); err != nil {
+				writeAuthFailure(w, r, deps.Log, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		// The token is read from the header again rather than carried on the
+		// context: `auth.Bearer` is the one parser, and a second copy of the
+		// credential in a context value is a second place for it to leak from.
+		token, presented := auth.Bearer(r)
+		if !presented {
+			httpx.WriteError(w, r, httpx.CodeUnauthenticated)
+			return
+		}
+		if _, err := deps.Auth.RevokeSession(r.Context(), traveller.ID, token); err != nil {
+			writeAuthFailure(w, r, deps.Log, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// revokeScope reads `?scope=`, and REFUSES A VALUE IT DOES NOT KNOW rather
+// than falling back to the smaller act.
+//
+// `?scope=al` — a typo — must not quietly sign one device out while the user
+// believes every device is out. That is the one failure mode this parameter
+// has, and the whole of why an unknown value is a 422 naming the field instead
+// of a default.
+func revokeScope(r *http.Request) (everywhere, ok bool) {
+	switch r.URL.Query().Get("scope") {
+	case "", "this":
+		return false, true
+	case "all":
+		return true, true
+	default:
+		return false, false
+	}
+}
+
 // RequireTraveller resolves the bearer token and puts the traveller on the
 // context. VS7's routes wear it; VS6 builds it and proves it.
 //
@@ -361,7 +473,14 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 	switch {
 	case errors.As(err, &invalid):
 		httpx.WriteFieldError(w, r, invalid.Field)
-	case errors.Is(err, auth.ErrEmailTaken):
+	case errors.Is(err, auth.ErrEmailTaken), errors.Is(err, auth.ErrRegistrationClosed):
+		// TWO SENTINELS, ONE WORD, AND THAT IS DEC-86's ORACLE SHRINKING
+		// RATHER THAN A COLLAPSE. `ErrEmailTaken` told a caller that THAT
+		// ADDRESS is registered here, which the security lens flagged as an
+		// enumeration surface; `ErrRegistrationClosed` tells them only that
+		// the instance is in use, which the sign-in page already tells them.
+		// They share a branch so that the two are indistinguishable on the
+		// wire — the same status, the same body, the same bytes.
 		httpx.WriteError(w, r, httpx.CodeConflict)
 	case errors.Is(err, auth.ErrBadCredentials), errors.Is(err, auth.ErrNoSession):
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)

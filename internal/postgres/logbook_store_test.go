@@ -924,8 +924,8 @@ func TestTheSharedFlagCarriesNoToken(t *testing.T) {
 func aLiveShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
-		`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1::uuid, $2, $3)`,
-		travellerID, tripID, token); err != nil {
+		`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1::uuid, $2, $3)`,
+		travellerID, tripID, logbook.HashShareToken(token)); err != nil {
 		t.Fatalf("inserting a share link for %s: %v", tripID, err)
 	}
 }
@@ -933,9 +933,9 @@ func aLiveShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string)
 func aRevokedShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
-		`INSERT INTO share_links (traveller_id, trip_id, token, revoked_at)
+		`INSERT INTO share_links (traveller_id, trip_id, token_hash, revoked_at)
 		 VALUES ($1::uuid, $2, $3, now())`,
-		travellerID, tripID, token); err != nil {
+		travellerID, tripID, logbook.HashShareToken(token)); err != nil {
 		t.Fatalf("inserting a revoked share link for %s: %v", tripID, err)
 	}
 }
@@ -1074,5 +1074,285 @@ func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
 	}
 	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
 		t.Fatalf("inserting a dated row into %s: %v", table, err)
+	}
+}
+
+// ------------------------------------------------------- D3: the trip cascade
+
+// THE SHAPE THE CLIENT'S OWN HISTORY SAYS WENT WRONG, AND THE FIXTURE CANNOT
+// EXPRESS IT.
+//
+// "Deleting a trip left twenty-two of ANOTHER trip's photographs naming a
+// visit that had gone — no count moved and the log was corrupt." In the
+// client's captured document no photograph of another trip names an
+// autumn-crossing visit (measured at this working tree: 0), so the
+// fixture-scale legs in internal/seed cannot reach this branch at all. It is
+// built here instead, which is the same arrangement `to_file_test.dart` uses
+// in the client for the window filter its sample log no longer exercises.
+//
+// WHAT MUST HAPPEN: `visit_id` is cleared and NOTHING ELSE ON THE ROW MOVES.
+// `photos_visit_fk … ON DELETE SET NULL (visit_id)` is what does it, and the
+// COLUMN LIST is what makes it executable — a composite FK's plain SET NULL
+// nulls traveller_id too, which is NOT NULL, and the delete aborts.
+//
+// AND THE PHOTOGRAPH ITSELF SURVIVES. That is the assertion a dangling-
+// reference check cannot make: deleting the photograph leaves nothing dangling
+// either.
+func TestDeletingATripClearsAnotherTripsVisitReferenceAndNothingElse(t *testing.T) {
+	db := seeded(t)
+	ctx := context.Background()
+
+	// The fixture already holds it: `p-autumn` is filed on autumn-crossing and
+	// names `v-fushimi-may`, a visit of kyoto-in-may. Asserted rather than
+	// assumed, because this leg is worthless if it is not the shape.
+	var tripID, visitTrip string
+	if err := db.QueryRowContext(ctx, `
+		SELECT p.trip_id, v.trip_id FROM photos p JOIN visits v
+		  ON (p.traveller_id, p.visit_id) = (v.traveller_id, v.id)
+		WHERE p.traveller_id = $1 AND p.id = 'p-autumn'`, tid).Scan(&tripID, &visitTrip); err != nil {
+		t.Fatalf("the premise failed: p-autumn does not name a visit: %v", err)
+	}
+	if tripID == visitTrip {
+		t.Fatalf("the premise failed: p-autumn's visit belongs to its own trip (%s), so "+
+			"deleting the OTHER trip cannot reach it", tripID)
+	}
+
+	before := photoRow(t, db, "p-autumn")
+	if before.visitID != "v-fushimi-may" || before.placeID != "fushimi-inari" {
+		t.Fatalf("the premise failed: p-autumn is filed at %q/%q", before.placeID, before.visitID)
+	}
+
+	if _, err := (LogbookStore{DB: db}).DeleteTrip(ctx, tid, "kyoto-in-may"); err != nil {
+		t.Fatalf("DeleteTrip: %v", err)
+	}
+
+	after := photoRow(t, db, "p-autumn")
+	if after.missing {
+		t.Fatalf("p-autumn is gone. It belongs to autumn-crossing; deleting kyoto-in-may " +
+			"must not take another trip's photograph, and a dangling-reference check " +
+			"answers 0 either way.")
+	}
+	if after.visitID != "" {
+		t.Errorf("p-autumn still names the visit %q, which went with kyoto-in-may.\n"+
+			"    This is the cascade the client's own history says moved no count and\n"+
+			"    left the log corrupt: `photos_visit_fk … ON DELETE SET NULL (visit_id)`\n"+
+			"    is what clears it, and the COLUMN LIST is what makes it executable.",
+			after.visitID)
+	}
+	// AND NOTHING ELSE MOVED. `place_id` in particular: the pin is still
+	// Fushimi Inari, and the sheet says nothing about another trip's filing.
+	if after.placeID != before.placeID {
+		t.Errorf("p-autumn's place_id went from %q to %q. Only visit_id is in the column "+
+			"list; clearing the pin as well is a photograph that has lost its place "+
+			"because somebody else's trip was deleted.", before.placeID, after.placeID)
+	}
+	if after.tripID != before.tripID || after.cityID != before.cityID ||
+		after.caption != before.caption || !after.takenAt.Equal(before.takenAt) {
+		t.Errorf("p-autumn changed elsewhere: %+v -> %+v", before, after)
+	}
+}
+
+// A DELETE THAT REMOVES NOTHING MOVES NO VERSION, and that is the branch a
+// retried delete takes.
+//
+// The client treats an unknown id as success — "the caller asked for that trip
+// to be absent and it is" — and DEC-103 exists because deletes DO get retried,
+// against servers that answered 404 for a route they did not have. So the
+// second call has to be cheap in the one way the phone can feel: if it bumped
+// logbook_version, every retry would invalidate the whole cached document and
+// the next GET would carry the log back down the wire for nothing.
+//
+// IT IS ASSERTED AS A VERSION AND AS A DOCUMENT. The version is the falsifiable
+// half — `WithTravellerTx` takes the bump BEFORE the body runs, so the only way
+// not to move it is to let the body's error roll the transaction back, and an
+// implementation that "helpfully" ignores the miss moves it.
+func TestADeleteThatRemovesNothingIsSuccessAndMovesNoVersion(t *testing.T) {
+	db := seeded(t)
+	store := LogbookStore{DB: db}
+	ctx := context.Background()
+
+	first, err := store.DeleteTrip(ctx, tid, "kyoto-in-may")
+	if err != nil {
+		t.Fatalf("the first DeleteTrip: %v", err)
+	}
+	if first.Version < 1 {
+		t.Fatalf("a delete that removed a trip left version %d", first.Version)
+	}
+
+	again, err := store.DeleteTrip(ctx, tid, "kyoto-in-may")
+	if err != nil {
+		t.Fatalf("deleting the same trip twice answered %v; a delete asks for something "+
+			"to be absent, and an absent thing satisfies it", err)
+	}
+	if again.Version != first.Version {
+		t.Errorf("a repeated delete moved logbook_version from %d to %d.\n"+
+			"    Nothing changed, so nothing should have: a bump here invalidates the\n"+
+			"    phone's whole cached document on every retry, and DEC-103 exists\n"+
+			"    because deletes are exactly what gets retried.",
+			first.Version, again.Version)
+	}
+	if again.Document == nil {
+		t.Fatalf("a repeated delete answered no document")
+	}
+	if len(again.Document.Trips) != 1 || again.Document.Trips[0].ID != "autumn-crossing" {
+		t.Errorf("the log came back holding %d trips, want just autumn-crossing",
+			len(again.Document.Trips))
+	}
+}
+
+// AND A TRIP OF ANOTHER TRAVELLER IS AN UNKNOWN TRIP, NOT A DELETE.
+//
+// Every statement in this file is scoped by traveller_id and the primary keys
+// are composite, so this cannot go wrong by accident — which is exactly why it
+// is worth one leg: the shape that WOULD go wrong is a `WHERE id = $1` that
+// somebody writes because the id looks unique, and the fixture has only ever
+// had one traveller for it to be right about.
+func TestOneTravellerCannotDeleteAnothersTrip(t *testing.T) {
+	db := seeded(t)
+	ctx := context.Background()
+	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'other@example.com','x')`, otherT)
+
+	snap, err := (LogbookStore{DB: db}).DeleteTrip(ctx, otherT, "kyoto-in-may")
+	if err != nil {
+		t.Fatalf("DeleteTrip: %v", err)
+	}
+	if len(snap.Document.Trips) != 0 {
+		t.Errorf("the stranger's log came back with %d trips", len(snap.Document.Trips))
+	}
+	if n := count(t, db, `SELECT count(*) FROM trips WHERE traveller_id=$1`, tid); n != 2 {
+		t.Errorf("the owner has %d trips left, want 2 — a delete keyed on the id alone "+
+			"reaches every traveller's row of that name", n)
+	}
+}
+
+type storedPhoto struct {
+	missing                          bool
+	tripID, cityID, placeID, visitID string
+	caption                          string
+	takenAt                          time.Time
+}
+
+func photoRow(t *testing.T, db *sql.DB, id string) storedPhoto {
+	t.Helper()
+	var out storedPhoto
+	var placeID, visitID, caption sql.NullString
+	err := db.QueryRowContext(context.Background(), `
+		SELECT trip_id, city_id, place_id, visit_id, caption, taken_at
+		FROM photos WHERE traveller_id = $1 AND id = $2`, tid, id).
+		Scan(&out.tripID, &out.cityID, &placeID, &visitID, &caption, &out.takenAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storedPhoto{missing: true}
+	}
+	if err != nil {
+		t.Fatalf("reading the photograph %s: %v", id, err)
+	}
+	out.placeID, out.visitID, out.caption = placeID.String, visitID.String, caption.String
+	return out
+}
+
+// ---------------------------------------------------- U1's PENCIL: THE NAME
+
+// THE NAME LANDS, IT IS TRIMMED, AND THE VERSION MOVES.
+//
+// The version half is DEC-50's list: `traveller: {name}` is the sixth key of
+// the emitted document, so the traveller row is on the BUMPING side — a rename
+// that moved no version would leave every phone answering 304 to a log whose
+// owner has changed.
+//
+// The trim is the client's rule applied at the record: its sheet's gate is
+// `trim().isNotEmpty`, "so a name that passes the gate and then goes to disk
+// with its whitespace still on is the gate's string rather than the user's",
+// and a name arriving from anything that is not that sheet gets the same
+// treatment.
+func TestSetTravellerNameWritesATrimmedNameAndMovesTheVersion(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+	before := versionOf(t, db, id)
+
+	named, version, err := store.SetTravellerName(ctx, id, "  Matt  ")
+	if err != nil {
+		t.Fatalf("SetTravellerName: %v", err)
+	}
+	if named.Name != "Matt" {
+		t.Errorf("the answer carries %q, want %q", named.Name, "Matt")
+	}
+	if version <= before {
+		t.Errorf("logbook_version went %d -> %d; the traveller's name is IN the emitted "+
+			"document", before, version)
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM travellers WHERE id = $1::uuid`, id).
+		Scan(&stored); err != nil {
+		t.Fatalf("reading the name back: %v", err)
+	}
+	if stored != "Matt" {
+		t.Errorf("the column holds %q, want %q — the answer and the row have to agree, "+
+			"because the phone splices one and re-reads the other", stored, "Matt")
+	}
+}
+
+// AN EMPTY NAME IS A NAMED FIELD AND NOT A CONSTRAINT VIOLATION.
+//
+// `travellers_name_present_ck` refuses `”` and would answer SQLSTATE 23514,
+// which reaches the client as a 500 with nothing to act on. The Go check is
+// what produces the 422 that names the field — DEC-58's precedent, both halves
+// kept, the check to say WHICH field and the constraint to be the guarantee.
+//
+// AND IT DOES NOT CLEAR THE NAME. The refusal has to be taken before the
+// UPDATE, not reported after it.
+func TestSetTravellerNameRefusesAnEmptyNameAndKeepsTheOldOne(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+
+	if _, _, err := store.SetTravellerName(ctx, id, "Matt"); err != nil {
+		t.Fatalf("the first SetTravellerName: %v", err)
+	}
+	before := versionOf(t, db, id)
+
+	for _, name := range []string{"", "   ", "\t\n"} {
+		_, _, err := store.SetTravellerName(ctx, id, name)
+		var invalid logbook.InvalidFieldError
+		if !errors.As(err, &invalid) {
+			t.Errorf("SetTravellerName(%q) answered %v, want an InvalidFieldError", name, err)
+			continue
+		}
+		if invalid.Field != "name" {
+			t.Errorf("the refusal names %q, want \"name\"", invalid.Field)
+		}
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM travellers WHERE id = $1::uuid`, id).
+		Scan(&stored); err != nil {
+		t.Fatalf("reading the name back: %v", err)
+	}
+	if stored != "Matt" {
+		t.Errorf("the column holds %q after three refused writes, want %q — an empty "+
+			"name is refused and is not a way to clear it", stored, "Matt")
+	}
+	if got := versionOf(t, db, id); got != before {
+		t.Errorf("a refused rename moved logbook_version from %d to %d — the refusal is "+
+			"taken before the transaction opens, so nothing should have committed",
+			before, got)
+	}
+}
+
+// A NAME LONGER THAN THIS BUILD TAKES IS THE SAME KIND OF REFUSAL, and it is
+// the same ceiling a trip's name wears. Nothing in the schema bounds
+// `travellers.name` — it is `text` — so without this a one-megabyte name is
+// storable and then re-emitted on every read of the whole log, for ever.
+func TestSetTravellerNameRefusesANameLongerThanTheBuildTakes(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+
+	_, _, err := store.SetTravellerName(context.Background(), id,
+		strings.Repeat("n", logbook.MaxNameBytes+1))
+	var invalid logbook.InvalidFieldError
+	if !errors.As(err, &invalid) || invalid.Field != "name" {
+		t.Errorf("a %d-byte name answered %v, want an InvalidFieldError naming name",
+			logbook.MaxNameBytes+1, err)
 	}
 }

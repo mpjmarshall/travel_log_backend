@@ -21,6 +21,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ func TestAnAuthenticatedRouteRunsOutOfItsOwnAllowance(t *testing.T) {
 func TestOneTravellerRunningOutDoesNotRefuseAnotherAtTheSameAddress(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
 	first := bearerFor(t, h, "matt@example.com")
-	second := bearerFor(t, h, "kit@example.com")
+	second := aSecondTravellerBehindTheClosedRoute(t, h, "kit@example.com")
 
 	spent := 0
 	for range 4 {
@@ -197,4 +198,38 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 	if raw := strings.TrimPrefix(token, "Bearer "); strings.Contains(logs, raw) {
 		t.Errorf("the session token reached the log")
 	}
+}
+
+// aSecondTravellerBehindTheClosedRoute puts a traveller into the store
+// DIRECTLY and signs them in through the real routes.
+//
+// IT EXISTS BECAUSE DEC-86 CLOSED THE ROUTE THAT USED TO DO THIS, and going
+// round the route is the honest answer rather than a workaround. Registration
+// refuses once any traveller row exists, so `bearerFor` can mint exactly one
+// traveller now — and the two legs above are about the LIMITER's keying, which
+// is a claim about a state the system can still be in: ruling 3 wants one
+// traveller, and DEC-86's own trigger for revisiting is "a second traveller
+// ever being wanted". The keying has to be right before that day, not after
+// it, or the limiter is discovered to be per-address by whoever opens the
+// route.
+//
+// SIGNING IN STILL GOES THROUGH THE REAL ROUTE, so what is bypassed is the
+// registration rule and nothing else: the token this answers was minted by
+// `POST /v1/auth/session` over the real mux and the real chain.
+func aSecondTravellerBehindTheClosedRoute(t *testing.T, h *harness, email string) string {
+	t.Helper()
+	hash, err := cheapArgon.Hash("a long enough passphrase")
+	if err != nil {
+		t.Fatalf("hashing the second traveller's passphrase: %v", err)
+	}
+	if _, err := h.store.CreateTraveller(context.Background(), email, hash); err != nil {
+		t.Fatalf("putting %s into the store directly: %v", email, err)
+	}
+	if got := h.post(t, "/v1/auth/register",
+		credentialsFor("a-third@example.com")); got.status != http.StatusConflict {
+		t.Fatalf("the premise of this helper failed: registration answered %d rather "+
+			"than 409, so the route is not closed and the helper is unnecessary",
+			got.status)
+	}
+	return signInAs(t, h, email)
 }

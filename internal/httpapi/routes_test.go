@@ -24,15 +24,23 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	// SEVEN AT R3, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
+	// THIRTEEN AT R5, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
 	// `len(Routes(...))` would make this line unfalsifiable — it would say
 	// "the table holds as many routes as the table holds". What it is for is
 	// that a route ARRIVING or LEAVING is a decision somebody made, and it
 	// should cost one line in a test rather than nothing at all. It was four
-	// at VS7; R3 adds begin, commit and mint.
-	if len(routes) != 7 {
-		t.Errorf("the table holds %d routes; R3's surface is seven — two credential "+
-			"routes, one conditional read, one whole-state write, and the three "+
+	// at VS7; R3 added begin, commit and mint; R5 adds six — D3's cascade,
+	// H1's three share writes, U1's pencil and the one revocation surface.
+	//
+	// SIX AND NOT SEVEN, BECAUSE "REVOKE THEM ALL" IS A QUERY PARAMETER. The
+	// plan's own table holds 23 rows at the end of R8 and allots this step
+	// six; `?scope=all` rides on `DELETE /v1/auth/session` rather than
+	// claiming a `DELETE /v1/auth/sessions` the table does not have. See the
+	// row's own comment.
+	if len(routes) != 13 {
+		t.Errorf("the table holds %d routes; R5's surface is thirteen — two credential "+
+			"routes, one conditional read, one whole-state write, D3's cascade, H1's "+
+			"three share writes, U1's pencil, the revocation surface, and the three "+
 			"media routes", len(routes))
 	}
 
@@ -162,9 +170,25 @@ func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 				bearerHeader = bearer(t, h)
 			}
 
+			// ONE ROUTE DESTROYS ITS OWN CREDENTIAL, AND IT IS SIGNED IN AGAIN
+			// BETWEEN THE TWO SPENDS RATHER THAN EXEMPTED. `DELETE
+			// /v1/auth/session` revokes the token it was called with, so the
+			// second request would be a 401 before the limiter is ever
+			// reached — and an exemption would leave the only revocation
+			// surface in the API as the one route nothing asserts a ceiling
+			// on. Signing in again spends the CREDENTIAL bucket, which is
+			// 1000 on this branch, and mints a new token for the same
+			// traveller — so the TRAVELLER bucket, which is what this leg is
+			// about, is untouched by the re-sign-in.
+			renews := route.Method == http.MethodDelete && route.Pattern == "/v1/auth/session"
+
 			spend := func() int {
 				path := strings.ReplaceAll(route.Pattern, "{id}", strings.Repeat("a", 64))
-				return h.do(t, route.Method, path, bodyFor(route), bearerHeader).status
+				status := h.do(t, route.Method, path, bodyFor(route), bearerHeader).status
+				if renews && route.Auth {
+					bearerHeader = signInAs(t, h, "matt@example.com")
+				}
+				return status
 			}
 			if got := spend(); got == http.StatusTooManyRequests {
 				t.Fatalf("the FIRST request = 429, so this route is counting against "+

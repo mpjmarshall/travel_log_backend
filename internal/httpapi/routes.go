@@ -115,14 +115,55 @@ type Route struct {
 	NoStore bool
 }
 
-// Routes is the whole API surface at R3: two credential routes, one
-// conditional read, one whole-state write, and the three media routes.
+// Routes is the whole API surface at R5: two credential routes, one
+// conditional read, one whole-state write, D3's cascade, H1's three share
+// writes, U1's pencil, the one revocation surface, and the three media routes.
 func Routes(deps Deps) []Route {
 	return []Route{
 		{http.MethodPost, "/v1/auth/register", register(deps), false, LimitCredential, false},
 		{http.MethodPost, "/v1/auth/session", signIn(deps), false, LimitCredential, false},
 		{http.MethodGet, "/v1/logbook", readLogbook(deps), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/trips/{id}", putTrip(deps), true, LimitTraveller, false},
+
+		// D3's CASCADE, AND IT IS AUTHENTICATED AND NOTHING ELSE. The
+		// name-confirmation gate the safety lens asked for is DECLINED, in
+		// writing, at the top of trip_handlers.go.
+		{http.MethodDelete, "/v1/trips/{id}", deleteTrip(deps), true, LimitTraveller, false},
+
+		// H1's THREE WRITES, ON ONE PATH WITH THREE VERBS — the client's three
+		// methods rather than a REST habit. See share_handlers.go.
+		//
+		// NONE OF THE THREE IS `NoStore`, AND THE MINT IS THE ONE THAT LOOKS
+		// LIKE IT SHOULD BE. `NoStore` is DEC-51's policy for a response
+		// carrying a CAPABILITY, and the mint's answer does carry one — but it
+		// carries the token the CALLER just sent in the request body, so a
+		// cache that stored the response would be storing a secret the client
+		// already holds and just transmitted. What the flag exists for is a
+		// capability the server MINTED and the caller has no other copy of:
+		// `POST /v1/media` and `POST /v1/media/mint`, whose presigned URLs are
+		// pure bearer capabilities with unlimited replay. Marking this row
+		// would make the flag mean two things, which is how a policy stops
+		// being readable. (R8's `GET /l/{token}` is the row that needs it
+		// most, and it is not here yet.)
+		{http.MethodPut, "/v1/trips/{id}/share", setShareOptions(deps), true, LimitTraveller, false},
+		{http.MethodPost, "/v1/trips/{id}/share", newShareLink(deps), true, LimitTraveller, false},
+		{http.MethodDelete, "/v1/trips/{id}/share", stopSharing(deps), true, LimitTraveller, false},
+
+		// U1's PENCIL. `GET /v1/me` is DELETED (OE-7) — see me_handlers.go.
+		{http.MethodPatch, "/v1/me", patchMe(deps), true, LimitTraveller, false},
+
+		// THE ONLY REVOCATION SURFACE IN THE API, against a thirty-day untuned
+		// TTL. `?scope=all` is its sibling and rides on this row rather than
+		// on a second one.
+		//
+		// IT IS `LimitTraveller` AND NOT `LimitCredential`, WHICH READS
+		// BACKWARDS AND IS RIGHT. The credential ceiling bounds
+		// UNAUTHENTICATED Argon2 work; this route is authenticated, so it can
+		// only be reached by somebody already holding a live token — and the
+		// traveller limiter can only be applied INSIDE RequireTraveller
+		// anyway, because the traveller is on the context only after the
+		// credential has been resolved.
+		{http.MethodDelete, "/v1/auth/session", revokeSession(deps), true, LimitTraveller, false},
 
 		// THE THREE MEDIA ROUTES, AND ONLY TWO OF THEM CARRY A CAPABILITY IN
 		// THEIR ANSWER — which is the whole reason `NoStore` is a field rather

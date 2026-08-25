@@ -54,6 +54,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"travellog/internal/logbook"
@@ -675,6 +676,145 @@ func readOneTrip(ctx context.Context, tx *sql.Tx, travellerID, tripID string) (l
 		t.CityIDs = append(t.CityIDs, cityID)
 	}
 	return t, rows.Err()
+}
+
+// --------------------------------------------------- U1's PENCIL: THE NAME
+
+// setTravellerNameSQL is the only write that touches the traveller row's own
+// data, and it BUMPS logbook_version — through WithTravellerTx below —
+// because `traveller: {name}` is the sixth key of the emitted document.
+//
+// IT IS NOT NULLABLE THROUGH THIS ROUTE. `travellers.name` is nullable and
+// `travellers_name_present_ck` refuses the empty string, so the two states
+// that exist are "a log nobody has named yet" and a name. Clearing it back to
+// NULL is not something the client can ask for and is not something this
+// statement can do: `setTravellerName` refuses a trimmed-empty name, and the
+// client's own reason is that "'no traveller' is a state a log arrives in and
+// never returns to".
+const setTravellerNameSQL = `UPDATE travellers SET name = $2 WHERE id = $1::uuid`
+
+// SetTravellerName is U1's pencil.
+//
+// THE TRIM IS THE SERVER'S TOO, and it is not duplication for its own sake.
+// The client trims because its sheet's gate is `trim().isNotEmpty`, "so a name
+// that passes the gate and then goes to disk with its whitespace still on is
+// the gate's string rather than the user's" — and the server is the record, so
+// a name arriving from anything that is not that sheet gets the same
+// treatment. What the server adds is the REFUSAL: `"   "` is a 422 naming the
+// field rather than a 500 from travellers_name_present_ck.
+func (s LogbookStore) SetTravellerName(ctx context.Context, travellerID, name string) (logbook.Traveller, int64, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
+			Why: "a traveller needs a name, and an empty one is not a way to clear it"}
+	}
+	if len(trimmed) > logbook.MaxNameBytes {
+		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
+			Why: fmt.Sprintf("%d bytes, and this build takes at most %d",
+				len(trimmed), logbook.MaxNameBytes)}
+	}
+
+	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
+		// THE ROW COUNT IS NOT CHECKED HERE, and that is not an oversight:
+		// WithTravellerTx's own bump is `UPDATE travellers … RETURNING`, which
+		// has already answered ErrNoTraveller for a traveller that is gone
+		// before this statement runs. Checking again would be a second answer
+		// to a question already asked, in the same transaction, about the same
+		// row.
+		if _, err := tx.ExecContext(ctx, setTravellerNameSQL, travellerID, trimmed); err != nil {
+			return fmt.Errorf("postgres: naming the traveller %s: %w", travellerID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return logbook.Traveller{}, 0, travellerError(err, travellerID)
+	}
+	return logbook.Traveller{Name: trimmed}, version, nil
+}
+
+// ---------------------------------------------------------- D3: THE CASCADE
+
+// deleteTripSQL IS ONE STATEMENT, AND EVERY OTHER ROW D3 ITEMISES GOES BECAUSE
+// THE SCHEMA SAYS SO RATHER THAN BECAUSE GO ASKS TWICE.
+//
+// The sheet's own table, and the foreign key that implements each line:
+//
+//	"N photos and their notes"   -> photos_trip_fk       ON DELETE CASCADE
+//	"N recorded walks"           -> walks_trip_fk        ON DELETE CASCADE
+//	"N pins in …" — KEPT         -> NOTHING. places has no trip_id at all;
+//	                                what goes is visits_trip_fk's rows, and a
+//	                                place left with none is a wishlist place.
+//	"the shared link stops"      -> share_links_trip_fk  ON DELETE CASCADE
+//	the itinerary                -> trip_cities_trip_fk  ON DELETE CASCADE
+//	the cities                   -> trip_cities_city_fk is RESTRICT, and no
+//	                                key from trips reaches cities at all.
+//	another trip's photograph    -> photos_visit_fk ON DELETE SET NULL
+//	                                (visit_id), which fires as the visits go.
+//
+// WRITING ANY OF THOSE OUT IN GO WOULD BE A SECOND IMPLEMENTATION OF THE SHEET,
+// and the one that is easy to write is the one that is wrong: `DELETE FROM
+// places WHERE id IN (SELECT place_id FROM visits WHERE trip_id = $1)` is the
+// CRUD reflex, it takes five pins the sheet promised to keep, and nothing
+// errors.
+const deleteTripSQL = `DELETE FROM trips WHERE traveller_id = $1::uuid AND id = $2`
+
+// errNothingDeleted is how a miss ROLLS THE VERSION BUMP BACK.
+//
+// It is a sentinel and not a bool because of where the decision has to be
+// taken: `WithTravellerTx` bumps logbook_version BEFORE the body runs, so by
+// the time the body knows the trip was not there the number has already moved.
+// Returning an error is the only way to un-move it — the bump rides the
+// rollback with everything else — and this one is caught immediately outside,
+// so it never reaches a caller.
+var errNothingDeleted = errors.New("postgres: that trip was not in this log")
+
+// DeleteTrip is D3, and it answers THE WHOLE LOG.
+//
+// THE DOCUMENT IS READ INSIDE THE WRITE TRANSACTION, which is not the
+// repeatable-read snapshot GET /v1/logbook uses and does not need to be. The
+// traveller's advisory lock is held for the whole of it, so no other write for
+// this traveller can land between the DELETE and the ten SELECTs; and the
+// reads see this transaction's own delete because they are in it. What the
+// snapshot buys the READER — a consistent view against concurrent writers — the
+// lock buys the WRITER, and taking a repeatable-read snapshot as well would
+// mean a second transaction and therefore a second moment.
+//
+// A MISS IS A SUCCESS AND MOVES NOTHING. See logbook.Store's contract: the
+// client's own rule is that a delete of something absent has succeeded, and a
+// bump on a retried delete throws away the phone's whole cached document.
+func (s LogbookStore) DeleteTrip(ctx context.Context, travellerID, tripID string) (logbook.Snapshot, error) {
+	var snap logbook.Snapshot
+
+	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, deleteTripSQL, travellerID, tripID)
+		if err != nil {
+			return fmt.Errorf("postgres: deleting the trip %s: %w", tripID, err)
+		}
+		gone, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("postgres: counting the deleted trip %s: %w", tripID, err)
+		}
+		if gone == 0 {
+			return errNothingDeleted
+		}
+		doc, err := readDocument(ctx, tx, travellerID)
+		if err != nil {
+			return err
+		}
+		snap.Document = &doc
+		return nil
+	})
+	switch {
+	case errors.Is(err, errNothingDeleted):
+		// Nothing was written, so the version the caller should see is the one
+		// that was already there — which is what a plain read answers, in its
+		// own snapshot, with `assemble` saying yes.
+		return s.Read(ctx, travellerID, func(int64) bool { return true })
+	case err != nil:
+		return logbook.Snapshot{}, travellerError(err, travellerID)
+	}
+	snap.Version = version
+	return snap, nil
 }
 
 // travellerError translates the transaction helpers' sentinel into the

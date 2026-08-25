@@ -9,6 +9,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -39,6 +40,15 @@ const (
 	assetA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	assetB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	noSuch = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+	// THE THREE SHARE TOKENS ARE PLAINTEXT HERE AND A DIGEST IN THE TABLE
+	// (DEC-85). They are twelve characters of the client's own alphabet
+	// rather than `tok-may`, which is what they were until 0004: the hyphen
+	// and the four-character length are both outside `shareTokenPattern`, so
+	// a fixture carrying them would be a fixture no route could produce.
+	tokenMay   = "kyotomay9f2a"
+	tokenTwo   = "secondtoken2"
+	tokenThree = "thirdtoken33"
 )
 
 // migrated opens a test schema, applies 0001, and answers the pool.
@@ -91,7 +101,8 @@ func seeded(t *testing.T) *sql.DB {
 	mustExec(t, db, `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
 		VALUES ($1,'w-may','kyoto-in-may','kyoto','2027-05-03',3.2,
 		        '[{"lat":34.96,"lng":135.77},{"lat":34.97,"lng":135.78}]'::jsonb)`, tid)
-	mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'kyoto-in-may','tok-may')`, tid)
+	mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,'kyoto-in-may',$2)`,
+		tid, logbook.HashShareToken(tokenMay))
 	_ = ctx
 	return db
 }
@@ -560,7 +571,8 @@ func TestASetBasedUpdateOfTheOrdinalsCollidesAndThatIsWhyTheStrategyIsDeleteThen
 func TestStopSharingThenNewLinkWorksAndOnlyOneLinkIsEverLive(t *testing.T) {
 	db := seeded(t)
 
-	_, err := db.Exec(`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'kyoto-in-may','tok-two')`, tid)
+	_, err := db.Exec(`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,'kyoto-in-may',$2)`,
+		tid, logbook.HashShareToken(tokenTwo))
 	if err == nil {
 		t.Fatal("a second LIVE link was accepted for one trip")
 	}
@@ -576,7 +588,8 @@ func TestStopSharingThenNewLinkWorksAndOnlyOneLinkIsEverLive(t *testing.T) {
 	if _, err := tx.Exec(`UPDATE share_links SET revoked_at=now() WHERE traveller_id=$1 AND trip_id='kyoto-in-may' AND revoked_at IS NULL`, tid); err != nil {
 		t.Fatalf("stop sharing: %v", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'kyoto-in-may','tok-three')`, tid); err != nil {
+	if _, err := tx.Exec(`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,'kyoto-in-may',$2)`,
+		tid, logbook.HashShareToken(tokenThree)); err != nil {
 		t.Fatalf("new link after stop sharing: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -593,11 +606,18 @@ func TestStopSharingThenNewLinkWorksAndOnlyOneLinkIsEverLive(t *testing.T) {
 
 // A token has to be unique across the whole table: GET /l/{token} arrives with
 // no traveller in hand.
+//
+// SINCE 0004 IT IS THE DIGEST THAT IS UNIQUE, and that is the same claim
+// rather than a weaker one: sha256 is injective for every input this system
+// will ever see, so two travellers cannot hold one token without holding one
+// hash. The index keeps its name because the question it answers has not
+// changed — `share_links_token_key` is still what /l/{token} resolves through.
 func TestATokenIsUniqueAcrossEveryTraveller(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'other@example.com','x')`, otherT)
 	mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1,'their-trip','Theirs')`, otherT)
-	_, err := db.Exec(`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'their-trip','tok-may')`, otherT)
+	_, err := db.Exec(`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,'their-trip',$2)`,
+		otherT, logbook.HashShareToken(tokenMay))
 	if err == nil {
 		t.Fatal("two travellers hold the same share token; /l/{token} cannot tell them apart")
 	}
@@ -1430,4 +1450,244 @@ func quotedLiterals(predicate string) []string {
 		i = j
 	}
 	return out
+}
+
+// ------------------------------------------------- 0004: THE TOKEN IS A DIGEST
+
+// DEC-85, AND THE PRECONDITION IS THE HALF THAT MAKES IT A MEASUREMENT.
+//
+// 0004 replaces `share_links.token text` with `token_hash bytea`, and the
+// interesting statement is not the ALTER — it is the backfill. A row written
+// under 0003 holds a plaintext capability; after 0004 it has to hold that same
+// capability's digest, or every link ever issued stops resolving and the
+// revocation history stops meaning anything. So the leg stands the schema at
+// 0003, writes a row through the OLD column, applies 0004, and asserts the new
+// column holds `sha256(<that plaintext>)` — computed in Go, by the same
+// function the server will use, rather than restated as a hex literal.
+//
+// THE `token` READ-BACK IS A Fatalf FOR THE REASON LEG SEVEN'S IS. Without it
+// a harness that silently migrated to head makes the rest of this leg pass
+// while proving nothing at all: `token_hash` would already be there, already
+// correct, and the backfill would never have run.
+func TestMigration0004HashesTheTokensThatWereAlreadyThere(t *testing.T) {
+	db, schema := testdb.Open(t)
+	m := Migrator{Schema: schema, Logger: quietLogger()}
+	ctx := context.Background()
+
+	if _, err := m.Migrate(ctx, db, migrationsUpTo(t, "0003")); err != nil {
+		t.Fatalf("applying 0001 through 0003: %v", err)
+	}
+	id := aTraveller(t, db)
+	mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1::uuid,'before','Before 0004')`, id)
+	mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1::uuid,'before',$2)`,
+		id, tokenMay)
+
+	var stored string
+	if err := db.QueryRowContext(ctx,
+		`SELECT token FROM share_links WHERE traveller_id=$1::uuid AND trip_id='before'`,
+		id).Scan(&stored); err != nil {
+		t.Fatalf("the PRECONDITION failed: reading share_links.token under 0003: %v\n"+
+			"    Without a plaintext row standing here, the backfill has nothing to\n"+
+			"    convert and the rest of this leg passes while proving nothing.", err)
+	}
+	if stored != tokenMay {
+		t.Fatalf("share_links.token = %q under 0003, want %q", stored, tokenMay)
+	}
+
+	applied, err := m.Migrate(ctx, db, migrations.FS)
+	if err != nil {
+		t.Fatalf("applying 0004: %v", err)
+	}
+	if want := everythingAfter(t, "0003"); strings.Join(applied, ",") != strings.Join(want, ",") {
+		t.Fatalf("the second run applied %v, want %v", applied, want)
+	}
+
+	var hash []byte
+	if err := db.QueryRowContext(ctx,
+		`SELECT token_hash FROM share_links WHERE traveller_id=$1::uuid AND trip_id='before'`,
+		id).Scan(&hash); err != nil {
+		t.Fatalf("reading token_hash after 0004: %v", err)
+	}
+	if want := logbook.HashShareToken(tokenMay); !bytes.Equal(hash, want) {
+		t.Errorf("token_hash = %x after 0004, want %x — the backfill has to hash the "+
+			"token that was there, or every link ever issued stops resolving and "+
+			"the revocation history stops meaning anything", hash, want)
+	}
+}
+
+// THE PLAINTEXT COLUMN IS GONE, WHICH IS THE WHOLE OF DEC-85's SECURITY CLAIM.
+//
+// A migration that ADDED `token_hash` beside `token` would pass every other
+// leg in this file and leave the dump exactly as readable as it was. The
+// acceptance check for this step greps `\d share_links` for `token_hash`; that
+// is satisfied by both shapes, so the falsifiable half is here: `token` must
+// not be a column of this table at all.
+func TestThePlaintextShareTokenColumnIsGone(t *testing.T) {
+	db := migrated(t)
+
+	var columns []string
+	rows, err := db.Query(`SELECT attname FROM pg_attribute
+		WHERE attrelid = 'share_links'::regclass AND attnum > 0 AND NOT attisdropped
+		ORDER BY attnum`)
+	if err != nil {
+		t.Fatalf("reading pg_attribute: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if slices.Contains(columns, "token") {
+		t.Errorf("share_links still has a `token` column: %v\n"+
+			"    DEC-85 REVERSES DEC-10's plaintext half. Under DEC-67 the table\n"+
+			"    revokes and KEEPS, so a dump holds every capability ever issued —\n"+
+			"    live and revoked — and adding the hash beside the plaintext buys\n"+
+			"    exactly none of that back.", columns)
+	}
+	if !slices.Contains(columns, "token_hash") {
+		t.Errorf("share_links has no `token_hash` column: %v", columns)
+	}
+}
+
+// The same CHECK `sessions` carries, for the same reason: a one-byte token
+// hash inserted successfully before the constraint existed, and nothing
+// downstream can tell a truncated digest from a whole one.
+func TestAShareTokenHashIsExactlyThirtyTwoBytes(t *testing.T) {
+	db := seeded(t)
+	_, err := db.Exec(
+		`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,'autumn-crossing','\x00'::bytea)`, tid)
+	if err == nil {
+		t.Fatal("a one-byte share token hash was accepted")
+	}
+	if !strings.Contains(err.Error(), "share_links_token_hash_sha256_ck") {
+		t.Errorf("refusal = %v, want it to name share_links_token_hash_sha256_ck", err)
+	}
+}
+
+// migrationsUpTo is migrations.FS cut down to every version at or below
+// `version`, so a leg can stand at an intermediate schema more than one
+// migration deep. `onlyMigration` cannot do it: the runner applies what it is
+// given, and 0004 alone has no share_links to alter.
+func migrationsUpTo(t *testing.T, version string) fs.FS {
+	t.Helper()
+	names, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("globbing the migrations: %v", err)
+	}
+	out := fstest.MapFS{}
+	for _, name := range names {
+		if strings.SplitN(name, "_", 2)[0] > version {
+			continue
+		}
+		body, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		out[name] = &fstest.MapFile{Data: body}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no migration at or below %s", version)
+	}
+	return out
+}
+
+// 0004's DOWN FILE IS THE ONE IN THIS REPOSITORY THAT REFUSES, AND BOTH HALVES
+// OF THAT ARE EXERCISED HERE.
+//
+// DOWN FILES ARE NEVER RUN BY THE RUNNER — it applies .up.sql only — so
+// nothing else in the suite executes one at all, and a down file is checked in
+// precisely so a human can run it by hand. That makes "does it work?" a
+// question guarded by nothing unless a leg asks it, which is the tier
+// CLAUDE.md keeps naming.
+//
+// WHAT IT REFUSES AND WHY. sha256 is one-way, so no statement can put back
+// what 0004 replaced. Restoring `token` as NULLABLE leaves the table in a
+// shape 0001 never described (it is half the pre-0004 primary key); deleting
+// every row destroys the revocation history DEC-67's key exists to keep,
+// silently, inside a file called "down". So it stops, names the count, and
+// leaves the choice to somebody who can weigh it — and on an EMPTY table,
+// which is where a developer rolling back a migration they have just applied
+// actually stands, it is a complete and exact inverse.
+func TestTheDownOf0004RefusesWhileALinkExistsAndIsExactWhenNoneDoes(t *testing.T) {
+	down := downFile(t, "0004")
+
+	t.Run("it refuses while share_links holds a row", func(t *testing.T) {
+		db := seeded(t) // seeded() writes exactly one share link
+		err := applySQL(context.Background(), db, down)
+		if err == nil {
+			t.Fatal("the down of 0004 ran against a table holding a live link. " +
+				"That either restored `token` as NULL — a capability column full of " +
+				"nulls — or deleted the revocation history without saying so.")
+		}
+		for _, want := range []string{"cannot be reversed", "sha256 is one-way"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q:\n%v", want, err)
+			}
+		}
+		// AND IT CHANGED NOTHING. A refusal that has already dropped a column
+		// is not a refusal.
+		if n := count(t, db, `SELECT count(*) FROM share_links WHERE traveller_id=$1`, tid); n != 1 {
+			t.Errorf("share_links holds %d rows after the refusal, want 1", n)
+		}
+		var hash []byte
+		if err := db.QueryRow(`SELECT token_hash FROM share_links WHERE traveller_id=$1`, tid).
+			Scan(&hash); err != nil {
+			t.Fatalf("token_hash is unreadable after the refusal: %v", err)
+		}
+	})
+
+	t.Run("it is an exact inverse on an empty table", func(t *testing.T) {
+		db := migrated(t)
+		if err := applySQL(context.Background(), db, down); err != nil {
+			t.Fatalf("the down of 0004 failed on an empty share_links: %v", err)
+		}
+		mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'m@e.com','x')`, tid)
+		mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1,'t','T')`, tid)
+		// The pre-0004 shape, asserted by USING it: a plaintext column that is
+		// NOT NULL and unique, and no token_hash anywhere.
+		mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'t',$2)`, tid, tokenMay)
+		if _, err := db.Exec(`SELECT token_hash FROM share_links`); err == nil {
+			t.Error("token_hash is still a column after the down of 0004")
+		}
+		if _, err := db.Exec(
+			`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'t',NULL)`, tid); err == nil {
+			t.Error("share_links.token is nullable after the down of 0004 — it is half " +
+				"the pre-0004 primary key and cannot be")
+		}
+	})
+}
+
+// downFile reads one version's .down.sql out of the embedded FS.
+func downFile(t *testing.T, version string) string {
+	t.Helper()
+	matches, err := fs.Glob(migrations.FS, version+"_*.down.sql")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("globbing %s_*.down.sql: %v (matched %v)", version, err, matches)
+	}
+	body, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("reading %s: %v", matches[0], err)
+	}
+	return string(body)
+}
+
+// applySQL runs a .sql file statement by statement, through the SAME splitter
+// the migration runner uses — so a down file with a `$$ … $$` block in it is
+// cut where the runner would cut it and not on the semicolons inside the
+// block. It is NOT a transaction: what is being exercised is what a human
+// running the file by hand would see.
+func applySQL(ctx context.Context, db *sql.DB, body string) error {
+	for _, statement := range splitStatements(body) {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("%s: %w", firstLine(statement), err)
+		}
+	}
+	return nil
 }

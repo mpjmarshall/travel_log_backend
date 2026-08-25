@@ -35,6 +35,7 @@ type fakeLogbook struct {
 	version   int64
 	doc       logbook.Document
 	assembles int
+	deletes   int
 	lastWrite logbook.TripWrite
 	failWith  error
 }
@@ -70,7 +71,13 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 	if w.ID != nil {
 		id = *w.ID
 	}
-	next := logbook.Trip{ID: id}
+	// A TRIP CREATED THROUGH THIS FAKE CARRIES THE CLIENT'S OWN SHARING
+	// DEFAULTS, WHICH ARE NOT GO'S ZERO VALUES. Migration 0002 gave
+	// `share_photos` and `share_notes` a DEFAULT of true, so a trip created on
+	// the server is born with photo and note sharing on; a fake born at
+	// false/false/false makes every "the other two switches were left alone"
+	// assertion pass against an implementation that reset them.
+	next := logbook.Trip{ID: id, SharePhotos: true, ShareNotes: true}
 	replaced := false
 	for i, existing := range f.doc.Trips {
 		if existing.ID != id {
@@ -120,6 +127,151 @@ func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
 	if logbook.Sent(w.CoverAsset) {
 		t.CoverAsset = logbook.Value(w.CoverAsset)
 	}
+}
+
+// DeleteTrip is the fake's D3: it removes the trip and the rows the schema's
+// cascades would remove, and it KEEPS every place — which is the sheet's own
+// promise and the one thing a fake that "just deletes the trip" would get
+// right by accident and a fake that deletes too much would get wrong.
+//
+// A MISS MOVES NO VERSION HERE EITHER. The store's contract says so, and a
+// fake that bumped anyway would make TestARepeatedDeleteAnswersTheSameTag
+// green against a store that did.
+func (f *fakeLogbook) DeleteTrip(_ context.Context, _ string, tripID string) (logbook.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return logbook.Snapshot{}, f.failWith
+	}
+
+	held := false
+	trips := f.doc.Trips[:0:0]
+	for _, trip := range f.doc.Trips {
+		if trip.ID == tripID {
+			held = true
+			continue
+		}
+		trips = append(trips, trip)
+	}
+	if held {
+		f.doc.Trips = trips
+		photos := f.doc.Photos[:0:0]
+		for _, photo := range f.doc.Photos {
+			if photo.TripID != tripID {
+				photos = append(photos, photo)
+			}
+		}
+		f.doc.Photos = photos
+		walks := f.doc.Walks[:0:0]
+		for _, walk := range f.doc.Walks {
+			if walk.TripID != tripID {
+				walks = append(walks, walk)
+			}
+		}
+		f.doc.Walks = walks
+		for i := range f.doc.Places {
+			visits := f.doc.Places[i].Visits[:0:0]
+			for _, visit := range f.doc.Places[i].Visits {
+				if visit.TripID != tripID {
+					visits = append(visits, visit)
+				}
+			}
+			f.doc.Places[i].Visits = visits
+		}
+		f.version++
+	}
+	f.deletes++
+	doc := f.doc
+	return logbook.Snapshot{Version: f.version, Document: &doc}, nil
+}
+
+// SetTravellerName honours the trim and the refusal, because those are the
+// store's contract rather than the handler's — a fake that accepted "   "
+// would make the 422 leg green against a store that wrote it.
+func (f *fakeLogbook) SetTravellerName(_ context.Context, _ string, name string) (logbook.Traveller, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return logbook.Traveller{}, 0, f.failWith
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
+			Why: "a traveller needs a name, and an empty one is not a way to clear it"}
+	}
+	f.doc.Traveller = &logbook.Traveller{Name: trimmed}
+	f.version++
+	return *f.doc.Traveller, f.version, nil
+}
+
+// === the share twin ===
+
+// fakeShare is logbook.ShareStore, and it honours DEC-89's pointer contract
+// and the reset for the reason fakeLogbook honours the trip one: a twin that
+// applies every field regardless makes every handler leg green against the
+// contract the store was written to keep.
+type fakeShare struct {
+	mu    sync.Mutex
+	books *fakeLogbook
+}
+
+func (f *fakeShare) SetShareOptions(_ context.Context, _, tripID string, w logbook.ShareWrite) (logbook.Trip, int64, error) {
+	return f.change(tripID, func(t *logbook.Trip) {
+		if w.SharePhotos != nil {
+			t.SharePhotos = *w.SharePhotos
+		}
+		if w.ShareNotes != nil {
+			t.ShareNotes = *w.ShareNotes
+		}
+		if w.ShareCoordinates != nil {
+			t.ShareCoordinates = *w.ShareCoordinates
+		}
+	})
+}
+
+func (f *fakeShare) NewShareLink(_ context.Context, _, tripID, token string) (logbook.Trip, int64, error) {
+	return f.change(tripID, func(t *logbook.Trip) {
+		t.ShareLinkID = &token
+		t.Shared = true
+	})
+}
+
+func (f *fakeShare) StopSharing(_ context.Context, _, tripID string) (logbook.Trip, int64, error) {
+	return f.change(tripID, func(t *logbook.Trip) {
+		t.ShareLinkID = nil
+		t.Shared = false
+		// The client's own three defaults, written by name — see
+		// resetShareFlagsSQL.
+		t.SharePhotos, t.ShareNotes, t.ShareCoordinates = true, true, false
+	})
+}
+
+// change is the shape all three share, including the 404: a share write is a
+// SETTER, and a set asks for a value the log then has to hold.
+func (f *fakeShare) change(tripID string, apply func(*logbook.Trip)) (logbook.Trip, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.books.mu.Lock()
+	defer f.books.mu.Unlock()
+	if f.books.failWith != nil {
+		return logbook.Trip{}, 0, f.books.failWith
+	}
+	for i, trip := range f.books.doc.Trips {
+		if trip.ID != tripID {
+			continue
+		}
+		apply(&trip)
+		f.books.doc.Trips[i] = trip
+		f.books.version++
+		return trip, f.books.version, nil
+	}
+	return logbook.Trip{}, 0, fmt.Errorf("%w: %s", logbook.ErrNoTrip, tripID)
+}
+
+func (f *fakeLogbook) deleteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deletes
 }
 
 func (f *fakeLogbook) assembleCount() int {
