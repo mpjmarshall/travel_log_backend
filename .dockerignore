@@ -21,10 +21,43 @@
 # Nothing the build needs may be added here: go.mod, go.sum, cmd/ and internal/
 # are what stage 1 compiles.
 
-# Secrets and local environment. deploy/.env.example is checked in and IS
-# wanted in the context (it documents the knobs); deploy/.env never is.
+# Secrets and local environment.
+#
+# THESE ARE PATTERNS AND NOT TWO EXACT PATHS, AND R2 IS WHY. The two lines
+# below were written to the shape of the file that actually leaked — the
+# recorded `hunter2-vs1fixes-canary` measurement — rather than to the class,
+# so `COPY . .` still carried any `.env.local`, `*.pem`, `*.key`, `id_rsa` or
+# `secrets/` into the build stage and the build cache. Until R2 there was
+# nothing in this project worth carrying: the Postgres password is
+# `travellog`, guessable on purpose (DEC-21). R2 introduces the first real
+# secrets — S3 credentials, which on a deploy are a scoped key against a
+# bucket holding the only copy of somebody's photographs.
+#
+# deploy/.env.example is checked in and IS wanted in the context (it documents
+# the knobs) and NOTHING HERE EXCLUDES IT — `deploy/.env` matches that exact
+# path only and `.env.*` matches the context ROOT only, so no `!` line for it
+# is needed. Verified rather than reasoned, by building the build stage with
+# six canaries in the tree:
+#
+#   absent   .env.local     absent   secrets/s3.txt
+#   absent   server.pem     absent   id_rsa
+#   absent   tls.key        absent   deploy/.env
+#   PRESENT  deploy/.env.example
+#
+# `!.env.example` IS live and is kept: `.env.*` would otherwise exclude a
+# root-level one, and an exception must come after the pattern that excludes
+# it.
 deploy/.env
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa*
+secrets/
+.netrc
+.aws/
 
 # Version control and its history.
 .git

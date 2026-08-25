@@ -72,7 +72,7 @@ check:
 fmt:
 	gofmt -w .
 
-## up — bring the two-service stack up and wait for the api to be healthy
+## up — bring the three-service stack up and wait for every one of them to be healthy
 up:
 	$(COMPOSE) up -d --build --wait
 

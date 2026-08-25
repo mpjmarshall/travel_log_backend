@@ -54,6 +54,7 @@ import (
 	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
 	"travellog/internal/logging"
+	"travellog/internal/media"
 	"travellog/internal/postgres"
 	"travellog/migrations"
 )
@@ -75,6 +76,13 @@ const shutdownTimeout = 10 * time.Second
 // booting behind the first should wait — and bounded because a lock nobody
 // releases must not become a container that hangs for ever.
 const migrateTimeout = 2 * time.Minute
+
+// bucketTimeout bounds the boot-time bucket check. It is the startup ping's
+// budget for the same reason: compose gates the api on `minio: service_healthy`
+// (deploy/docker-compose.yml), so a slow answer here is a cold object store
+// rather than a broken one — and an unbounded one is a container that hangs
+// for ever rather than reporting a misconfiguration.
+const bucketTimeout = 10 * time.Second
 
 // main parses the two flags, loads the config and dispatches.
 //
@@ -175,6 +183,34 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	migCtx, migCancel := context.WithTimeout(context.Background(), migrateTimeout)
 	defer migCancel()
 	if err := migrateUp(migCtx, db, log); err != nil {
+		return err
+	}
+
+	// THE BUCKET, ON THE SAME ARGUMENT AS THE PING ABOVE (DEC-98).
+	//
+	// The store it answers is DISCARDED, and that is honest rather than
+	// sloppy: R3 is the step that mounts the routes that presign, and this is
+	// the step that makes the bucket exist. Discarding it costs nothing
+	// precisely because the region is pinned — there is no location cache to
+	// warm, so R3's store will be as cold and as offline as this one.
+	//
+	// What it buys is the two things a healthcheck cannot see. Nothing else
+	// creates the bucket: the official image auto-creates nothing and
+	// `/minio/health/ready` answers 200 with zero buckets, so `up --wait`
+	// reporting three healthy services says nothing about whether a
+	// photograph can be stored. And presigning is offline arithmetic, so a
+	// wrong S3_SECRET_KEY signs just as happily as a right one — this is the
+	// only call in the boot path that a bad credential fails.
+	//
+	// MEASURED BY DELETING THE THREE LINES BELOW: `up --wait` still reported
+	// three healthy services, `mc ls local/` answered ZERO buckets, and the
+	// only thing that reddened was the arc's own A2b. `make check` STAYED
+	// GREEN — media_test.go guards what mediaStore DOES and cannot see
+	// whether run() calls it — so the arc is the only guard on this call
+	// site, and that is stated rather than assumed.
+	bucketCtx, bucketCancel := context.WithTimeout(context.Background(), bucketTimeout)
+	defer bucketCancel()
+	if _, err := mediaStore(bucketCtx, cfg, log); err != nil {
 		return err
 	}
 
@@ -312,6 +348,56 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.Serv
 func limiters(cfg config.Config) (credential, traveller *httpx.Limiter) {
 	return httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil),
 		httpx.NewLimiter(cfg.TravellerRateLimitPerMin, nil)
+}
+
+// mediaConfig is the nine S3_* variables becoming the store's own Config, and
+// it is a function of its own for the reason limiters() is one.
+//
+// WHICH ADDRESS FEEDS WHICH HALF IS INVISIBLE FROM OUTSIDE THE PROCESS
+// (DEC-42). Swap the two and the server is perfectly healthy, every request
+// succeeds, and every presigned URL is minted for `minio:9000` — a host only
+// something inside the compose network can resolve, and a SigV4 signature
+// covers the host, so nothing downstream can correct it. The same holds for
+// the two lifetimes: reaching for the private one where the public belongs is
+// a share page that dies mid-scroll, and no status code reports it. This is
+// what media_test.go asserts on.
+func mediaConfig(cfg config.Config) media.Config {
+	return media.Config{
+		InternalEndpoint: cfg.S3InternalEndpoint,
+		PublicBaseURL:    cfg.S3PublicBaseURL,
+		Region:           cfg.S3Region,
+		Bucket:           cfg.S3Bucket,
+		AccessKey:        cfg.S3AccessKey,
+		SecretKey:        cfg.S3SecretKey,
+		TTLPrivate:       cfg.S3PresignTTLPrivate,
+		TTLPublic:        cfg.S3PresignTTLPublic,
+	}
+}
+
+// mediaStore builds the store AND creates its bucket, and the second half is
+// the point: building a client is offline and so is presigning, so a boot that
+// stopped at the constructor would come up healthy against a bucket that does
+// not exist and credentials that do not work.
+func mediaStore(ctx context.Context, cfg config.Config, log *slog.Logger) (media.Store, error) {
+	store, err := media.New(mediaConfig(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("the media store: %w", err)
+	}
+	started := time.Now()
+	if err := store.EnsureBucket(ctx); err != nil {
+		// The elapsed time as well as the budget, for the reason the startup
+		// ping carries both (OPS-MIN-11): a DNS failure that took 250ms and a
+		// server that never answered are different problems, and only the
+		// budget was ever printed.
+		return nil, fmt.Errorf("the bucket %q at %s did not answer (waited %s of a %s budget): %w",
+			cfg.S3Bucket, cfg.S3InternalEndpoint,
+			time.Since(started).Round(time.Millisecond), bucketTimeout, err)
+	}
+	log.Info("bucket ready",
+		slog.String("bucket", cfg.S3Bucket),
+		slog.String("endpoint", cfg.S3InternalEndpoint),
+	)
+	return store, nil
 }
 
 // serverChain is httpx.Base plus two, and every position in it is a decision.

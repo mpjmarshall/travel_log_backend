@@ -63,9 +63,13 @@ const (
 // `make up` stack may be running, and a test that cannot run beside the thing
 // it tests is a test nobody runs.
 const (
-	stackAPIPort   = "18080"
-	stackPGPort    = "15434"
-	volumePGPort   = "15435"
+	stackAPIPort = "18080"
+	stackPGPort  = "15434"
+	volumePGPort = "15435"
+	// R2 gives the stack a third published port, and it needs its own for the
+	// same reason the two above do: a developer's `make up` may be holding
+	// 9000, and so may anything else — it is a popular port.
+	stackMinioPort = "19000"
 	stackProject   = "travellog-imagetest"
 	volumeProject  = "travellog-imagetest-vol"
 	composeRelPath = "deploy/docker-compose.yml"
@@ -238,10 +242,18 @@ func compose(t *testing.T, project string, args ...string) []string {
 
 // composeEnv puts the port overrides in the environment. Compose reads the
 // shell environment ahead of deploy/.env, so this wins over a developer's own.
+//
+// S3_PUBLIC_BASE_URL MOVES WITH THE PORT, and that is not tidiness: it is the
+// address a SIGNATURE covers (DEC-42), so leaving it pointed at 9000 while
+// MinIO is published on 19000 would mint URLs for a port nothing is listening
+// on. Nothing in this tier presigns yet; the pair is kept honest here so that
+// the day something does, it is not a two-hour puzzle.
 func composeEnv(pgPort, apiPort string) []string {
 	return append(os.Environ(),
 		"POSTGRES_PORT="+pgPort,
 		"API_PORT="+apiPort,
+		"MINIO_PORT="+stackMinioPort,
+		"S3_PUBLIC_BASE_URL=http://127.0.0.1:"+stackMinioPort,
 	)
 }
 
