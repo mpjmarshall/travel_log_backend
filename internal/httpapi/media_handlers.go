@@ -2,7 +2,7 @@
 //
 // THIS PACKAGE TRANSLATES HTTP AND NOTHING MORE (DEC-62). What may be stored
 // is internal/logbook's allowlist; what a signature covers is internal/media's;
-// what a commit means is internal/logbook.Service's. What is here is the body
+// what a commit means is internal/logbook's Service. What is here is the body
 // shapes, the statuses, and the loop that turns a list of ids into a list of
 // capabilities.
 //

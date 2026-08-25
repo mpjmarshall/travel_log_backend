@@ -447,7 +447,7 @@ func TestTheSameMigrationAppliesWhenNothingHoldsTheLock(t *testing.T) {
 
 // ------------------------------------------------------- DEC-99: RE-RUNNABILITY
 
-// fixtureFS wraps internal/postgres/testdata/notx_fixture.{up,down}.sql in the
+// fixtureFS wraps the two files under internal/postgres/testdata in the
 // filenames the runner accepts.
 //
 // THE INDIRECTION IS THE PLAN'S FILE NAME MEETING THE RUNNER'S RULE.

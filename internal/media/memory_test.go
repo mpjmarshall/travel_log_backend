@@ -1,7 +1,9 @@
 package media_test
 
 import (
+	"context"
 	"errors"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -208,5 +210,73 @@ func TestStatAnswersTheSentinelForAKeyThatIsNotThere(t *testing.T) {
 	_, err := store.Stat(t.Context(), key)
 	if !errors.Is(err, media.ErrNoSuchObject) {
 		t.Fatalf("Stat answered %v, which errors.Is(media.ErrNoSuchObject) does not match", err)
+	}
+}
+
+// THE TWIN'S READ URLs CARRY THE DISPOSITION, BECAUSE THE REAL ONE'S DO.
+//
+// A twin that accepts what MinIO refuses turns a handler leg into evidence
+// about nothing, and the same holds for what a twin OMITS: without this, the
+// handler leg asserting "every presigned GET is marked as a download" would
+// pass against a handler that stopped asking for one. On the real store the
+// parameter is inside the signature, so a holder cannot strip it — measured:
+// deleting it answers 403 SignatureDoesNotMatch.
+func TestTheTwinsReadURLsAreMarkedAsDownloadsForBothAudiences(t *testing.T) {
+	m := media.NewMemory()
+	key := media.Key{Traveller: traveller, Object: digestOf("a photograph")}
+
+	for _, aud := range []media.Audience{media.Private, media.Public} {
+		raw, err := m.PresignGet(context.Background(), key, aud)
+		if err != nil {
+			t.Fatalf("PresignGet(%s): %v", aud, err)
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", raw, err)
+		}
+		if got := parsed.Query().Get("response-content-disposition"); got != "attachment" {
+			t.Errorf("the %s URL carries response-content-disposition=%q, want attachment",
+				aud, got)
+		}
+	}
+}
+
+// ExpiresIn READS THE WINDOW BACK OFF THE URL, which is what gives the begin
+// response's `expiresAt` ONE SOURCE.
+//
+// A handler computing it from a configured lifetime would be two variables
+// holding one fact, and this one fails silently: the client is told a window
+// the signature does not carry, and the upload dies with
+// SignatureDoesNotMatch some minutes later with nothing on either side saying
+// why.
+func TestExpiresInReadsTheWindowTheURLCarries(t *testing.T) {
+	m := media.NewMemory()
+	key := media.Key{Traveller: traveller, Object: digestOf("a photograph")}
+
+	raw, err := m.PresignGet(context.Background(), key, media.Public)
+	if err != nil {
+		t.Fatalf("PresignGet: %v", err)
+	}
+	got, err := media.ExpiresIn(raw)
+	if err != nil {
+		t.Fatalf("ExpiresIn: %v", err)
+	}
+	if want := m.TTL[media.Public]; got != want {
+		t.Errorf("ExpiresIn = %s, want %s", got, want)
+	}
+
+	// A URL WITH NO WINDOW IS AN ERROR AND NOT A ZERO. A zero duration would
+	// put `expiresAt` at exactly now and read as an upload window that has
+	// already closed, which is a client giving up on a capability that works.
+	for _, bad := range []string{
+		"https://memory.invalid/x",
+		"https://memory.invalid/x?X-Amz-Expires=",
+		"https://memory.invalid/x?X-Amz-Expires=soon",
+		"https://memory.invalid/x?X-Amz-Expires=0",
+		"https://memory.invalid/x?X-Amz-Expires=-5",
+	} {
+		if _, err := media.ExpiresIn(bad); err == nil {
+			t.Errorf("ExpiresIn(%q) answered no error", bad)
+		}
 	}
 }
