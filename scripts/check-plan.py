@@ -263,7 +263,7 @@ if os.path.exists(RULINGS):
 # it outranks v6 everywhere they disagree, so a plan certifying a hash it did not
 # run is making a claim rather than a measurement. Two recomputed stamps, not one.
 #
-# READ AT THE PLAN'S OWN COMMIT, NOT IN THE WORKING TREE, and the difference is
+# READ AT THE COMMIT THE STAMP NAMES, NOT IN THE WORKING TREE, and the difference is
 # not a convenience. This stamp is a claim about PROVENANCE — the planner read
 # this file and this is what it held — and every step from R1 on has CLAUDE.md in
 # its file list, because recording what was built is part of building it. Against
@@ -271,35 +271,45 @@ if os.path.exists(RULINGS):
 # out are both wrong: re-point the stamp, which makes the plan assert a hash the
 # planner never read, or stop editing CLAUDE.md, which is the deliverable. R1 hit
 # this at 82bd3ab and refused both, which is the right refusal and is why this
-# reads the blob instead.
+# reads the blob instead. The commit is NAMED in the stamp (`at_commit`) rather
+# than inferred from the plan's history: inferring it means any later plan edit
+# silently re-anchors the check onto a file the planner never read.
 #
 # The original defect is still caught, because it was a defect at the plan's own
 # commit: a planner that stamps a hash it did not run is red here whether or not
 # anybody has touched the file since.
-def _blob_at_plan_commit(path):
-    """CLAUDE.md as it stood when docs/plan-v7.json was last written.
+def _blob_at(path, rev):
+    """`path` as it stood at `rev` — the commit the stamp NAMES, not one inferred.
 
-    Falls back to the working tree outside a git checkout, or before the plan has
-    a commit of its own — a first revision has nothing to read the blob from, and
-    refusing to check at all would be worse than checking the file in front of us.
+    Inferring it from `git log -1 -- <plan>` was the first attempt and it is
+    wrong: any later commit touching the plan for ANY reason re-anchors the
+    check. The one that caught it was this commit itself, whose only plan edit
+    was re-stamping a transcript — and that alone moved the anchor onto R1's
+    edited CLAUDE.md, which no planner ever read.
+
+    Falls back to the working tree outside a git checkout, or when the stamp
+    carries no `at_commit` — a first revision has no commit to read a blob from,
+    and refusing to check at all would be worse than checking what is here.
     """
+    if not rev:
+        return open(path, "rb").read(), "the working tree (the stamp names no commit)"
     try:
-        rev = subprocess.run(["git", "log", "-1", "--format=%H", "--", PLAN_PATH],
-                             capture_output=True, text=True, check=True).stdout.strip()
-        if not rev:
-            return open(path, "rb").read(), "the working tree (the plan has no commit yet)"
         out = subprocess.run(["git", "show", f"{rev}:{path}"],
                              capture_output=True, check=True).stdout
-        return out, f"{rev[:7]}, the commit that last wrote the plan"
+        return out, f"{rev[:7]}, the commit the stamp names"
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return open(path, "rb").read(), "the working tree (no git)"
+        return open(path, "rb").read(), f"the working tree ({rev[:7]} is unreadable here)"
+
 
 for path in ("CLAUDE.md",):
     if os.path.exists(path):
-        body, where = _blob_at_plan_commit(path)
         st = next((i for i in plan["base"]["inputs"] if i["path"] == path), None)
         check(st is not None, f"base.inputs does not stamp {path} at all")
         if st:
+            check("at_commit" in st,
+                  f"the {path} stamp names no at_commit, so the hash it certifies "
+                  f"cannot be located — a provenance claim with no provenance")
+            body, where = _blob_at(path, st.get("at_commit"))
             check(st["size"] == len(body),
                   f"the {path} stamp says {st['size']} bytes; at {where} it is {len(body)}")
             real = hashlib.sha256(body).hexdigest()

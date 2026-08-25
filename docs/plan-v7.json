@@ -88,7 +88,9 @@
         "size": 207684,
         "sha256": "335a39cae66ad27e26a7d8aff4821963576603c4f9b3d319d088bfcb0b4e4d54",
         "status": "RE-READ AND RE-STAMPED AT v7.2. It is the authority on what was built and it outranks v6 everywhere they disagree. THE STAMP v7.1 CARRIED WAS STALE TOO \u2014 193,119 bytes / badfeb31 against a file that is 207,684 / 335a39ca \u2014 and nothing caught it, because the gate only recomputes the rulings stamp. That is now a second recomputed stamp in scripts/check-plan.py: a plan that certifies a hash it did not run is making a claim rather than a measurement, and this document has done it three times in one namespace already. CORRECTED AT v7.2.1: this entry used to say 'the gate only recomputes the rulings stamp' as a statement about v7.1's committed script, and no such script was committed. THE TRANSCRIPT IS REAL AND THE COMMIT IS NOT SELF-CONTAINED, and v7.2 wrote the second as though it were the first. The v7.1 rulings block sat UNSTAGED in the working tree while d781d29 committed `docs/` only, so `git show d781d29:scripts/check-plan.py` is 81 lines with 14 check() calls and no rulings block at all, and running it against that commit's plan prints `0 failure(s); 48 ids; 23 routes; 8 steps; 10 deletions`, exit 0 \u2014 the same four counts, beneath two FAIL lines it cannot emit. 5c34406 then swept the script in as 293 insertions against 7b47bee, so the v7.1 and v7.2 additions are one commit in the history. See `gate_transcripts`, and the invariant that follows from it: a recorded gate transcript must be reproducible from the commit it is recorded against.",
-        "command": "shasum -a 256 CLAUDE.md"
+        "command": "shasum -a 256 CLAUDE.md",
+        "at_commit": "e4a3b94",
+        "at_commit_why": "The v7.2.2 commit \u2014 the revision that read this file. The stamp is PROVENANCE, so it is anchored to the commit whose planner ran the command, and scripts/check-plan.py reads `git show e4a3b94:CLAUDE.md` rather than the working tree. Every step from R1 on edits CLAUDE.md, so against the live file this check goes red on correct work; against an INFERRED anchor it goes red one commit later, when any plan edit at all moves it. Both were run and both were red before this line existed."
       },
       {
         "what": "the mutation record",
@@ -2331,10 +2333,10 @@
       "at_plan_version": "7.2.2",
       "at_branch": "r1-shipped-code-fixes",
       "command": "python3 scripts/check-plan.py docs/plan-v7.json",
-      "script_sha256": "981fd5b99ebb3adcb876e51f85d5395f5249052acc36ed361fc366c8372178e9",
+      "script_sha256": "9103047b7a4417b8ec43d51a844c560529e592e9ab7600b452f3e2391c8454ad",
       "output": "0 failure(s); 66 ids; 23 routes; 8 steps; 14 deletions",
       "exit_code": 0,
-      "note": "THE CLAUDE.md STAMP NOW READS THE FILE AT THE PLAN'S OWN COMMIT, NOT IN THE WORKING TREE, and the reason is that the invariant as first written went red on CORRECT WORK. Every step from R1 on has CLAUDE.md in its file list \u2014 recording what was built is part of building it \u2014 so from the first step onward the live file diverges from the hash the planner read. Both ways out were wrong: re-point the stamp and the plan asserts a hash nobody ran; stop editing CLAUDE.md and the deliverable goes. R1 hit this at 82bd3ab and refused both, which is the right refusal. The stamp is a claim about PROVENANCE and is now checked as one. The original defect \u2014 v7.1 certifying a hash it had not run, stale by 14,565 bytes \u2014 is still caught, because it was a defect AT THE PLAN'S OWN COMMIT. Mutation-proved four ways on the R1 branch: a corrupted sha256 reddens, a wrong size reddens, a further edit to the working-tree CLAUDE.md stays green, and the plan-only change stays green. The fallback to the working tree covers a first revision, which has no commit to read a blob from."
+      "note": "The CLAUDE.md stamp names its own commit (`base.inputs[CLAUDE.md].at_commit`) and the gate reads `git show <that>:CLAUDE.md`. Three anchors were tried and two were wrong, both found by execution: the WORKING TREE goes red on correct work from R1 on, because every step edits CLAUDE.md; an INFERRED anchor goes red one commit later, because any plan edit at all moves it. A stamp with no `at_commit` is now itself a failure \u2014 a provenance claim with no provenance. Reproduction must be a git CHECKOUT, not `git archive`: a tarball has no history, so the fallback fires and reads the working tree, which is the fallback behaving correctly and not a pass."
     },
     "historical": [
       {
@@ -2354,6 +2356,19 @@
         "at_commit": "e4a3b94",
         "superseded_by": "the R1 branch, where the CLAUDE.md stamp learned to read the plan's own commit",
         "reproducible_from_the_commit": true
+      },
+      {
+        "at_plan_version": "7.2.2",
+        "at_branch": "r1-shipped-code-fixes",
+        "command": "python3 scripts/check-plan.py docs/plan-v7.json",
+        "script_sha256": "981fd5b99ebb3adcb876e51f85d5395f5249052acc36ed361fc366c8372178e9",
+        "output": "0 failure(s); 66 ids; 23 routes; 8 steps; 14 deletions",
+        "exit_code": 0,
+        "note": "THE CLAUDE.md STAMP NOW READS THE FILE AT THE PLAN'S OWN COMMIT, NOT IN THE WORKING TREE, and the reason is that the invariant as first written went red on CORRECT WORK. Every step from R1 on has CLAUDE.md in its file list \u2014 recording what was built is part of building it \u2014 so from the first step onward the live file diverges from the hash the planner read. Both ways out were wrong: re-point the stamp and the plan asserts a hash nobody ran; stop editing CLAUDE.md and the deliverable goes. R1 hit this at 82bd3ab and refused both, which is the right refusal. The stamp is a claim about PROVENANCE and is now checked as one. The original defect \u2014 v7.1 certifying a hash it had not run, stale by 14,565 bytes \u2014 is still caught, because it was a defect AT THE PLAN'S OWN COMMIT. Mutation-proved four ways on the R1 branch: a corrupted sha256 reddens, a wrong size reddens, a further edit to the working-tree CLAUDE.md stays green, and the plan-only change stays green. The fallback to the working tree covers a first revision, which has no commit to read a blob from.",
+        "at_commit": "1cc01f4",
+        "superseded_by": "the same branch, one commit later: the anchor became explicit instead of inferred",
+        "reproducible_from_the_commit": false,
+        "why_not": "The inferred anchor made this transcript unreproducible BY THE VERY COMMIT THAT RECORDED IT. 1cc01f4's only plan edit was re-stamping the transcript above, and that alone moved `git log -1 -- docs/plan-v7.json` from e4a3b94 onto 1cc01f4 \u2014 so the check began reading R1's edited CLAUDE.md, which no planner read, and a clone of 1cc01f4 exits 1 on two lines that were green in the working tree it was written in. Found by running the reproduction rather than asserting it, which is the whole of \u00a76.5."
       }
     ]
   },
