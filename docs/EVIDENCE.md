@@ -556,6 +556,17 @@ stack's.
 | M3 | `FromDocument` assigns visit ordinals in reverse | the round trip **and** the visit-order leg | the trip-cities leg |
 | M4 | `cmd/api/main.go` gains `_ "travellog/internal/seed"` | `TestNothingUnderCmdAPIReachesInternalSeed` | everything else |
 | M5 | `internal/logbook/rewrite.go`'s import of `encoding/json` (the first draft, before the named list) | `TestOnlyNamedFilesImportTheJSONPackage` | everything else |
+| M6 | **`Load`'s predicate becomes the plan's own** — refuse only when a traveller exists AND `photos` is non-empty | `TestLoadRefusesATravellerWhoHasRegisteredAndWrittenNothing`, **and nothing else** | the other ten seed legs, including the refusal leg above |
+
+**M6 IS THE SHARPEST MUTATION IN THIS STEP, because it is the plan's own text.**
+R4 scopes the refusal to "a non-empty LOG"; DEC-97 replaces it with "any
+traveller row". The mutation puts the plan's wording back and exactly one leg
+goes red — the one written for the state the two predicates disagree about: a
+traveller who has registered through `AuthStore` (which is how the running
+server makes one) and has written nothing. Every other leg in the package stays
+green, which is the whole problem: on a real deployment that state lasts from
+the owner's registration until their first write, and DEC-86 has closed
+registration behind them.
 
 **M1 AND M3 REDDEN THE SAME PAIR, AND THAT IS THE POINT RATHER THAN A
 DUPLICATE.** The plan warns that two legs reddening from one mutation is one

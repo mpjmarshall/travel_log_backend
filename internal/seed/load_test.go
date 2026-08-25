@@ -611,3 +611,57 @@ func differences(t *testing.T, want, got any, path string, n int) []string {
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+// A REGISTERED TRAVELLER WHO HAS WRITTEN NOTHING IS NOT AN EMPTY DATABASE, and
+// this is the leg that separates DEC-97's predicate from the plan's.
+//
+// The plan's refusal is scoped to "a non-empty LOG". After `POST
+// /v1/auth/register` and before the owner's first write, every one of the five
+// lists is empty — so a log-shaped predicate does not fire, the seed loads, and
+// the owner's own account is now sharing a database with somebody else's
+// geography that no control can remove (DEC-57). The traveller is created
+// through AuthStore, which is the way the running server makes one, so this is
+// the state a real deployment is in for the minutes between registering and
+// writing.
+func TestLoadRefusesATravellerWhoHasRegisteredAndWrittenNothing(t *testing.T) {
+	db := freshDatabase(t)
+
+	registered, err := postgres.AuthStore{DB: db}.CreateTraveller(t.Context(),
+		"owner@example.com", "$argon2id$stub")
+	if err != nil {
+		t.Fatalf("registering the owner: %v", err)
+	}
+
+	// THE POSITIVE CONTROL, and it is what makes this leg different from the
+	// one above: the log really is empty, so a log-shaped predicate really
+	// would let this through.
+	counts := rowCounts(t, db)
+	for _, table := range []string{"cities", "trips", "places", "visits", "photos", "walks"} {
+		if counts[table] != 0 {
+			t.Fatalf("%s has %d rows; this leg is about a database whose LOG is empty",
+				table, counts[table])
+		}
+	}
+
+	want, err := logbook.RewriteAssets(clientDocument(t), fixtureMapping())
+	if err != nil {
+		t.Fatalf("RewriteAssets: %v", err)
+	}
+	dataset, err := seed.FromDocument(aTraveller(travellerUUID), fixtureObjects(travellerUUID), want)
+	if err != nil {
+		t.Fatalf("FromDocument: %v", err)
+	}
+
+	_, err = seed.Load(t.Context(), db, dataset, seed.LoadOptions{})
+	if !errors.Is(err, seed.ErrTravellerExists) {
+		t.Fatalf("Load answered %v; DEC-97's predicate is ANY TRAVELLER ROW, and "+
+			"this database has one that has written nothing", err)
+	}
+	var exists *seed.TravellerExistsError
+	if errors.As(err, &exists) && exists.TravellerID != registered.ID {
+		t.Errorf("the refusal names %s, want the registered owner %s", exists.TravellerID, registered.ID)
+	}
+	if n := rowCounts(t, db)["travellers"]; n != 1 {
+		t.Errorf("travellers = %d after the refusal, want the owner's 1 and nothing else", n)
+	}
+}
