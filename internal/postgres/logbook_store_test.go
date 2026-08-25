@@ -1005,8 +1005,12 @@ func insertWithNullDate(t *testing.T, db *sql.DB, travellerID, table string) {
 		statement = `INSERT INTO photos (traveller_id, id, trip_id, city_id, taken_at, asset)
 			VALUES ($1::uuid, 'photo-null', 'autumn-crossing', 'kyoto', NULL, '` + anAsset + `')`
 	case "walks":
+		// THE TRACK IS NOT `[]` SINCE 0003 (walks_points_present_ck, PD-21).
+		// This leg is about a NULL DATE, and an empty array would make it fail
+		// on the track instead — a red for the wrong reason.
 		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
-			VALUES ($1::uuid, 'walk-null', 'autumn-crossing', 'kyoto', NULL, 1.2, '[]'::jsonb)`
+			VALUES ($1::uuid, 'walk-null', 'autumn-crossing', 'kyoto', NULL, 1.2,
+			        '[{"lat":35.0,"lng":135.0}]'::jsonb)`
 	}
 	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
 		t.Fatalf("inserting a NULL-dated row into %s: %v", table, err)
@@ -1025,7 +1029,8 @@ func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
 			VALUES ($1::uuid, 'photo-ok', 'autumn-crossing', 'kyoto', '2027-09-19T04:12:00Z', '` + anAsset + `')`
 	case "walks":
 		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
-			VALUES ($1::uuid, 'walk-ok', 'autumn-crossing', 'kyoto', '2027-09-19', 1.2, '[]'::jsonb)`
+			VALUES ($1::uuid, 'walk-ok', 'autumn-crossing', 'kyoto', '2027-09-19', 1.2,
+			        '[{"lat":35.0,"lng":135.0}]'::jsonb)`
 	}
 	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
 		t.Fatalf("inserting a dated row into %s: %v", table, err)
