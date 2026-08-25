@@ -129,6 +129,12 @@ const tripsPresentSQL = `SELECT id FROM trips WHERE traveller_id = $1::uuid AND 
 const visitsHeldElsewhereSQL = `SELECT id, place_id FROM visits
 	WHERE traveller_id = $1::uuid AND id = ANY($2) AND place_id <> $3`
 
+// occasionsAtPlaceSQL is what makes the empty array's refusal a statement about
+// DESTRUCTION rather than about shape. `logbook.checkVisits` cannot ask it — it
+// is handed an array and nothing else — which is why this branch lives here.
+const occasionsAtPlaceSQL = `SELECT count(*) FROM visits
+	WHERE traveller_id = $1::uuid AND place_id = $2`
+
 // occupiedDepartingVisitsSQL is the guard that keeps the pair coherent, and it
 // is R6's own addition rather than something the plan names — see PutPlace.
 const occupiedDepartingVisitsSQL = `SELECT v.id, count(*) FROM visits v
@@ -262,11 +268,46 @@ func (s PlaceStore) PutPlace(ctx context.Context, travellerID string, w logbook.
 	return place, version, nil
 }
 
+// refuseClearingAPlaceThatHasOccasions answers the `visits: []` body, and the
+// two answers are NOT two spellings of one thing.
+//
+// A place that HAS occasions: clearing them unfiles every photograph filed to
+// each. Measured on the client's own log at fushimi-inari — 28 occasions, 30
+// photographs, 3 trips — obeying the empty array leaves 0 and 0, and every one
+// of the standing guards answers zero afterwards, because the references are
+// GONE rather than dangling. No control in the client asks for that, so it is a
+// 422 naming the field.
+//
+// A place that has NONE: the array is already what it asks for, so it is a
+// no-op and not an error. This is the half the shape-level refusal got wrong.
+// Nine of the seventeen places in the client's log are wishlist places, and the
+// server emits `"visits": []` for every one of them — a document the server
+// would then refuse to take back — while C1's pin, the only control that
+// creates a place, sends exactly that shape.
+func refuseClearingAPlaceThatHasOccasions(ctx context.Context, tx *sql.Tx, travellerID, placeID string) error {
+	var occasions int
+	if err := tx.QueryRowContext(ctx, occasionsAtPlaceSQL, travellerID, placeID).Scan(&occasions); err != nil {
+		return fmt.Errorf("postgres: counting the occasions at %s: %w", placeID, err)
+	}
+	if occasions == 0 {
+		return nil
+	}
+	return logbook.InvalidFieldError{Field: "visits",
+		Why: fmt.Sprintf("an empty visits array is a request to clear all %d occasions at "+
+			"this place, which unfiles every photograph filed to them — no control in "+
+			"the client asks for that, so this build refuses it. OMIT the key to leave "+
+			"the visits alone", occasions)}
+}
+
 // writeVisits is the four phases, in the order that preserves the filing.
 //
 // ONE STATEMENT PER PHASE AND NOT ONE PER ROW, except the INSERT, which is one
 // per BATCH — see maxVisitsPerStatement.
 func writeVisits(ctx context.Context, tx *sql.Tx, travellerID, placeID string, visits []logbook.Visit) error {
+	if len(visits) == 0 {
+		return refuseClearingAPlaceThatHasOccasions(ctx, tx, travellerID, placeID)
+	}
+
 	ids := make([]string, len(visits))
 	trips := make([]string, 0, len(visits))
 	seenTrip := map[string]bool{}

@@ -438,7 +438,7 @@ func TestAPlaceWriteWithNoVisitsKeyHandsTheStoreNilAndNotAnEmptySlice(t *testing
 // The store must not be reached at all: this refusal is a fact about the
 // request rather than about any row, so it happens before a transaction is
 // opened and before the traveller's advisory lock is taken.
-func TestAnEmptyVisitsArrayIsRefusedAndNeverReachesTheStore(t *testing.T) {
+func TestAnEmptyVisitsArrayReachesTheStoreBecauseOnlyTheStoreCanJudgeIt(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/cities/kyoto", aKyoto, token); got.status != http.StatusOK {
 		t.Fatalf("PUT city = %d %s", got.status, got.body)
@@ -450,19 +450,27 @@ func TestAnEmptyVisitsArrayIsRefusedAndNeverReachesTheStore(t *testing.T) {
 	}
 	h.geography().lastPlaceWrite = logbook.PlaceWrite{}
 
+	// THIS LEG ASSERTED THE OPPOSITE AND THE ASSERTION WAS WRONG, not merely
+	// obsolete. `visits: []` against a place with occasions is a destruction
+	// and against a place with none it is a no-op, and the handler cannot tell
+	// those apart — it has a body and no database. Stopping the request here
+	// refused both, which refused every wishlist place in the client's log.
 	got := h.put(t, "/v1/places/fushimi-inari", `{"visits":[]}`, token)
-	if got.status != http.StatusUnprocessableEntity {
-		t.Fatalf("PUT with `visits: []` = %d %s, want 422 — an empty array clears every "+
-			"occasion at the place, which unfiles every photograph filed to it (30 at "+
-			"fushimi-inari in the client's own log) and no control in the client asks "+
-			"for it", got.status, got.body)
+	if got.status != http.StatusOK {
+		t.Fatalf("PUT with `visits: []` = %d %s, want 200 — the twin holds no occasions, "+
+			"so there is nothing to clear and nothing to refuse", got.status, got.body)
 	}
-	if field := got.decode(t)["field"]; field != "visits" {
-		t.Errorf("the refusal names %v, want \"visits\"", field)
+	w := h.geography().lastPlaceWrite
+	if w.ID == nil {
+		t.Fatal("the store was not reached. Only the store can count the occasions, so " +
+			"a handler that answers this request by itself is answering it blind")
 	}
-	if h.geography().lastPlaceWrite.ID != nil {
-		t.Errorf("the store was reached anyway. A request that asks for a destruction no " +
-			"sheet authorises must not get as far as a statement that performs one")
+	if w.Visits == nil {
+		t.Error("the store was handed a nil Visits. `[]` and absent are DIFFERENT " +
+			"requests — absent means leave alone, `[]` means clear — and collapsing " +
+			"them here is exactly the confusion DEC-89 exists to remove")
+	} else if len(*w.Visits) != 0 {
+		t.Errorf("the store was handed %d visits, want 0", len(*w.Visits))
 	}
 }
 
