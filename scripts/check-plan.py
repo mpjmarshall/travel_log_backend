@@ -108,10 +108,13 @@ import glob
 import hashlib
 import json
 import os
+import subprocess
 import re
 import sys
 
 path = sys.argv[1] if len(sys.argv) > 1 else "docs/plan-v7.json"
+# Kept under its own name because `path` is rebound by the stamp loop below.
+PLAN_PATH = path
 plan = json.load(open(path))
 failures = []
 
@@ -259,17 +262,49 @@ if os.path.exists(RULINGS):
 # AT v7.1 AND WHICH NO LENS REPORTED. It is the authority on what was built and
 # it outranks v6 everywhere they disagree, so a plan certifying a hash it did not
 # run is making a claim rather than a measurement. Two recomputed stamps, not one.
+#
+# READ AT THE PLAN'S OWN COMMIT, NOT IN THE WORKING TREE, and the difference is
+# not a convenience. This stamp is a claim about PROVENANCE — the planner read
+# this file and this is what it held — and every step from R1 on has CLAUDE.md in
+# its file list, because recording what was built is part of building it. Against
+# the working tree the check therefore goes red on CORRECT work, and the only ways
+# out are both wrong: re-point the stamp, which makes the plan assert a hash the
+# planner never read, or stop editing CLAUDE.md, which is the deliverable. R1 hit
+# this at 82bd3ab and refused both, which is the right refusal and is why this
+# reads the blob instead.
+#
+# The original defect is still caught, because it was a defect at the plan's own
+# commit: a planner that stamps a hash it did not run is red here whether or not
+# anybody has touched the file since.
+def _blob_at_plan_commit(path):
+    """CLAUDE.md as it stood when docs/plan-v7.json was last written.
+
+    Falls back to the working tree outside a git checkout, or before the plan has
+    a commit of its own — a first revision has nothing to read the blob from, and
+    refusing to check at all would be worse than checking the file in front of us.
+    """
+    try:
+        rev = subprocess.run(["git", "log", "-1", "--format=%H", "--", PLAN_PATH],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        if not rev:
+            return open(path, "rb").read(), "the working tree (the plan has no commit yet)"
+        out = subprocess.run(["git", "show", f"{rev}:{path}"],
+                             capture_output=True, check=True).stdout
+        return out, f"{rev[:7]}, the commit that last wrote the plan"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return open(path, "rb").read(), "the working tree (no git)"
+
 for path in ("CLAUDE.md",):
     if os.path.exists(path):
-        body = open(path, "rb").read()
+        body, where = _blob_at_plan_commit(path)
         st = next((i for i in plan["base"]["inputs"] if i["path"] == path), None)
         check(st is not None, f"base.inputs does not stamp {path} at all")
         if st:
             check(st["size"] == len(body),
-                  f"the {path} stamp says {st['size']} bytes; the file is {len(body)}")
+                  f"the {path} stamp says {st['size']} bytes; at {where} it is {len(body)}")
             real = hashlib.sha256(body).hexdigest()
             check(st["sha256"] == real,
-                  f"the {path} stamp says {st['sha256'][:12]}…; the file is {real[:12]}…")
+                  f"the {path} stamp says {st['sha256'][:12]}…; at {where} it is {real[:12]}…")
 
 # §6.2 — a reviser does not grade its own fixes, so every finding must have a
 # claimed_fix a FixVerifier can open.
