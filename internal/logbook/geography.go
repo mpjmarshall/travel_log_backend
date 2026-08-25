@@ -231,22 +231,26 @@ func ValidatePlace(p PlaceWrite) error {
 	return nil
 }
 
-// checkVisits is the field the whole step is about.
+// checkVisits is the field the whole step is about, and it checks the SHAPE of
+// the array rather than what writing it would destroy.
 //
-// THE EMPTY-ARRAY BRANCH IS FIRST, and it is the one that had to be written
-// down rather than derived. PD-06's upsert fix closes a no-op re-send of an
-// UNCHANGED array and does NOT close this one: the mandated shape ends "DELETE
-// only the ids absent from the incoming array", and when the array is empty
-// every id is absent, so it does exactly what delete-then-insert did with the
-// fix in place. The numbers are in the file comment.
+// THE EMPTY ARRAY IS NOT REFUSED HERE, AND IT USED TO BE. PD-06's upsert fix
+// closes a no-op re-send of an UNCHANGED array and does not close the empty
+// one: the mandated shape ends "DELETE only the ids absent from the incoming
+// array", and when the array is empty every id is absent, so it does exactly
+// what delete-then-insert did with the fix in place. That hazard is real and
+// the numbers are in the file comment — but it is a fact about the place's
+// CURRENT OCCASIONS, and this function cannot see them.
+//
+// Refusing it here refused more than the destruction. NINE OF THE SEVENTEEN
+// places in the client's own log are wishlist places, so `Emit` writes
+// `"visits": []` for them and the document the server produces was one it
+// would not accept back; C1's pin — the single control that creates a place —
+// serialises the same way through the client's generated `toJson()`. The
+// refusal now lives in `postgres.writeVisits`, where the count is one query
+// away: `[]` against a place with occasions is a 422, and against a place with
+// none it is the no-op it describes. Refuse the destruction, not the shape.
 func checkVisits(visits []Visit, placeID string) error {
-	if len(visits) == 0 {
-		return InvalidFieldError{Field: "visits",
-			Why: "an empty visits array is a request to clear every occasion at this " +
-				"place, which unfiles every photograph filed to it — no control in the " +
-				"client asks for that, so this build refuses it. OMIT the key to leave " +
-				"the visits alone"}
-	}
 	seen := make(map[string]bool, len(visits))
 	for _, visit := range visits {
 		if !idPattern.MatchString(visit.ID) {

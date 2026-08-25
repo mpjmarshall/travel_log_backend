@@ -9,7 +9,6 @@ package logbook_test
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -31,7 +30,7 @@ import (
 // array leaves 0 and 0 with `place_id IS NOT NULL AND visit_id IS NULL` at 30.
 // Whole-log it unfiles 95 photographs and destroys 5 visit notes with every
 // table count except `visits` unchanged.
-func TestAnAbsentVisitsKeyIsLegalAndAnEmptyOneIsRefused(t *testing.T) {
+func TestValidationJudgesTheShapeOfVisitsAndNotWhatWritingItWouldDestroy(t *testing.T) {
 	absent := logbook.PlaceWrite{ID: ptr("fushimi-inari")}
 	if err := logbook.ValidatePlace(absent); err != nil {
 		t.Errorf("a body with no `visits` key = %v, want no error. Absent means LEAVE "+
@@ -39,24 +38,22 @@ func TestAnAbsentVisitsKeyIsLegalAndAnEmptyOneIsRefused(t *testing.T) {
 			"all — correct by construction", err)
 	}
 
+	// `visits: []` IS NOT REFUSED HERE, AND IT USED TO BE. Whether clearing
+	// destroys anything is a fact about the place's current occasions, and this
+	// function is handed an array and nothing else. Refusing it on shape
+	// refused nine of the seventeen places in the client's own log — every
+	// wishlist place, for which `Emit` writes exactly this — so the document
+	// the server produced was one it would not accept back.
+	//
+	// The refusal lives in `postgres.writeVisits` now, one query from the
+	// count. `internal/seed` holds the leg that proves both halves against a
+	// real database; this one only proves the shape check has stopped
+	// answering a question it cannot see.
 	empty := logbook.PlaceWrite{ID: ptr("fushimi-inari"), Visits: &[]logbook.Visit{}}
-	err := logbook.ValidatePlace(empty)
-	if err == nil {
-		t.Fatalf("`visits: []` was accepted. It is an explicit request to clear every " +
-			"occasion at the place, which unfiles every photograph filed to it — and " +
-			"NO CONTROL IN THE CLIENT ISSUES IT")
-	}
-	if got := fieldOf(t, err); got != "visits" {
-		t.Errorf("the refusal names %q, want \"visits\"", got)
-	}
-	// The sentence has to tell the caller what to do instead, because the two
-	// requests are one character apart on the wire.
-	var invalid logbook.InvalidFieldError
-	errors.As(err, &invalid)
-	if !strings.Contains(invalid.Why, "OMIT") {
-		t.Errorf("the reason is %q and does not say to omit the key — a client that "+
-			"wanted a no-op has no way to discover the difference from a 422 alone",
-			invalid.Why)
+	if err := logbook.ValidatePlace(empty); err != nil {
+		t.Errorf("`visits: []` = %v, want no error FROM VALIDATION. The destruction it "+
+			"may or may not perform is the store's question, and answering it here "+
+			"refuses every wishlist place in the log", err)
 	}
 }
 

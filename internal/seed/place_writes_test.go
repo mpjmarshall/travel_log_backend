@@ -185,35 +185,71 @@ func TestReSendingAllTwentyEightOccasionsUnchangedUnfilesNothing(t *testing.T) {
 	}
 }
 
-// AND `visits: []` IS REFUSED WITH NOTHING REMOVED — asserted on the row count
-// rather than on the status alone, because a route that answered 422 AFTER
-// running the DELETE would satisfy a status assertion perfectly.
-func TestAnEmptyVisitsArrayIsRefusedAndAllTwentyEightSurvive(t *testing.T) {
+// AND `visits: []` IS REFUSED ONLY WHERE THERE IS SOMETHING TO DESTROY.
+//
+// BOTH HALVES ARE IN ONE LEG ON PURPOSE. The rule is a single sentence —
+// refuse the destruction, not the shape — and a leg that asserted only the
+// refusal is what shipped first: it passed against a build that refused every
+// empty array, including the nine wishlist places in the client's own log for
+// which `Emit` writes exactly this. A guard that cannot tell the two apart
+// looks identical to a correct one from the refusing side.
+//
+// The refusal is asserted on the ROW COUNT and not on the status alone,
+// because a route that answered 422 AFTER running the DELETE would satisfy a
+// status assertion perfectly.
+func TestAnEmptyVisitsArrayIsRefusedWhereItWouldDestroyAndIsANoOpWhereItWouldNot(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
-
+	ctx := context.Background()
 	empty := []logbook.Visit{}
-	if err := logbook.ValidatePlace(logbook.PlaceWrite{ID: ptrTo("fushimi-inari"), Visits: &empty}); err == nil {
-		t.Fatalf("`visits: []` was accepted by the validator")
+
+	// VALIDATION MUST NOT DECIDE THIS. It is handed an array and cannot see
+	// the occasions, so it is the store's question — and this line is what
+	// stops the refusal drifting back up to the shape check.
+	if err := logbook.ValidatePlace(logbook.PlaceWrite{ID: ptrTo("fushimi-inari"), Visits: &empty}); err != nil {
+		t.Errorf("the validator refused `visits: []` = %v. Whether clearing destroys "+
+			"anything is a fact about the place, not about the body", err)
 	}
 
-	// AND THE STORE IS NOT REACHED. This is the line that says the refusal is
-	// a fact about the request: the handler stops before a transaction is
-	// opened, so a leg that only tested the validator would leave the store's
-	// behaviour on an empty array unstated. Calling it directly here is what
-	// makes that statement — it is the ONE input the store must never be
-	// handed, and if the guard above were removed this is what it would do.
-	if _, _, err := store.PutPlace(context.Background(), travellerUUID, logbook.PlaceWrite{
+	// The destructive half: 28 occasions, 30 filings, 3 trips.
+	if _, _, err := store.PutPlace(ctx, travellerUUID, logbook.PlaceWrite{
 		ID: ptrTo("fushimi-inari"), Visits: &empty,
 	}); err == nil {
-		t.Errorf("the store accepted an empty array too. `id <> ALL('{}')` is true of " +
-			"every row, so the DELETE becomes `WHERE place_id = $2` — 28 occasions and " +
-			"30 filings, and 95 filings whole-log if it is done to every place")
+		t.Errorf("the store accepted an empty array at a place with %d occasions. "+
+			"`id <> ALL('{}')` is true of every row, so the DELETE becomes "+
+			"`WHERE place_id = $2` — 28 occasions and 30 filings, and 95 filings "+
+			"whole-log if it is done to every place", fushimiVisits)
 	}
 	if got := rows(t, db, `SELECT count(*) FROM visits WHERE place_id = 'fushimi-inari'`); got != fushimiVisits {
 		t.Errorf("occasions %d -> %d after a refused write", fushimiVisits, got)
 	}
 	if got := rows(t, db, `SELECT count(*) FROM photos WHERE place_id = 'fushimi-inari' AND visit_id IS NOT NULL`); got != fushimiFiled {
 		t.Errorf("%d photographs are still filed, want %d", got, fushimiFiled)
+	}
+
+	// The half the shape-level refusal got wrong. A wishlist place holds no
+	// occasions, `Emit` writes `"visits": []` for it, and C1's pin — the only
+	// control that creates a place — sends the same shape through the client's
+	// generated toJson(). Refusing it made the server's own output something
+	// the server would not accept back.
+	var wishlist string
+	if err := db.QueryRow(`SELECT p.id FROM places p
+		WHERE NOT EXISTS (SELECT 1 FROM visits v WHERE v.place_id = p.id AND v.traveller_id = p.traveller_id)
+		ORDER BY p.id LIMIT 1`).Scan(&wishlist); err != nil {
+		t.Fatalf("finding a wishlist place in the fixture: %v", err)
+	}
+	if _, _, err := store.PutPlace(ctx, travellerUUID, logbook.PlaceWrite{
+		ID: ptrTo(wishlist), Visits: &empty,
+	}); err != nil {
+		t.Errorf("the store refused `visits: []` at %s, which holds no occasions: %v\n"+
+			"    There is nothing to clear, so the array is already what it asks for. "+
+			"Refusing it refuses every wishlist place in the client's own log, and "+
+			"C1's pin with them", wishlist, err)
+	}
+	if got := rows(t, db, `SELECT count(*) FROM visits WHERE place_id = '`+wishlist+`'`); got != 0 {
+		t.Errorf("%s holds %d occasions after a no-op, want 0", wishlist, got)
+	}
+	if got := rows(t, db, `SELECT count(*) FROM photos WHERE place_id = 'fushimi-inari' AND visit_id IS NOT NULL`); got != fushimiFiled {
+		t.Errorf("the no-op at %s moved fushimi's filings to %d, want %d", wishlist, got, fushimiFiled)
 	}
 }
 

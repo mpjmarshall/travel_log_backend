@@ -917,6 +917,24 @@ Each visit carries `{id, placeId, tripId, at, note}`. `placeId` may be omitted
 or empty — the path carries it — but if present it must match, and `tripId` must
 name a trip you have.
 
+### NARROWED at DEC-109 — `[]` is refused only where it would destroy something
+
+`visits: []` used to be a 422 always. It is now a 422 **only when the place
+holds occasions**, and a no-op when it holds none.
+
+This matters to you in one specific place: **nine of the seventeen places in
+the sample log are wishlist places**, and the server emits `"visits": []` for
+every one of them. Under the old rule the document the server gave you was not
+one it would take back, and C1's pin — serialised by your generated
+`toJson()` — was refused. Both now work.
+
+**The advice below has not changed.** Omit the key when you mean leave-alone.
+It is the clearer request, it is one character different from the destructive
+one on the wire, and it never depends on what the server happens to hold. The
+narrowing means a whole-entity PUT no longer fails on a pin; it does not mean
+`[]` is a good way to say "don't touch this".
+
+
 ## R6.4 `PUT /v1/places/{id}` — C1's pin, and what a create needs
 
 ```json
