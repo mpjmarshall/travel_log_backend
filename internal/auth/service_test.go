@@ -136,6 +136,40 @@ func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID strin
 	return nil
 }
 
+// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at IS
+// NULL`: a second revoke moves nothing and reports so, which is what makes the
+// bool and the count mean anything.
+func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
+	if f.failWith != nil {
+		return false, f.failWith
+	}
+	held, ok := f.sessions[string(tokenHash)]
+	if !ok || held.TravellerID != travellerID || held.RevokedAt != nil {
+		return false, nil
+	}
+	at := f.now()
+	held.RevokedAt = &at
+	f.sessions[string(tokenHash)] = held
+	return true, nil
+}
+
+func (f *fakeStore) RevokeEverySession(_ context.Context, travellerID string) (int64, error) {
+	if f.failWith != nil {
+		return 0, f.failWith
+	}
+	var moved int64
+	at := f.now()
+	for key, held := range f.sessions {
+		if held.TravellerID != travellerID || held.RevokedAt != nil {
+			continue
+		}
+		held.RevokedAt = &at
+		f.sessions[key] = held
+		moved++
+	}
+	return moved, nil
+}
+
 // TravellerExists is DEC-86's question, and the fake answers it the way the
 // table does: any row at all, whatever its address.
 func (f *fakeStore) TravellerExists(context.Context) (bool, error) {

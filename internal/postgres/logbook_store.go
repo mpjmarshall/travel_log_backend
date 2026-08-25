@@ -54,6 +54,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"travellog/internal/logbook"
@@ -675,6 +676,60 @@ func readOneTrip(ctx context.Context, tx *sql.Tx, travellerID, tripID string) (l
 		t.CityIDs = append(t.CityIDs, cityID)
 	}
 	return t, rows.Err()
+}
+
+// --------------------------------------------------- U1's PENCIL: THE NAME
+
+// setTravellerNameSQL is the only write that touches the traveller row's own
+// data, and it BUMPS logbook_version — through WithTravellerTx below —
+// because `traveller: {name}` is the sixth key of the emitted document.
+//
+// IT IS NOT NULLABLE THROUGH THIS ROUTE. `travellers.name` is nullable and
+// `travellers_name_present_ck` refuses the empty string, so the two states
+// that exist are "a log nobody has named yet" and a name. Clearing it back to
+// NULL is not something the client can ask for and is not something this
+// statement can do: `setTravellerName` refuses a trimmed-empty name, and the
+// client's own reason is that "'no traveller' is a state a log arrives in and
+// never returns to".
+const setTravellerNameSQL = `UPDATE travellers SET name = $2 WHERE id = $1::uuid`
+
+// SetTravellerName is U1's pencil.
+//
+// THE TRIM IS THE SERVER'S TOO, and it is not duplication for its own sake.
+// The client trims because its sheet's gate is `trim().isNotEmpty`, "so a name
+// that passes the gate and then goes to disk with its whitespace still on is
+// the gate's string rather than the user's" — and the server is the record, so
+// a name arriving from anything that is not that sheet gets the same
+// treatment. What the server adds is the REFUSAL: `"   "` is a 422 naming the
+// field rather than a 500 from travellers_name_present_ck.
+func (s LogbookStore) SetTravellerName(ctx context.Context, travellerID, name string) (logbook.Traveller, int64, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
+			Why: "a traveller needs a name, and an empty one is not a way to clear it"}
+	}
+	if len(trimmed) > logbook.MaxNameBytes {
+		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
+			Why: fmt.Sprintf("%d bytes, and this build takes at most %d",
+				len(trimmed), logbook.MaxNameBytes)}
+	}
+
+	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
+		// THE ROW COUNT IS NOT CHECKED HERE, and that is not an oversight:
+		// WithTravellerTx's own bump is `UPDATE travellers … RETURNING`, which
+		// has already answered ErrNoTraveller for a traveller that is gone
+		// before this statement runs. Checking again would be a second answer
+		// to a question already asked, in the same transaction, about the same
+		// row.
+		if _, err := tx.ExecContext(ctx, setTravellerNameSQL, travellerID, trimmed); err != nil {
+			return fmt.Errorf("postgres: naming the traveller %s: %w", travellerID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return logbook.Traveller{}, 0, travellerError(err, travellerID)
+	}
+	return logbook.Traveller{Name: trimmed}, version, nil
 }
 
 // ---------------------------------------------------------- D3: THE CASCADE

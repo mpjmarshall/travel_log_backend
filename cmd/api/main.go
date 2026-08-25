@@ -330,8 +330,14 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 
 	return func(mux *http.ServeMux) {
 		httpapi.Mount(mux, httpapi.Deps{
-			Auth:           service,
-			Logbook:        postgres.LogbookStore{DB: db},
+			Auth:    service,
+			Logbook: postgres.LogbookStore{DB: db},
+			// THE SHARE PORT IS A SECOND TYPE OVER THE SAME POOL (R5). Both
+			// are `struct{ DB *sql.DB }`, so this line costs nothing at boot;
+			// what it buys is that the interface each handler is handed says
+			// what that handler can reach — the share handlers cannot read the
+			// whole log, and the logbook handlers cannot mint a capability.
+			Share:          postgres.ShareStore{DB: db},
 			Log:            log,
 			AuthLimit:      credential,
 			TravellerLimit: traveller,

@@ -222,6 +222,57 @@ func (s AuthStore) TouchSession(ctx context.Context, travellerID, sessionID stri
 	return nil
 }
 
+// revokeSessionSQL names the traveller as well as the digest, so one
+// traveller's request cannot revoke another's row even if a digest collided or
+// the ids were crossed above.
+//
+// `AND revoked_at IS NULL` MAKES IT IDEMPOTENT AND HONEST AT ONCE: a second
+// revoke moves nothing, so the recorded moment stays the moment the token
+// actually stopped working rather than the moment somebody asked again.
+const revokeSessionSQL = `UPDATE sessions SET revoked_at = now()
+	WHERE traveller_id = $1::uuid AND token_hash = $2 AND revoked_at IS NULL`
+
+const revokeEverySessionSQL = `UPDATE sessions SET revoked_at = now()
+	WHERE traveller_id = $1::uuid AND revoked_at IS NULL`
+
+// RevokeSession kills one session and MOVES NO VERSION.
+//
+// IT TAKES NO ADVISORY LOCK, for the reason TouchSession stopped taking one
+// (DEC-100): it is one UPDATE of rows keyed by a unique digest, and the row
+// lock it takes itself is the whole of the exclusion it needs. There is no
+// multi-statement work here for the advisory lock to protect.
+func (s AuthStore) RevokeSession(ctx context.Context, travellerID string, tokenHash []byte) (bool, error) {
+	result, err := s.DB.ExecContext(ctx, revokeSessionSQL, travellerID, tokenHash)
+	if err != nil {
+		return false, fmt.Errorf("postgres: revoking a session: %w", err)
+	}
+	moved, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("postgres: counting the revoked session: %w", err)
+	}
+	return moved > 0, nil
+}
+
+// RevokeEverySession kills all of this traveller's live sessions and MOVES NO
+// VERSION.
+//
+// THE COUNT IS ANSWERED RATHER THAN A BOOL, and it is the one place in this
+// package where a number leaves the store for nobody in particular. The route
+// answers 204 and reads it not at all; what it is for is the leg — "sign out
+// everywhere" is a claim about a number, and a store that revoked exactly one
+// row would satisfy every assertion a bool could make.
+func (s AuthStore) RevokeEverySession(ctx context.Context, travellerID string) (int64, error) {
+	result, err := s.DB.ExecContext(ctx, revokeEverySessionSQL, travellerID)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: revoking every session: %w", err)
+	}
+	moved, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("postgres: counting the revoked sessions: %w", err)
+	}
+	return moved, nil
+}
+
 // TravellerExists answers DEC-86's question: does this log already have a
 // traveller?
 //

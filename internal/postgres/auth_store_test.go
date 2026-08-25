@@ -655,3 +655,152 @@ func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
 			"    stranger, which is the state the ruling closes.")
 	}
 }
+
+// REVOKING A SESSION IS AN UPDATE THAT MOVES A LIVE ROW AND NOTHING ELSE.
+//
+// Three claims, and the third is the one a bool alone would hide: the row is
+// revoked, a SECOND revoke moves nothing (so `revoked_at` records the moment
+// the token stopped working rather than the moment somebody asked again), and
+// ANOTHER traveller's session with the same digest is untouched — which cannot
+// happen through the unique index and is exactly the shape a `WHERE token_hash
+// = $1` written without the traveller would get wrong the day it could.
+func TestRevokeSessionMovesTheLiveRowAndOnlyOnce(t *testing.T) {
+	store, db, tr := withTravellerRow(t)
+	ctx := context.Background()
+	hash := digest("a token")
+
+	id, err := store.CreateSession(ctx, tr.ID, hash, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	moved, err := store.RevokeSession(ctx, tr.ID, hash)
+	if err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+	if !moved {
+		t.Fatalf("RevokeSession answered false on a live session")
+	}
+
+	var first time.Time
+	if err := db.QueryRowContext(ctx,
+		`SELECT revoked_at FROM sessions WHERE id = $1::uuid`, id).Scan(&first); err != nil {
+		t.Fatalf("reading revoked_at: %v", err)
+	}
+
+	again, err := store.RevokeSession(ctx, tr.ID, hash)
+	if err != nil {
+		t.Fatalf("the second RevokeSession: %v", err)
+	}
+	if again {
+		t.Errorf("a second revoke answered true. `AND revoked_at IS NULL` is what makes " +
+			"it idempotent AND honest: without it the recorded moment walks forward " +
+			"every time somebody asks again.")
+	}
+	var second time.Time
+	if err := db.QueryRowContext(ctx,
+		`SELECT revoked_at FROM sessions WHERE id = $1::uuid`, id).Scan(&second); err != nil {
+		t.Fatalf("reading revoked_at again: %v", err)
+	}
+	if !second.Equal(first) {
+		t.Errorf("revoked_at moved from %s to %s on a second revoke", first, second)
+	}
+
+	// A STRANGER CANNOT REVOKE IT. The predicate names the traveller as well
+	// as the digest.
+	other := aSecondTraveller(t, db, "stranger@example.com")
+	if moved, err := store.RevokeSession(ctx, other, digest("another token")); err != nil || moved {
+		t.Errorf("revoking a stranger's unknown digest answered (%v, %v), want (false, nil)", moved, err)
+	}
+}
+
+// "SIGN OUT EVERYWHERE" IS A CLAIM ABOUT A NUMBER, which is why the store
+// answers a count and not a bool: a store that revoked exactly one row would
+// satisfy every assertion a bool could make.
+//
+// AND IT IS SCOPED TO THE TRAVELLER. The second traveller's live session is
+// what makes that falsifiable — an unscoped `UPDATE sessions SET revoked_at`
+// signs the whole instance out and no count in this leg would notice without
+// it.
+func TestRevokeEverySessionCountsWhatItMovedAndStopsAtTheTraveller(t *testing.T) {
+	store, db, tr := withTravellerRow(t)
+	ctx := context.Background()
+
+	for i, token := range []string{"phone", "tablet", "laptop"} {
+		if _, err := store.CreateSession(ctx, tr.ID, digest(token),
+			time.Now().UTC().Add(time.Hour)); err != nil {
+			t.Fatalf("CreateSession %d: %v", i, err)
+		}
+	}
+	// One of them is already revoked, so the count is about LIVE rows.
+	if _, err := store.RevokeSession(ctx, tr.ID, digest("laptop")); err != nil {
+		t.Fatalf("the preparatory revoke: %v", err)
+	}
+
+	stranger := aSecondTraveller(t, db, "stranger@example.com")
+	if _, err := store.CreateSession(ctx, stranger, digest("stranger"),
+		time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatalf("the stranger's CreateSession: %v", err)
+	}
+
+	moved, err := store.RevokeEverySession(ctx, tr.ID)
+	if err != nil {
+		t.Fatalf("RevokeEverySession: %v", err)
+	}
+	if moved != 2 {
+		t.Errorf("RevokeEverySession moved %d rows, want 2 — three sessions, one of them "+
+			"already revoked", moved)
+	}
+
+	var live int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM sessions WHERE traveller_id = $1::uuid AND revoked_at IS NULL`,
+		stranger).Scan(&live); err != nil {
+		t.Fatalf("counting the stranger's live sessions: %v", err)
+	}
+	if live != 1 {
+		t.Errorf("the stranger has %d live sessions left, want 1 — an unscoped UPDATE "+
+			"signs the whole instance out", live)
+	}
+}
+
+// AND NEITHER REVOCATION MOVES logbook_version. DEC-50's list puts sessions on
+// the non-bumping side, and a revoke that counted would invalidate the phone's
+// whole cached log for a write that is not in it.
+func TestRevokingSessionsMovesNoLogbookVersion(t *testing.T) {
+	store, db, tr := withTravellerRow(t)
+	ctx := context.Background()
+	before := versionOf(t, db, tr.ID)
+
+	if _, err := store.CreateSession(ctx, tr.ID, digest("a token"),
+		time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := store.RevokeSession(ctx, tr.ID, digest("a token")); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+	if _, err := store.RevokeEverySession(ctx, tr.ID); err != nil {
+		t.Fatalf("RevokeEverySession: %v", err)
+	}
+
+	if got := versionOf(t, db, tr.ID); got != before {
+		t.Errorf("revoking moved logbook_version from %d to %d", before, got)
+	}
+}
+
+// aSecondTraveller is `aTraveller` for a leg that needs two of them.
+//
+// IT GOES THROUGH THE STORE AND NOT THROUGH THE ROUTE, and after DEC-86 that
+// is the only way: `Service.Register` refuses once any traveller row exists.
+// What is bypassed is the registration rule, which is a decision about who may
+// open an account; what these legs are about is whether a statement is scoped
+// by traveller_id, which has to be right BEFORE a second traveller is ever
+// wanted — DEC-86's own trigger for revisiting.
+func aSecondTraveller(t *testing.T, db *sql.DB, email string) string {
+	t.Helper()
+	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), email, "$argon2id$stub")
+	if err != nil {
+		t.Fatalf("creating a second traveller: %v", err)
+	}
+	return tr.ID
+}

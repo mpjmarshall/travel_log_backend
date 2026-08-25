@@ -200,6 +200,15 @@ type Store interface {
 	// (DEC-100), so an implementation may assume it is not on the hot path.
 	TouchSession(ctx context.Context, travellerID, sessionID string, at time.Time) error
 
+	// RevokeSession marks the session holding this digest revoked and answers
+	// whether a live row was moved. A digest naming a session that is already
+	// revoked, expired or unknown answers false and is NOT an error.
+	RevokeSession(ctx context.Context, travellerID string, tokenHash []byte) (bool, error)
+
+	// RevokeEverySession marks every live session of this traveller revoked
+	// and answers how many rows it moved.
+	RevokeEverySession(ctx context.Context, travellerID string) (int64, error)
+
 	// TravellerExists answers whether ANY traveller row is present, which is
 	// DEC-86's question.
 	//
@@ -429,6 +438,50 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Traveller, er
 		}
 	}
 	return tr, nil
+}
+
+// RevokeSession kills the token the caller presented.
+//
+// IT TAKES THE PLAINTEXT AND NOT A SESSION ID, because the caller is a handler
+// that holds an Authorization header and nothing else — the session's id is
+// not on the wire anywhere, deliberately. The digest is recomputed here, which
+// is the same path Authenticate takes.
+//
+// THE ANSWER IS DISCARDED BY THE ONE CALLER AND THE METHOD RETURNS IT ANYWAY,
+// which is worth a sentence rather than a shrug. `RequireTraveller` has
+// already resolved this token to a live session by the time the handler runs,
+// so `false` is reachable only through a race — the same token revoked twice,
+// concurrently — and the honest answer to that is still 204: the caller asked
+// for the token to stop working and it has. What the bool buys is that the
+// STORE cannot quietly stop matching rows without something being able to see
+// it, which is what auth_store_test.go asserts.
+func (s *Service) RevokeSession(ctx context.Context, travellerID, token string) (bool, error) {
+	hash, err := HashToken(token)
+	if err != nil {
+		// A malformed credential names no session, and no session is exactly
+		// the state the caller asked for.
+		return false, nil
+	}
+	return s.Store.RevokeSession(ctx, travellerID, hash)
+}
+
+// RevokeEverySession is the sibling, and the security lens's argument for it
+// is short and right: A STOLEN TOKEN IS PRECISELY THE CASE WHERE YOU DO NOT
+// KNOW WHICH ROW TO DELETE, and "this token" is the one thing the thief will
+// not use. Against a thirty-day untuned TTL it is the only recovery a user
+// has.
+//
+// IT REVOKES THE CALLER'S OWN TOKEN TOO, and that is the point rather than a
+// side effect: "sign out everywhere" that leaves the device you pressed it on
+// signed in is a control that has not done what it says, and the device you
+// are holding is the one you can most easily sign in again from.
+//
+// THE CLIENT HAS NO CONTROL THAT CALLS EITHER OF THESE. That is recorded in
+// docs/CLIENT-PREREQUISITES.md rather than being a reason not to build them:
+// the route is what makes the control possible, and a recovery that has to
+// wait for a screen is a recovery nobody has during the week they need it.
+func (s *Service) RevokeEverySession(ctx context.Context, travellerID string) (int64, error) {
+	return s.Store.RevokeEverySession(ctx, travellerID)
 }
 
 func checkEmail(email string) error {

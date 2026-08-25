@@ -132,6 +132,44 @@ func (f *fakeStore) TouchSession(context.Context, string, string, time.Time) err
 	return f.failWith
 }
 
+// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at IS
+// NULL`. The fake honours the "already revoked moves nothing" half, because
+// that is what the bool and the count are for.
+func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return false, f.failWith
+	}
+	held, ok := f.sessions[string(tokenHash)]
+	if !ok || held.TravellerID != travellerID || held.RevokedAt != nil {
+		return false, nil
+	}
+	at := f.now()
+	held.RevokedAt = &at
+	f.sessions[string(tokenHash)] = held
+	return true, nil
+}
+
+func (f *fakeStore) RevokeEverySession(_ context.Context, travellerID string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return 0, f.failWith
+	}
+	var moved int64
+	at := f.now()
+	for key, held := range f.sessions {
+		if held.TravellerID != travellerID || held.RevokedAt != nil {
+			continue
+		}
+		held.RevokedAt = &at
+		f.sessions[key] = held
+		moved++
+	}
+	return moved, nil
+}
+
 // TravellerExists is DEC-86's question, and the fake answers it the way the
 // table does: any row at all, whatever its address.
 //
@@ -279,6 +317,7 @@ func newHarness(t *testing.T, opt options) *harness {
 	deps := Deps{
 		Auth:           service,
 		Logbook:        books,
+		Share:          &fakeShare{books: books},
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(opt.ratePerMin, nil),
 		TravellerLimit: httpx.NewLimiter(opt.travellerPerMin, nil),
@@ -781,15 +820,38 @@ func (a *atomicBool) Load() bool   { a.mu.Lock(); defer a.mu.Unlock(); return a.
 
 // === the routes themselves ===
 
-func TestBothAuthRoutesTakePOSTAndNothingElse(t *testing.T) {
+// THE TWO CREDENTIAL PATHS TAKE THE VERBS THE TABLE GIVES THEM AND NOTHING
+// ELSE.
+//
+// `DELETE /v1/auth/session` IS NOW A REAL ROUTE, so it comes off the refused
+// list — and taking it off is not a weakening, because the leg's claim was
+// never "no other verb exists" but "no other verb is SERVED". A route that
+// arrives is a decision somebody made; a route that arrives and quietly
+// satisfies a leg written to refuse it is the shape this project keeps
+// finding. The whole table's coverage is asserted in routes_test.go, which
+// iterates rather than lists.
+func TestTheCredentialRoutesTakeTheVerbsTheTableGivesThem(t *testing.T) {
 	h := newHarness(t, options{})
-	for _, path := range []string{"/v1/auth/register", "/v1/auth/session"} {
-		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+	refused := map[string][]string{
+		"/v1/auth/register": {http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch},
+		// DELETE is served here since R5. It is authenticated, so an
+		// unauthenticated DELETE is a 401 rather than a 405 — asserted below
+		// so the difference is stated rather than left as a gap in this list.
+		"/v1/auth/session": {http.MethodGet, http.MethodPut, http.MethodPatch},
+	}
+	for path, methods := range refused {
+		for _, method := range methods {
 			got := h.do(t, method, path, registered, "")
 			if got.status != http.StatusMethodNotAllowed {
 				t.Errorf("%s %s = %d, want 405", method, path, got.status)
 			}
 		}
+	}
+
+	if got := h.do(t, http.MethodDelete, "/v1/auth/session", "", ""); got.status != http.StatusUnauthorized {
+		t.Errorf("DELETE /v1/auth/session with no credential = %d, want 401 — it is the "+
+			"revocation surface, and revoking without a credential would let anybody "+
+			"sign anybody out", got.status)
 	}
 }
 

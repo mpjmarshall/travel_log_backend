@@ -1249,3 +1249,110 @@ func photoRow(t *testing.T, db *sql.DB, id string) storedPhoto {
 	out.placeID, out.visitID, out.caption = placeID.String, visitID.String, caption.String
 	return out
 }
+
+// ---------------------------------------------------- U1's PENCIL: THE NAME
+
+// THE NAME LANDS, IT IS TRIMMED, AND THE VERSION MOVES.
+//
+// The version half is DEC-50's list: `traveller: {name}` is the sixth key of
+// the emitted document, so the traveller row is on the BUMPING side — a rename
+// that moved no version would leave every phone answering 304 to a log whose
+// owner has changed.
+//
+// The trim is the client's rule applied at the record: its sheet's gate is
+// `trim().isNotEmpty`, "so a name that passes the gate and then goes to disk
+// with its whitespace still on is the gate's string rather than the user's",
+// and a name arriving from anything that is not that sheet gets the same
+// treatment.
+func TestSetTravellerNameWritesATrimmedNameAndMovesTheVersion(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+	before := versionOf(t, db, id)
+
+	named, version, err := store.SetTravellerName(ctx, id, "  Matt  ")
+	if err != nil {
+		t.Fatalf("SetTravellerName: %v", err)
+	}
+	if named.Name != "Matt" {
+		t.Errorf("the answer carries %q, want %q", named.Name, "Matt")
+	}
+	if version <= before {
+		t.Errorf("logbook_version went %d -> %d; the traveller's name is IN the emitted "+
+			"document", before, version)
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM travellers WHERE id = $1::uuid`, id).
+		Scan(&stored); err != nil {
+		t.Fatalf("reading the name back: %v", err)
+	}
+	if stored != "Matt" {
+		t.Errorf("the column holds %q, want %q — the answer and the row have to agree, "+
+			"because the phone splices one and re-reads the other", stored, "Matt")
+	}
+}
+
+// AN EMPTY NAME IS A NAMED FIELD AND NOT A CONSTRAINT VIOLATION.
+//
+// `travellers_name_present_ck` refuses `”` and would answer SQLSTATE 23514,
+// which reaches the client as a 500 with nothing to act on. The Go check is
+// what produces the 422 that names the field — DEC-58's precedent, both halves
+// kept, the check to say WHICH field and the constraint to be the guarantee.
+//
+// AND IT DOES NOT CLEAR THE NAME. The refusal has to be taken before the
+// UPDATE, not reported after it.
+func TestSetTravellerNameRefusesAnEmptyNameAndKeepsTheOldOne(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+
+	if _, _, err := store.SetTravellerName(ctx, id, "Matt"); err != nil {
+		t.Fatalf("the first SetTravellerName: %v", err)
+	}
+	before := versionOf(t, db, id)
+
+	for _, name := range []string{"", "   ", "\t\n"} {
+		_, _, err := store.SetTravellerName(ctx, id, name)
+		var invalid logbook.InvalidFieldError
+		if !errors.As(err, &invalid) {
+			t.Errorf("SetTravellerName(%q) answered %v, want an InvalidFieldError", name, err)
+			continue
+		}
+		if invalid.Field != "name" {
+			t.Errorf("the refusal names %q, want \"name\"", invalid.Field)
+		}
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM travellers WHERE id = $1::uuid`, id).
+		Scan(&stored); err != nil {
+		t.Fatalf("reading the name back: %v", err)
+	}
+	if stored != "Matt" {
+		t.Errorf("the column holds %q after three refused writes, want %q — an empty "+
+			"name is refused and is not a way to clear it", stored, "Matt")
+	}
+	if got := versionOf(t, db, id); got != before {
+		t.Errorf("a refused rename moved logbook_version from %d to %d — the refusal is "+
+			"taken before the transaction opens, so nothing should have committed",
+			before, got)
+	}
+}
+
+// A NAME LONGER THAN THIS BUILD TAKES IS THE SAME KIND OF REFUSAL, and it is
+// the same ceiling a trip's name wears. Nothing in the schema bounds
+// `travellers.name` — it is `text` — so without this a one-megabyte name is
+// storable and then re-emitted on every read of the whole log, for ever.
+func TestSetTravellerNameRefusesANameLongerThanTheBuildTakes(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+
+	_, _, err := store.SetTravellerName(context.Background(), id,
+		strings.Repeat("n", logbook.MaxNameBytes+1))
+	var invalid logbook.InvalidFieldError
+	if !errors.As(err, &invalid) || invalid.Field != "name" {
+		t.Errorf("a %d-byte name answered %v, want an InvalidFieldError naming name",
+			logbook.MaxNameBytes+1, err)
+	}
+}
