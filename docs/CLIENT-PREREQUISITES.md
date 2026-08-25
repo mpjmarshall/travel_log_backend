@@ -506,3 +506,140 @@ Listed so nobody re-implements them.
 R2 through R8 each add to this document rather than starting another one. If
 you are reading this after those steps, the sections above are still the
 prerequisites; the additions are below them.
+
+---
+
+# Added at R3 — the three media routes, as they actually answer
+
+Section 9 above described the upload flow before it was built. It is built now,
+and everything in it still holds. What follows is the wire contract, measured
+against the running container rather than described.
+
+## R3.1 The three routes, and what each answers
+
+```
+POST /v1/media                  -> 201  {id, alreadyExists, uploadUrl?, expiresAt?, uploadHeaders?}
+POST /v1/media/{id}/commit      -> 200  {id, byteSize, contentType, alreadyExists, uploadedAt}
+POST /v1/media/mint             -> 200  {urls: [...]}
+```
+
+All three are authenticated and all three count against
+`TRAVELLER_RATE_LIMIT_PER_MIN`, not the credential ceiling.
+
+**`POST /v1/media` answers 201 on BOTH paths**, whether or not the object was
+already there. It is an upsert on an id **you** minted, so it is idempotent by
+construction — the same shape `PUT /v1/trips/{id}` has, which answers 200 for a
+create and an update alike. `alreadyExists` is the one place that fact is
+reported; do not branch on the status.
+
+**The id is the sha256 of the bytes, in lowercase hex, and you compute it.**
+The server never invents one. That is what makes a retry free and what makes
+two photographs of identical bytes one object.
+
+## R3.2 The three fields that are ABSENT when `alreadyExists` is true
+
+`uploadUrl`, `expiresAt` and `uploadHeaders` are **omitted entirely** — not
+null, not empty — from a begin response for an object whose bytes have already
+landed. There is nothing to upload, and handing out a live write capability
+against a committed address would be worse than a redundant one.
+
+**So the branch is `if (body['uploadUrl'] == null) { skip to commit }`**, and
+`alreadyExists` tells you the same thing. A client that reads `uploadUrl` as a
+non-nullable String will throw on the second upload of the same photograph,
+which is the ordinary case for a re-install.
+
+**A begin that was never uploaded still answers `alreadyExists: false` and
+still mints a URL.** The field is derived from whether the BYTES landed, never
+from whether a row exists — so re-beginning a half-finished upload is a
+retry, and it works.
+
+## R3.3 `expiresAt` is a real deadline and it is short
+
+It is the private lifetime, `S3_PRESIGN_TTL_PRIVATE`, which the deployment sets
+to **two minutes**. It bounds when the PUT must **arrive**, not when it must
+finish — so it is a window to start a 25 MiB upload in and not a budget to
+complete one. Past it, begin again: a second begin for an uncommitted digest
+mints a fresh URL and costs nothing.
+
+## R3.4 Commit twice if you are not sure
+
+**A second commit of an already-uploaded object is `200`, not `409`.** This is
+the retry contract and it is the only thing standing between a lost response
+and bytes you have uploaded and cannot attach. The bucket-and-database seam is
+the one place in this API that can half-apply, and asking again is how you get
+out of it.
+
+`409 upload_incomplete` means the object is **not in the bucket** — you began
+it and the PUT did not land. Upload and ask again. It does not mean the
+request was wrong.
+
+## R3.5 A reference waits for the BYTES, not for the row
+
+`coverAsset` on `PUT /v1/trips/{id}` — and every asset reference in R6 and R7 —
+is refused with `422 invalid_field` naming the field until the object has been
+**committed**. Beginning it is not enough.
+
+```
+begin -> PUT the bytes -> commit -> reference
+```
+
+Out of order, the reference is a 422 and not a 500, and the `field` key tells
+you which one.
+
+## R3.6 Two media types, and `heic` is not one of them
+
+The allowlist is **`image/jpeg` and `image/png`**, enforced in Go for the 422
+and in the database schema as the guarantee. Anything else is
+`422 invalid_field` on `contentType`.
+
+**`image/heic` was in an earlier draft and is out.** Nothing in this system can
+produce one — the shutter is inert by decision — and an allowlist entry nothing
+can produce is a claim no test can check. It comes back with the real capture,
+which is the same dependency conversation the shutter already needs. **If you
+wire a real camera on iOS, this is the line to raise before you ship**: HEIC is
+the platform default, and the server will refuse it.
+
+**And the content type is SIGNED into the PUT.** So getting it wrong is not a
+422 naming the field — it is `403 SignatureDoesNotMatch` from the bucket, which
+looks identical to a tampered URL. That is the trade DEC-87 took, and
+`uploadHeaders` is the mitigation: replay what you were given and never derive
+it.
+
+## R3.7 `byteSize` has a ceiling and the signature has an EXACT length
+
+`MEDIA_MAX_BYTES` (the deployment sets 26,214,400 — 25 MiB) is refused with
+`422 invalid_field` on `byteSize`, **before anything is signed**.
+
+**The signature then pins the exact declared size, and it can never express a
+range.** SigV4 signs a header VALUE. So a body one byte off what you declared
+is `403 SignatureDoesNotMatch` from the bucket — the same answer as a wrong
+content type, a tampered URL or a broken signer. Declare the length you are
+actually going to send, and send exactly it. A chunked PUT with no
+`Content-Length` at all answers `411 MissingContentLength`.
+
+## R3.8 Minting is a batch, and there is no singular GET
+
+`POST /v1/media/mint` takes `{"ids": [...]}` and answers `{"urls": [...]}`
+**in the order you asked**, one per id. Pair by index. There is no
+`GET /v1/media/{id}`: it would be this route with a one-element list.
+
+- **At most 100 ids in one request**, else `422 invalid_field` on `ids`.
+- An id nothing holds -> **`404 not_found`**, for the whole request.
+- An id begun and not committed -> **`409 upload_incomplete`**, for the whole
+  request.
+
+Those two are deliberately different, and the difference is what you act on: a
+404 is a reference that will never resolve and a 409 is one that will once the
+upload finishes.
+
+**The URLs are bearer capabilities.** Anyone holding one can fetch the bytes,
+replay is unlimited, and they cannot be revoked before they expire. The
+response carries `Cache-Control: no-store, private` and
+`Referrer-Policy: no-referrer` for exactly that reason — do not put one in a
+log, a crash report, or anywhere a `Referer` header could carry it.
+
+**Every minted URL forces a download.** `response-content-disposition:
+attachment` is inside the signature, so it cannot be stripped. That is
+deliberate: it means a mislabelled object is downloaded rather than rendered on
+the storage origin. It does not affect an `Image.network`-style fetch, which
+reads the bytes rather than navigating to them.

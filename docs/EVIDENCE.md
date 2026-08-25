@@ -380,6 +380,165 @@ and re-running gave the identical table.
 
 ---
 
+## R3 — the three media routes, every mutation run at `7bfacff` + a clean tree
+
+Eighteen mutations, each restored by file copy and each re-run against the
+suite. Every "reddens" below is a leg that was **green immediately before and
+immediately after** the mutation was applied and reverted; the exact failure
+line is quoted where it says something the leg name does not.
+
+### DEC-99 — the no-transaction guard, which is the blocker
+
+| # | mutation | reddens | the line |
+|---|---|---|---|
+| M1 | `CREATE INDEX CONCURRENTLY IF NOT EXISTS` -> `CREATE INDEX CONCURRENTLY` in the testdata fixture | `TestNoTransactionMigrationsAreReRunnable` | `statement 2, "CREATE INDEX CONCURRENTLY notx_probe_x_idx ON notx_probe (x)" … ERROR: relation "notx_probe_x_idx" already exists (SQLSTATE 42P07)` |
+| M2 | the no-transaction failure message drops `statementSummary(s)` | `TestAFailingNoTransactionFileNamesTheStatementTextItDiedOn` | `the failure does not carry "SELECT 1/0", so log line one is not enough` — on BOTH runs |
+| M3 | `loadMigrations` stops refusing an undeclared no-transaction file | `TestANoTransactionFileMustDeclareItIsReRunnable` | `a no-transaction migration with no re-runnability declaration was accepted` |
+| M4 | the testdata fixture leaves `noTransactionSubjects` | `TestNoTransactionMigrationsAreReRunnable` | `no \`-- migrate:no-transaction\` migration anywhere — this leg has nothing to be about, and a subject set of zero is a green that means nothing` |
+
+**M1 is the measurement the ruling asked for, reproduced here.** The second run
+reports `relation … already exists` and NOT the real fault, which is exactly
+the boot loop: statements 1..i applied, no `schema_migrations` row, and every
+later boot failing on a statement that succeeded the first time. What is new is
+that the message now carries the statement TEXT, so the two runs can be told
+apart by reading rather than by counting — with the ordinal alone, "statement
+3" on boot one and "statement 2" on boot two reads as one failure moving.
+
+**M4 is the honest one.** `migrations/` holds NO no-transaction file — 0003 is
+entirely transactional and carries no directive at all — so without the fixture
+and the non-empty assertion, this guard is a green that ran nothing.
+
+### The allowlist, and 0003's five bounds
+
+| # | mutation | reddens |
+|---|---|---|
+| M5 | `image/heic` added to `allowedContentTypes` (Go side alone) | `TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet`, `TestTheContentTypeExpressionIsTheOneDEC104Narrowed`, `TestTheAllowlistTakesTwoTypesAndRefusesTheRest` |
+| M6 | `image/heic` added to 0003's IN-list (schema side alone) | `TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet`: *the schema permits "image/heic" and internal/logbook refuses it — a 422 the client never sees, and a row the schema accepts* |
+| M7 | `walks_points_present_ck` deleted from 0003 | `TestTheSchemaRefusesTheDataTheAppForbids/a_walk_with_an_empty_track` |
+| M8 | the two `COMMENT ON COLUMN` statements deleted from 0003 | `TestTheTwoGoOnlyIntegrityColumnsCarryTheirRulingInTheCatalog`, both sub-legs |
+
+**M5 and M6 are one mutation applied to each half in turn**, and that pair is
+the whole point of enforcing twice. Either alone leaves the two lists
+disagreeing, and the two failure sentences name the two different defects: a
+422 the client never sees, and a 422 that passes followed by an INSERT that
+raises and reaches the client as a 500 with no field on it.
+
+### The store
+
+| # | mutation | reddens |
+|---|---|---|
+| M9 | `WHERE media_objects.uploaded_at IS NULL` dropped from the conflict branch | `TestReBeginningACommittedObjectCannotRestateWhatItIs` (*the committed row now reads 999999 \| image/png*, and again off disk) **and** `TestTheSuppressedConflictBranchEmitsNoRowAtAll` (*emitted 1 row(s)*) |
+| M10 | the cover check goes back to bare existence | `TestATripCannotWearACoverWhoseBytesHaveNotLanded`, `TestPutTripRefusesACoverThatWasNeverUploaded/an_object_begun_and_never_uploaded` |
+| M11 | the cover check refuses EVERYTHING (`AND false`) | `TestATripCannotWearACoverWhoseBytesHaveNotLanded`'s **POSITIVE** half, `TestPutTripAcceptsACoverThatHasBeenUploaded` |
+
+**M11 is the one v6 warned about and the only one that proves the leg is not
+vacuous.** "An uncommitted asset is refused" is satisfied perfectly by a
+validator that refuses everything; M11 is that validator, and it reddens the
+positive half and nothing else. M9 reddening TWO legs is not redundancy: one is
+about the row's contents and one is about `RETURNING` emitting no row at all,
+which is the reason the store does a separate SELECT.
+
+### The routes
+
+| # | mutation | reddens |
+|---|---|---|
+| M12 | a fifth header signed into the PUT and left out of `uploadHeaders` | `TestTheUploadHeadersAreExactlyTheHeadersTheSignatureCovers`, printing both sets |
+| M13 | `Cache-Control: no-store, private` dropped from `CapabilityHeaders` | `TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem`, on `POST /v1/media` and `POST /v1/media/mint` and on neither other row |
+| M14 | `alreadyExists` derived from row existence rather than `uploaded_at` | `TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset` (*alreadyExists = true on a first begin*), `TestASecondBeginAnswersAlreadyExistsAndMintsNoSecondUploadURL` |
+| M15 | `response-content-disposition` dropped from `PresignGet`, in both implementations | `TestEveryMintedReadURLIsMarkedAsADownload`, on both URLs |
+| M16 | the commit stops comparing `got.SHA256` with the address | `TestACommitRefusesAnObjectThatCarriesNoStoredChecksum`: *commit of an object with no stored checksum = 200 … want 409* |
+| M17 | the commit stops comparing `got.ContentType` with the row's | `TestACommitRefusesAnObjectStoredAsSomethingElse`: *commit of an object stored as image/png behind a row declaring image/jpeg = 200 … want 409* |
+| M18 | the commit stops comparing `got.Size` with the row's | `TestACommitRefusesAnObjectOfADifferentSize`: *commit of 50 bytes behind a row declaring 51 = 200 … want 409* |
+
+**M16 is DEC-98's free half turning the ban into a runtime guard.** An object
+uploaded through either banned presign call carries NO stored checksum, so a
+commit that requires a non-empty matching value refuses it at the moment it
+would otherwise become referenceable. What makes that branch reachable from a
+test is `media.Memory.PutWithoutChecksum`, which exists for this and for
+nothing else — without it the check is a branch no leg can enter, and the
+"load-bearing" emptiness `Attributes.SHA256`'s comment claims is a claim
+nothing checks.
+
+### The defect R3 found by running rather than by reading
+
+The fake auth store in `internal/httpapi` minted `traveller-1`. `travellers.id`
+is a `uuid` column, and `media.Address` refuses anything that is not one —
+because the traveller is a **path segment** in the bucket, so a value that
+could carry a `/`, a `.` or a `%` would let one traveller's key reach outside
+their own prefix. Every media route answered:
+
+```
+500 {"code":"internal"}
+err="media: \"traveller-1\" is not a traveller uuid, and the traveller is a path segment"
+```
+
+No unit test in this package had ever needed a well-formed traveller id, so the
+fixture had been wrong since VS6 and nothing could see it.
+
+### And two the record phase found in R3's own comments
+
+`scripts/slice-arc.sh record` walks every repo-relative path named in a comment
+and asserts it is in the tree. It caught a Go type written as
+`internal/logbook.Service` and a brace expansion over two testdata files, both
+of which read as paths that do not exist. That check exists because VS1-FIXES
+found a Dockerfile comment citing two files that had never existed; it has now
+caught its author twice.
+
+### The arc, and what it proves that `go test` cannot
+
+`make slice` from cold, under its own `COMPOSE_PROJECT_NAME`, exit 0, **107
+assertions** (`grep -c "     ok "` over the run). R2 recorded 80.
+
+Seven new steps, A16-A22, plus four assertions added to A15. The two things
+only this tier can say:
+
+- **The routes are in the running container.** VS6 and VS7 both shipped routes
+  green in `go test` and answering 404 in the container.
+- **A URL this server minted is a URL a client can use.** The handler legs run
+  against `media.Memory`, whose URLs are `memory.invalid` by construction, so
+  nothing in `go test ./...` had ever put a byte through a real SigV4
+  signature. Everything about that signature is decided by the HOST it covers,
+  and DEC-42's two addresses are two variables that can be swapped with every
+  unit test still green.
+
+A15's four new assertions are the only ones in this repository that cross both
+halves of a restart: the `media_objects` row lives in `pgdata` and the bytes
+live in `miniodata`, and a `down` that kept one and lost the other is a
+reference that resolves and points at nothing, with no error anywhere.
+
+### What R3 leaves guarded by nothing
+
+- **`MEDIA_MAX_BYTES`'s DEPLOYED value.** R2 recorded it as "loaded, bounded
+  and read by nothing"; R3's route reads it, and a leg proves a body over the
+  bound is refused *before anything is minted*. Nothing pins **26214400**. Set
+  it to `1 << 20` and the whole suite is green and a 5 MB photograph is
+  refused. Same hole R1 recorded for `REQUEST_TIMEOUT` and R2 for
+  `S3_PRESIGN_TTL_PUBLIC` — now **five** variables wide.
+- **`MaxMintIDs` at 100.** The bound is asserted through the constant, so it is
+  self-consistent by construction and the number is defended by nothing. The
+  derivation is in the comment (a presigned URL is 394 characters, so 100 ids
+  is roughly 39 kB) and nothing measures it against a real grid.
+- **The 201-on-both-paths decision.** Every leg reads `alreadyExists` off the
+  body; changing begin's status to 200 on the conflict path reddens exactly one
+  assertion in the arc and nothing in `go test`. That is deliberate — the body
+  is the contract — but it is stated rather than implied.
+- **Nothing, on the four commit checks — and that entry was WRONG when it was
+  first written here.** The draft of this section said the content-type check
+  "has no mutation proof of its own, because `media.Memory.Put` stores the type
+  from the same `Upload` the row was built from". It does not: `Put` stores the
+  type it is HANDED, which is what a bucket does, so the twin produces the
+  disagreement in one line and M17 and M18 both redden. Two legs and two
+  mutations were added rather than the claim being left standing. **Recording
+  it because it is this project's named recurring defect in its purest form:**
+  a "guarded by nothing" entry written from reading rather than from running,
+  which would have made a real guard look absent to the next reader and invited
+  its deletion.
+- **Real S3, still.** Every code asserted is MinIO's, and `412
+  PreconditionFailed` on a second PUT is now measured through the whole arc
+  rather than only in `internal/media` — but only against MinIO.
+
+---
+
 ## What is still guarded by nothing
 
 Carried forward so the list does not shorten by silence, with what VS8 moved

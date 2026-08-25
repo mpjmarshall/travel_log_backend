@@ -641,3 +641,59 @@ func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 		t.Fatalf("the control commit = %d %s, want 200", ok.status, ok.body)
 	}
 }
+
+// THE COMMIT REFUSES AN OBJECT STORED AS SOMETHING OTHER THAN WHAT THE ROW
+// DECLARES (DEC-87's other half).
+//
+// DEC-87 signs Content-Type into the PUT, so on a correctly-signed upload this
+// disagreement cannot arise — which is exactly why it is worth a leg. The
+// check is what holds if DEC-87 is ever relaxed by somebody who has not read
+// the ruling, and a branch that only a future mistake can reach is a branch
+// nothing would notice being deleted.
+//
+// The twin can produce the state because `Put` stores the type it is HANDED
+// rather than the type the row declares, which is also what a bucket does.
+func TestACommitRefusesAnObjectStoredAsSomethingElse(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	traveller := h.travellerID(t, token)
+
+	digest := digestOf(fixtureBytes)
+	// The ROW says jpeg.
+	h.do(t, http.MethodPost, "/v1/media", beginRequest(digest, len(fixtureBytes), "image/jpeg"), token)
+	// The OBJECT is png.
+	if err := h.objects.Put(
+		media.Key{Traveller: traveller, Object: digest},
+		media.Upload{SHA256: digest, ByteSize: int64(len(fixtureBytes)), ContentType: "image/png"},
+		fixtureBytes); err != nil {
+		t.Fatalf("uploading through the twin: %v", err)
+	}
+
+	got := h.do(t, http.MethodPost, "/v1/media/"+digest+"/commit", "", token)
+	if got.status != http.StatusConflict {
+		t.Fatalf("commit of an object stored as image/png behind a row declaring "+
+			"image/jpeg = %d %s, want 409 — the row is what the allowlist "+
+			"constrains, and the OBJECT is what the bucket serves",
+			got.status, got.body)
+	}
+}
+
+// AND THE SIZE, WHICH IS THE SAME SHAPE. The signature pins the exact declared
+// length, so this is another branch a correctly-signed upload cannot reach —
+// and the one that would matter if a row were ever rewritten under a committed
+// object, which is what the conflict branch's WHERE exists to stop.
+func TestACommitRefusesAnObjectOfADifferentSize(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	traveller := h.travellerID(t, token)
+
+	digest := digestOf(fixtureBytes)
+	h.do(t, http.MethodPost, "/v1/media", beginRequest(digest, len(fixtureBytes)+1, "image/png"), token)
+	h.uploadBytes(t, traveller, digest, fixtureBytes)
+
+	got := h.do(t, http.MethodPost, "/v1/media/"+digest+"/commit", "", token)
+	if got.status != http.StatusConflict {
+		t.Fatalf("commit of %d bytes behind a row declaring %d = %d %s, want 409",
+			len(fixtureBytes), len(fixtureBytes)+1, got.status, got.body)
+	}
+}
