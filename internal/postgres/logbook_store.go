@@ -1,4 +1,19 @@
-// The storage half of logbook.Store, and the six queries one read is made of.
+// The storage half of logbook.Store, and the TEN queries one read is made of.
+//
+// TEN, NOT SIX, AND THE CORRECTION IS WORTH MORE THAN THE NUMBER (DEC-102).
+// This line said "six queries" from the day it was written, and six is the
+// count of LISTS in the document rather than of statements: read_tx.go's "six
+// lists" is a fair description of the payload and this was a COUNT, so this
+// one was wrong. Measured with pg_stat_statements reset around exactly one
+// whole-log read, each `calls = 1`: photos, visits, trip_cities, places,
+// cities, trips, walk_points, walks, logbook_version, traveller name. It is
+// also what makes the ~3ms 304 legible — nine round trips at roughly 0.3ms
+// against 0.176ms of server work, so the cost is round trips and not work.
+//
+// AND THE SPLIT, SO NOBODY OPTIMISES THE WRONG HALF: at 100x fixture scale,
+// 37.06ms of a 61.20ms read is Postgres and 24.1ms is row-to-struct scanning
+// through database/sql. The query plans are already sane and the planner is
+// right to decline indexes on the small tables.
 //
 // EVERY ONE OF THEM RUNS INSIDE ONE REPEATABLE-READ SNAPSHOT, and the version
 // was read inside it before any of them (read_tx.go). Under READ COMMITTED
@@ -39,6 +54,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"travellog/internal/logbook"
 )
@@ -241,12 +257,21 @@ func readVisits(ctx context.Context, tx *sql.Tx, travellerID string) (map[string
 	out := map[string][]logbook.Visit{}
 	for rows.Next() {
 		var v logbook.Visit
-		var at sql.NullTime
+		// THE THREE NOT NULL DATE COLUMNS ARE SCANNED INTO time.Time DIRECTLY
+		// (DEC-102). They were `sql.NullTime` with `.Valid` never checked,
+		// which is correct only while the constraint holds — and the
+		// constraint was doing 100% of the work while this same file is
+		// careful with `instantOrNil` and with `if lat.Valid && lng.Valid`.
+		// The failure it hid: a NULL scans as the zero time, the emitter
+		// writes `0001-01-01T00:00:00.000Z`, `DateTime.parse` accepts it
+		// happily, and every screen renders a year-1 date with nothing
+		// reporting a fault. Into time.Time the driver errors instead.
+		var at time.Time
 		var note sql.NullString
 		if err := rows.Scan(&v.ID, &v.PlaceID, &v.TripID, &at, &note); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a visit: %w", err)
 		}
-		v.At = logbook.At(at.Time)
+		v.At = logbook.At(at)
 		v.Note = textOrNil(note)
 		out[v.PlaceID] = append(out[v.PlaceID], v)
 	}
@@ -263,7 +288,10 @@ func readPhotos(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.
 	var out []logbook.Photo
 	for rows.Next() {
 		var p logbook.Photo
-		var takenAt, filedLater sql.NullTime
+		// taken_at is NOT NULL and is scanned as such; filed_later is
+		// nullable and keeps its sql.NullTime. DEC-102.
+		var takenAt time.Time
+		var filedLater sql.NullTime
 		var placeID, visitID, caption sql.NullString
 		var lat, lng sql.NullFloat64
 		var accuracy sql.NullInt64
@@ -271,7 +299,7 @@ func readPhotos(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.
 			&placeID, &visitID, &caption, &lat, &lng, &accuracy, &filedLater); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a photo: %w", err)
 		}
-		p.TakenAt = logbook.At(takenAt.Time)
+		p.TakenAt = logbook.At(takenAt)
 		p.PlaceID, p.VisitID, p.Caption = textOrNil(placeID), textOrNil(visitID), textOrNil(caption)
 		p.FiledLater = instantOrNil(filedLater)
 		p.AccuracyMetres = intOrNil(accuracy)
@@ -298,13 +326,14 @@ func readWalks(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.W
 	var out []logbook.Walk
 	for rows.Next() {
 		var w logbook.Walk
-		var recordedOn sql.NullTime
+		// recorded_on is NOT NULL. DEC-102.
+		var recordedOn time.Time
 		var name sql.NullString
 		if err := rows.Scan(&w.ID, &w.TripID, &w.CityID, &recordedOn, &w.DistanceKm,
 			&name, &w.Dismissed); err != nil {
 			return nil, fmt.Errorf("postgres: scanning a walk: %w", err)
 		}
-		w.RecordedOn = logbook.At(recordedOn.Time)
+		w.RecordedOn = logbook.At(recordedOn)
 		w.Name = textOrNil(name)
 		w.Points = points[w.ID]
 		out = append(out, w)

@@ -103,6 +103,11 @@ func Emit(formatVersion int, doc Document) (Envelope, error) {
 // response, which the phone splices into its cached log rather than
 // re-fetching 85 KB.
 //
+// (That "85 KB" was the CLIENT's file on disk. Through this build the same log
+// emits 95,586 bytes once DEC-46's object ids are in it — measured, see
+// TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch. The argument
+// does not change; the number is bigger and grows with the photograph count.)
+//
 // IT EXISTS BECAUSE THE WRITE PATH DOES NOT GO THROUGH Emit AND THAT COST A
 // DEFECT. Measured against the running server before the fix:
 // `PUT /v1/trips/kyoto` with an empty cityIds answered

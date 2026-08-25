@@ -542,7 +542,9 @@ func TestAPutCarryingShareCoordinatesLeavesTheFlagAlone(t *testing.T) {
 }
 
 // THE SPLICE LEG (V4-B1). A phone that PUTs a trip splices the returned entity
-// into its cached document rather than re-fetching 85 KB (DEC-32). If the two
+// into its cached document rather than re-fetching the whole log — 95,586 bytes
+// at fixture scale through this build, measured, and NOT the 85,422 of the
+// client's own file (DEC-32, DEC-102). If the two
 // disagree, the cache is wrong and nothing on either side finds out.
 //
 // It compares DECODED DOCUMENTS rather than bytes, because DEC-30 disclaims
@@ -852,5 +854,106 @@ func TestAGenuineFaultIsStill500WithNoRetryAfter(t *testing.T) {
 	if retry := got.header.Get("Retry-After"); retry != "" {
 		t.Errorf("Retry-After = %q on a handler fault — retrying a poison request "+
 			"fails identically for ever", retry)
+	}
+}
+
+// === DEC-101, and it is a rule for R5-R8 rather than a fact about this file ===
+
+// EVERY 500 EMITS EXACTLY ONE ERROR LINE CARRYING THE requestId AND THE
+// UNDERLYING ERROR, AND THE LEG COUNTS LINES RATHER THAN GREPPING FOR ONE.
+//
+// A grep passes against a handler that logs the same failure three times from
+// three layers, which is how a 3am log becomes unreadable; and it passes
+// against a handler that logs nothing, if any OTHER line happens to match. So
+// the assertion is a count. `auth_handlers.go` already did this and it was
+// observed working under a killed Postgres, joined by requestId; R5-R8 write
+// fourteen more handlers, and a 500 whose only line is the access line is a
+// dead end.
+func TestEvery500EmitsExactlyOneErrorLine(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	h.logs.Reset()
+	h.logbook.failWith = errors.New("sql: Scan error on column index 3")
+
+	got := h.get(t, "/v1/logbook", token, nil)
+	if got.status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 — this leg is about the 500's LOG", got.status)
+	}
+
+	var errorLines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("a log line is not JSON: %q", line)
+		}
+		// THE ACCESS LINE IS NOT ONE OF THEM, and excluding it is a
+		// definition rather than a convenience: a 500's access line is
+		// already at ERROR (accessLevel), and it carries no `err` — DEC-101
+		// asks for the line that carries the requestId AND THE UNDERLYING
+		// ERROR, which is the diagnostic one. Counting both would make the
+		// answer two for a correct handler and the leg meaningless.
+		if _, isAccess := decoded["durationUs"]; isAccess {
+			continue
+		}
+		if decoded["level"] == "ERROR" {
+			errorLines = append(errorLines, decoded)
+		}
+	}
+	if len(errorLines) != 1 {
+		t.Fatalf("%d diagnostic ERROR lines for one 500, want exactly 1 — a grep "+
+			"would have passed against both 0 and 3:\n%s",
+			len(errorLines), h.logs.String())
+	}
+	line := errorLines[0]
+	if id, _ := line["requestId"].(string); id == "" {
+		t.Errorf("the ERROR line carries no requestId, so nothing joins it to the "+
+			"access line: %v", line)
+	}
+	if detail, _ := line["err"].(string); !strings.Contains(detail, "Scan error") {
+		t.Errorf("the ERROR line does not carry the underlying error: %v — the "+
+			"body cannot, so this is the only place the detail exists", line)
+	}
+}
+
+// AND THE ACCESS LINE NAMES THE ROUTE PATTERN AND THE TRAVELLER, through the
+// real Mount and the real auth middleware rather than through a hand-recorded
+// slot. The httpx legs prove the mechanism; this proves the WIRING, which is
+// the half that was missing — `route` comes from the table in Mount and
+// `travellerId` from RequireTraveller, and neither is reachable from httpx.
+func TestTheAccessLineForARealRouteNamesThePatternAndTheTraveller(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	h.logs.Reset()
+
+	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
+		t.Fatalf("PUT = %d %s", got.status, got.body)
+	}
+
+	var access map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			continue
+		}
+		if _, isAccess := decoded["durationUs"]; isAccess {
+			access = decoded
+		}
+	}
+	if access == nil {
+		t.Fatalf("no access line:\n%s", h.logs.String())
+	}
+	if access["route"] != "PUT /v1/trips/{id}" {
+		t.Errorf("route = %v, want the matched pattern — `path` alone is the raw "+
+			"URL, so every trip is its own line and nothing aggregates",
+			access["route"])
+	}
+	if access["path"] != "/v1/trips/kyoto" {
+		t.Errorf("path = %v, want the raw path beside the pattern", access["path"])
+	}
+	if id, _ := access["travellerId"].(string); id == "" {
+		t.Errorf("no travellerId on an authenticated line: %v", access)
 	}
 }

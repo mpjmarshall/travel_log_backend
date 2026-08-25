@@ -594,3 +594,75 @@ func firstDifferences(t *testing.T, got, want map[string]any, limit int) []strin
 	walk("logbook", any(got), any(want))
 	return out
 }
+
+// THE SIZE PREMISE, MEASURED THROUGH THIS BUILD RATHER THAN CARRIED (DEC-102).
+//
+// Every size argument in the plan carried 85,422 bytes, which is the CLIENT's
+// format-1 file on disk — a fact about `testdata/client_sample_log.json` and
+// NOT about what this server sends. Two things make the emitted body bigger,
+// and both are structural rather than incidental: DEC-46 replaces 31-32
+// character bundle paths with 64-hex object ids on `Photo.asset` and the three
+// coverAssets, and DEC-91 adds `shared` to every trip. The drift GROWS with the
+// photograph count, which is why carrying the old number understates every
+// argument that rests on it — DEC-31's conditional read most of all.
+//
+// SO THE LEG COMPUTES IT INSTEAD OF ASSERTING A CONSTANT. A byte count written
+// down here would be a number to be wrong about; what is asserted is the
+// RELATIONSHIP — the emitted body is larger than the client's file, and the
+// object-id form is larger again — and the numbers are logged so a reader gets
+// the measurement without a leg that reddens on an unrelated change.
+func TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch(t *testing.T) {
+	clientFile, err := os.ReadFile(clientFixture)
+	if err != nil {
+		t.Fatalf("reading %s: %v", clientFixture, err)
+	}
+	doc := clientDocument(t)
+
+	asIs := len(emitted(t, doc))
+	withObjectIDs := len(emitted(t, withContentAddresses(doc)))
+
+	t.Logf("the client's file on disk:            %d bytes", len(clientFile))
+	t.Logf("emitted through THIS build, as-is:    %d bytes", asIs)
+	t.Logf("emitted with DEC-46 object ids:       %d bytes", withObjectIDs)
+
+	if asIs <= len(clientFile) {
+		t.Errorf("the emitted body is %d bytes against a %d-byte client file — "+
+			"DEC-91's `shared` alone makes it bigger, so an argument resting on "+
+			"the file size is understating the wire", asIs, len(clientFile))
+	}
+	if withObjectIDs <= asIs {
+		t.Errorf("object ids made the body SMALLER (%d against %d) — a 64-hex id is "+
+			"longer than every bundle path in the fixture, so this cannot happen "+
+			"unless the substitution did nothing", withObjectIDs, asIs)
+	}
+}
+
+// withContentAddresses is the fixture as it will be AFTER DEC-46: every asset
+// locator a 64-character hex object id. It is a size experiment and nothing
+// else — the ids are not real digests and nothing reads them.
+func withContentAddresses(doc logbook.Document) logbook.Document {
+	id := func(n int) string {
+		return fmt.Sprintf("%064x", n)
+	}
+	n := 0
+	next := func() string { n++; return id(n) }
+	swap := func(p **string) {
+		if *p != nil {
+			v := next()
+			*p = &v
+		}
+	}
+	for i := range doc.Photos {
+		doc.Photos[i].Asset = next()
+	}
+	for i := range doc.Trips {
+		swap(&doc.Trips[i].CoverAsset)
+	}
+	for i := range doc.Cities {
+		swap(&doc.Cities[i].CoverAsset)
+	}
+	for i := range doc.Places {
+		swap(&doc.Places[i].CoverAsset)
+	}
+	return doc
+}

@@ -253,9 +253,14 @@ func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
 // /healthz and none of them about auth; a second required parameter would have
 // edited all twelve to pass a nil they do not care about, and an edit that
 // large across legs it does not concern is how a leg gets changed by accident.
+// healthzPath is written once because two things read it: the route below and
+// the access log's quiet list. Two spellings would mean a probe that is
+// mounted and never demoted.
+const healthzPath = "/healthz"
+
 func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthzHandler(db, log))
+	mux.HandleFunc("GET "+healthzPath, healthzHandler(db, log))
 	for _, mount := range mounts {
 		mount(mux)
 	}
@@ -347,7 +352,13 @@ func serverChain(mux *http.ServeMux, log *slog.Logger, requestTimeout time.Durat
 	return httpx.Chain(mux,
 		httpx.Recover(log),
 		httpx.RequestID(),
-		httpx.AccessLog(log),
+		// `/healthz` IS DEMOTED TO Debug WHILE IT IS HEALTHY (DEC-101). The
+		// container probes it every five seconds for ever; the disk cost is
+		// survivable anywhere and the SIGNAL cost is a 20:1 dilution of the
+		// one file you read at 3am. A probe that FAILS is still an ERROR line,
+		// because that is the most interesting line in the file — see
+		// accessLevel, where the failure branch is checked first.
+		httpx.AccessLog(log, healthzPath),
 		httpx.RetryAfter(),
 		httpx.Timeout(requestTimeout),
 		httpx.Compress(),

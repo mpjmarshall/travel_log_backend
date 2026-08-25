@@ -913,3 +913,121 @@ func revokeShareLink(t *testing.T, db *sql.DB, travellerID, tripID string) {
 		t.Fatalf("revoking the link on %s moved %d rows, want 1", tripID, n)
 	}
 }
+
+// === DEC-102: a NULL date is a driver error, not a year-1 date ===
+
+// `v.At`, `p.TakenAt` and `w.RecordedOn` were read out of `sql.NullTime` with
+// `.Valid` NEVER CHECKED. Correct today because all three columns are NOT
+// NULL — but the constraint was doing 100% of the work, and the same file is
+// careful with `instantOrNil` and with `if lat.Valid && lng.Valid`, so the
+// asymmetry read as an oversight rather than as a decision.
+//
+// WHAT A NULL PRODUCED IS THE POINT. `sql.NullTime`'s zero value is
+// `0001-01-01T00:00:00Z`, which the emitter renders as
+// `0001-01-01T00:00:00.000Z` — and `DateTime.parse` accepts that happily, so
+// every screen renders a year-1 date and nothing anywhere reports a fault.
+// Scanned into `time.Time` the driver errors instead, which is the honest
+// answer to a column that has lost its constraint.
+//
+// IT IS WRITTEN AS A MUTATION-SHAPED LEG because there is no way to reach the
+// branch through the real schema: the leg DROPS the NOT NULL in its own
+// scratch schema, inserts a NULL, and asserts the READ errors. That is a claim
+// about the scan and not about the schema, which is why the schema is bent
+// rather than the Go.
+func TestANullDateColumnIsADriverErrorAndNotAYearOneDate(t *testing.T) {
+	for _, tc := range []struct{ table, column, what string }{
+		{"visits", "at", "a visit's date, which is the day its photographs were taken"},
+		{"photos", "taken_at", "the day a photograph was taken"},
+		{"walks", "recorded_on", "the day a track was recorded"},
+	} {
+		t.Run(tc.table+"."+tc.column, func(t *testing.T) {
+			store, db, _ := logbookStore(t)
+			id := aTraveller(t, db)
+			ctx := context.Background()
+			aCity(t, db, id, "kyoto", "Kyoto")
+			aMediaObject(t, db, id, anAsset)
+			if _, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+				ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"),
+				CityIDs: ptr([]string{"kyoto"}),
+			}); err != nil {
+				t.Fatalf("PutTrip: %v", err)
+			}
+			aPlace(t, db, id, "fushimi", "kyoto")
+
+			if _, err := db.ExecContext(ctx,
+				`ALTER TABLE `+tc.table+` ALTER COLUMN `+tc.column+` DROP NOT NULL`); err != nil {
+				t.Fatalf("dropping NOT NULL on %s.%s: %v", tc.table, tc.column, err)
+			}
+			insertWithNullDate(t, db, id, tc.table)
+
+			_, err := store.Read(ctx, id, always)
+			if err == nil {
+				t.Fatalf("the read succeeded with a NULL %s.%s — the emitter then "+
+					"writes 0001-01-01T00:00:00.000Z, which DateTime.parse accepts "+
+					"happily and every screen renders as %s in year one",
+					tc.table, tc.column, tc.what)
+			}
+		})
+	}
+}
+
+// AND THE CONTROL. The same fixture with the constraint intact reads fine, so
+// the leg above is about the NULL and not about the ALTER.
+func TestTheSameFixtureReadsCleanlyWithTheConstraintIntact(t *testing.T) {
+	store, db, _ := logbookStore(t)
+	id := aTraveller(t, db)
+	ctx := context.Background()
+	aCity(t, db, id, "kyoto", "Kyoto")
+	aMediaObject(t, db, id, anAsset)
+	if _, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
+		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"),
+		CityIDs: ptr([]string{"kyoto"}),
+	}); err != nil {
+		t.Fatalf("PutTrip: %v", err)
+	}
+	aPlace(t, db, id, "fushimi", "kyoto")
+	for _, table := range []string{"visits", "photos", "walks"} {
+		insertDatedRow(t, db, id, table)
+	}
+	if _, err := store.Read(ctx, id, always); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+}
+
+func insertWithNullDate(t *testing.T, db *sql.DB, travellerID, table string) {
+	t.Helper()
+	var statement string
+	switch table {
+	case "visits":
+		statement = `INSERT INTO visits (traveller_id, id, place_id, trip_id, ordinal, at)
+			VALUES ($1::uuid, 'visit-null', 'fushimi', 'autumn-crossing', 0, NULL)`
+	case "photos":
+		statement = `INSERT INTO photos (traveller_id, id, trip_id, city_id, taken_at, asset)
+			VALUES ($1::uuid, 'photo-null', 'autumn-crossing', 'kyoto', NULL, '` + anAsset + `')`
+	case "walks":
+		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
+			VALUES ($1::uuid, 'walk-null', 'autumn-crossing', 'kyoto', NULL, 1.2, '[]'::jsonb)`
+	}
+	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
+		t.Fatalf("inserting a NULL-dated row into %s: %v", table, err)
+	}
+}
+
+func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
+	t.Helper()
+	var statement string
+	switch table {
+	case "visits":
+		statement = `INSERT INTO visits (traveller_id, id, place_id, trip_id, ordinal, at)
+			VALUES ($1::uuid, 'visit-ok', 'fushimi', 'autumn-crossing', 0, '2027-09-19T04:12:00Z')`
+	case "photos":
+		statement = `INSERT INTO photos (traveller_id, id, trip_id, city_id, taken_at, asset)
+			VALUES ($1::uuid, 'photo-ok', 'autumn-crossing', 'kyoto', '2027-09-19T04:12:00Z', '` + anAsset + `')`
+	case "walks":
+		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
+			VALUES ($1::uuid, 'walk-ok', 'autumn-crossing', 'kyoto', '2027-09-19', 1.2, '[]'::jsonb)`
+	}
+	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
+		t.Fatalf("inserting a dated row into %s: %v", table, err)
+	}
+}
