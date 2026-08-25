@@ -842,6 +842,38 @@ phase_arc() {
 	assert_eq 200 "$code" "GET the re-minted URL — miniodata survived too"
 	assert_eq "$ARC_PHOTO" "$(cat "$WORK/fetched")" "the bytes, after a full teardown"
 	ok "the log outlived the stack"
+
+	########################################################################
+	# A23: `make seed` REFUSES A DATABASE THAT HAS A TRAVELLER (DEC-97).
+	#
+	# THE ONLY PLACE THE COMMAND ITSELF IS EXERCISED. internal/seed's legs are
+	# about FromDocument and Load; this is the binary, its flags, its refusal
+	# and its exit code, against a real database in a real stack.
+	#
+	# AND IT IS WHY THE PLAN'S OWN ACCEPTANCE ORDER CANNOT BE RUN IN ONE
+	# PROJECT. DEC-92 reorders the five acceptance checks to
+	# `make check && make slice && make seed` so the documented procedure stops
+	# teaching "seed, then wipe" — but the arc ENDS with a registered traveller,
+	# so a seed against the same project refuses, correctly, every time. The
+	# order is right and the two commands belong to two stacks: slice under its
+	# own COMPOSE_PROJECT_NAME, seed against the one holding the log.
+	#
+	# The row count is asserted rather than the exit code alone, because a
+	# refusal with a mutation behind it is the failure this is about.
+	########################################################################
+	step "A23: make seed refuses this database, and changes nothing"
+	local trips_before trips_after seed_code
+	trips_before="$(in_psql "select count(*) from trips" | tr -d "[:space:]")"
+	set +e
+	( cd "$REPO" && make seed ) >"$WORK/seed" 2>&1
+	seed_code=$?
+	set -e
+	assert_eq 2 "$seed_code" "make seed's exit code against a database with a traveller"
+	assert_contains "$(cat "$WORK/seed")" "already has a traveller" "the refusal"
+	assert_contains "$(cat "$WORK/seed")" "$ARC_EMAIL" "the refusal names the traveller it found"
+	assert_contains "$(cat "$WORK/seed")" "127.0.0.1" "the refusal names the database it was pointed at"
+	trips_after="$(in_psql "select count(*) from trips" | tr -d "[:space:]")"
+	assert_eq "$trips_before" "$trips_after" "trips across the refusal"
 }
 
 ########################################################################

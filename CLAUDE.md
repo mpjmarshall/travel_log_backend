@@ -4689,6 +4689,28 @@ inconsistency rather than the pattern.
   grep cannot make. Safe to invoke, because the refusal is the statement
   *before* `down -v`. R5 is the other direction, so "refuse always" fails too.
 
+### THE REORDER IS RIGHT AND THE FIVE LINES ARE STILL NOT A SCRIPT
+
+DEC-92 reorders R4..R8's acceptance checks to `make check && make slice &&
+make seed`, and `scripts/check-plan.py` enforces it. **Run verbatim in one
+compose project, the new order cannot produce a successful seed**: the arc
+registers `arc@travellog.test` at A3 — which is the basis of everything it
+asserts afterwards — so the seed meets DEC-97's predicate and refuses. Measured,
+in that order, in one project: `check=0, slice=0, seed=2, seed=2, go test=0`.
+
+That is the guard working rather than a defect, and the answer is the one DEC-92
+already gives: **the two commands belong to two stacks.** `make slice` under its
+own `COMPOSE_PROJECT_NAME`, `make seed` against the one holding the log. The
+reorder fixes the sentence it was written for — the documented procedure no
+longer teaches "seed, then wipe" — and it does not make the five lines runnable
+top to bottom. `scripts/slice-arc.sh`'s A23 says so where somebody will be
+standing.
+
+**A23 IS ALSO THE ONLY PLACE THE COMMAND ITSELF IS EXERCISED.** `internal/seed`'s
+legs are about `FromDocument` and `Load`; A23 is the binary, its flags, its
+refusal, its exit code and its unchanged row count, against a real database in a
+running stack.
+
 ### THE BACKUP HAS BEEN RESTORED, AND THE PROOF IS NOT A ROW COUNT
 
 `make backup` is `pg_dump -Fc` **inside the container**, so client and server
@@ -4798,12 +4820,13 @@ itself.
 - **`make backup`'s ROTATION beyond one file.** Keep-7 is written and the
   rehearsal produced one dump, so the `tail -n +8` branch has been read and not
   executed. A human with eight days.
-- **`make seed` ITSELF, in `go test`.** The ten legs in `internal/seed` are
-  about `FromDocument` and `Load`. The COMMAND — its two refusals, its printed
-  report, its generated passphrase, its upload, its 412 branch — is guarded by
-  having been run by hand, twice, with the output in `docs/EVIDENCE.md`. The
-  arc does not run it either, and that is the honest gap: it is the same tier
-  as the iOS manifest flags in the client.
+- **`make seed`'s SUCCESS PATH.** The arc's A23 runs the command and proves the
+  REFUSAL — exit code, message, traveller, database, unchanged row count. **The
+  loading half is guarded by having been run by hand**, with the output in
+  `docs/EVIDENCE.md`, and it cannot be added to the arc as it stands: the arc
+  registers a traveller at A3, so a successful seed and the arc are mutually
+  exclusive in one project by construction. The generated passphrase, the two
+  uploads and the 412 branch are all on that side of the line.
 - **`-skip-media`.** It writes the `media_objects` rows without the bytes,
   which is a log whose covers all 404 at mint. Nothing asserts what it does and
   nothing passes it; saying so is the whole of its guard.

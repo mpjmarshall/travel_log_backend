@@ -668,6 +668,40 @@ carries `name: travellog`, so the live project is the default whether or not
 anybody set anything — a guard reading the variable would pass a bare
 `make slice` straight through.
 
+### THE REORDERED ACCEPTANCE CHECK, RUN VERBATIM, IN ONE PROJECT
+
+DEC-92 reorders R4..R8's acceptance checks from `make seed && make check &&
+make slice` to `make check && make slice && make seed`, so the documented
+procedure stops teaching a developer that seeding and then wiping is normal.
+`scripts/check-plan.py` enforces it. **Run verbatim in ONE compose project, the
+new order cannot produce a successful seed** — and that is the guard working
+rather than a defect:
+
+```
+COMPOSE_PROJECT_NAME=travellog-r4acc API_PORT=8087 POSTGRES_PORT=5466 MINIO_PORT=9007
+
+make check                                    exit=0
+make slice                                    exit=0   (five phases green)
+make seed                                     exit=2   <- refuses
+make seed                                     exit=2   <- refuses
+go test ./internal/seed/ ./internal/postgres/ exit=0
+
+  make seed: seed: this database already has a traveller — id 2ee2984e…,
+  arc@travellog.test.
+      the database: postgres://travellog:xxxxx@127.0.0.1:5466/travellog?sslmode=disable
+      the traveller: 2ee2984e-e5ce-4014-bd35-30dee48dd158 <arc@travellog.test>
+```
+
+**The arc ENDS by registering a traveller** — `arc@travellog.test`, at A3, which
+is the whole basis of everything it asserts afterwards. So a seed against the
+same project meets DEC-97's predicate and refuses, correctly, every time.
+
+**The two commands belong to two stacks, and DEC-92 already says so**: `make
+slice` under its own `COMPOSE_PROJECT_NAME`, `make seed` against the one holding
+the log. The reorder fixes the sentence it was written for; it does not make the
+five lines a script. `scripts/slice-arc.sh`'s A23 is where that is written down
+in the place somebody will be standing.
+
 ### THE RESTORE REHEARSAL, RUN ONCE, AT `c3699fd`
 
 A backup nobody has restored is not a backup. DEC-92 asks for one restore
@@ -878,10 +912,12 @@ out of it.
   it does, and nothing in `make seed` passes it. It exists so a database-only
   load is possible on a box with no bucket, and saying so is the whole of its
   guard.
-- **`make seed` ITSELF, in `go test`.** The ten legs in `internal/seed` are
-  about `FromDocument` and `Load`; the COMMAND — its two refusals, its printed
-  report, its generated passphrase, its upload — is guarded by having been run
-  by hand, twice, with the output in this file. The arc does not run it either.
+- **`make seed`'s SUCCESS PATH.** The arc's A23 runs the command and proves the
+  REFUSAL. The LOADING half is guarded by having been run by hand, with the
+  output in this file, and it cannot join the arc as it stands: the arc
+  registers a traveller at A3, so a successful seed and the arc are mutually
+  exclusive in one project by construction. The generated passphrase, the two
+  uploads and the 412 branch are all on that side of the line.
 - **The `/dev/tty` half of the image tier's skip notice, against a real
   terminal.** A human with a shell.
 
