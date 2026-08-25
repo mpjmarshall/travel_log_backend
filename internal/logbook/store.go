@@ -35,6 +35,16 @@ var ErrNoTraveller = errors.New("logbook: no such traveller")
 // re-read after an upsert, which must never invent a body.
 var ErrNoTrip = errors.New("logbook: no such trip")
 
+// ErrNoPlace is a place write answering about a row nothing holds — the same
+// re-read-after-upsert case ErrNoTrip exists for.
+//
+// THERE IS NO ErrNoCity BESIDE IT AND THAT IS NOT AN OVERSIGHT. Every route
+// that names a city either creates it (`PUT /v1/cities/{id}`, whose re-read
+// follows its own upsert) or names it as a FIELD of some other write, where an
+// unknown one is `InvalidFieldError{Field: "cityId"}` and a 422 rather than a
+// 404. A sentinel nothing returns is a branch nothing takes.
+var ErrNoPlace = errors.New("logbook: no such place")
+
 // Snapshot is what one read saw. Document is nil when `assemble` said no,
 // which is exactly the 304 path and is what makes "the 304 does not assemble
 // the document" a fact about the type rather than a claim.
@@ -79,6 +89,70 @@ type Store interface {
 	// The refusal is a named field, so the store answers InvalidFieldError
 	// rather than letting travellers_name_present_ck produce a 500.
 	SetTravellerName(ctx context.Context, travellerID, name string) (Traveller, int64, error)
+}
+
+// CityWritten is what `PUT /v1/cities/{id}` answers, and IT CARRIES BOTH
+// SHAPES BECAUSE THE ROUTE HAS BOTH.
+//
+// With `attachTo` the write appends the new id to that trip's `cityIds` in the
+// SAME TRANSACTION, which makes it CASCADING: two entities moved, and the
+// phone cannot splice a trip it was not sent. Without it, one city was created
+// or renamed and DEC-32's bare entity is the right answer.
+//
+// `Document` IS NIL WHEN `attachTo` WAS ABSENT, which makes "which shape did
+// this write earn" a property of the value rather than a second reading of the
+// request the handler has to get right. It is the same device Snapshot uses
+// for the 304.
+type CityWritten struct {
+	City     City
+	Document *Document
+	Version  int64
+}
+
+// CityStore is T5's 'Add a city', declared here and satisfied by
+// internal/postgres.
+//
+// IT IS ITS OWN PORT RATHER THAN TWO MORE METHODS ON Store, on ShareStore's
+// precedent and for the reason stated there: the interface a handler is handed
+// says what that handler can reach. The city handler cannot delete a trip and
+// the trip handler cannot create a city, and neither has to be trusted not to.
+type CityStore interface {
+	// PutCity is createCity, and `attachTo` is what makes it cascading.
+	//
+	// AN `attachTo` NAMING A TRIP THIS LOG DOES NOT HOLD IS A 422 AND NOT A
+	// 404, and the client's own method is why: `createCity` answers null
+	// without writing when `log.trip(attachTo) == null`, so the trip is being
+	// treated as a FIELD of the request rather than as the thing the request
+	// is about. The thing this request is about is the city, and it is in the
+	// path.
+	PutCity(ctx context.Context, travellerID string, w CityWrite) (CityWritten, error)
+}
+
+// PlaceStore is C1's pin and D2's removal, declared here and satisfied by
+// internal/postgres.
+type PlaceStore interface {
+	// PutPlace writes the place and, when the body carried one, the WHOLE
+	// ORDERED visits array — as an UPSERT and never as a delete-then-insert.
+	// See internal/postgres/place_store.go for what that distinction costs.
+	PutPlace(ctx context.Context, travellerID string, w PlaceWrite) (Place, int64, error)
+
+	// RemovePlace is D2, and it ANSWERS THE WHOLE LOG for the reason
+	// DeleteTrip does: the cache cannot splice a cascade. Removing a place
+	// takes its visits either way and then either clears two columns on the
+	// photographs filed there or deletes them outright — rows in three tables
+	// from one request.
+	//
+	// `deletePhotos` IS A BOOL HERE AND A THREE-VALUED TYPE ONE LAYER UP, and
+	// that is deliberate rather than inconsistent. By the time a call reaches
+	// this method the question HAS been answered; what must not have a default
+	// is the REQUEST, and logbook.PhotoDisposition is where that is enforced —
+	// see Service.RemovePlace.
+	//
+	// AN UNKNOWN PLACE IS A SUCCESS AND MOVES NO VERSION, exactly as an
+	// unknown trip is on DeleteTrip: the client's `removePlace` answers true
+	// for an id the log does not hold, because the caller asked for that place
+	// to be absent and it is.
+	RemovePlace(ctx context.Context, travellerID, placeID string, deletePhotos bool) (Snapshot, error)
 }
 
 // ShareStore is H1's three writes, declared here and satisfied by

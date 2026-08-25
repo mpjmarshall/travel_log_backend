@@ -668,12 +668,32 @@ func TestAuthenticateRefusesEveryShapeOfWrongToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewToken: %v", err)
 	}
+
+	// THE "one character changed" CASE HAS TO CHANGE A CHARACTER, and spelling
+	// it as a fixed letter did not. `"Z" + issued.Token[1:]` IS the issued
+	// token whenever the token already begins with Z, and the leg then asserts
+	// that a VALID token is refused — which fails. base64url's alphabet is 64
+	// characters, so it fired on 1.620% of runs, measured over 64,000 tokens
+	// against the 1/64 = 1.5625% the alphabet predicts. It fired twice during
+	// R6's mutation runs, and `make check` is the only gate this project has.
+	//
+	// Derive the substitute from the character it replaces instead of naming
+	// one, so the case cannot degenerate no matter what the token starts with.
+	changedFirst := "Z"
+	if strings.HasPrefix(issued.Token, "Z") {
+		changedFirst = "Y"
+	}
+	changed := changedFirst + issued.Token[1:]
+	if changed == issued.Token {
+		t.Fatal("the \"one character changed\" case did not change a character")
+	}
+
 	for name, token := range map[string]string{
 		"empty":                   "",
 		"not base64":              "!!!!",
 		"the right shape, unheld": other,
 		"one character removed":   issued.Token[:len(issued.Token)-1],
-		"one character changed":   "Z" + issued.Token[1:],
+		"one character changed":   changed,
 		"padded":                  issued.Token + "=",
 		"the whole Authorization": "Bearer " + issued.Token,
 	} {

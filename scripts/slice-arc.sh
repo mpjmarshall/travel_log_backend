@@ -885,7 +885,8 @@ phase_arc() {
 	ok "the log outlived the stack"
 
 	########################################################################
-	# A24-A29: R5's SIX ROUTES, IN THE RUNNING CONTAINER.
+	# A24-A29 AND A31-A33: R5's SIX ROUTES AND R6's THREE, IN THE RUNNING
+	# CONTAINER.
 	#
 	# WHY THEY ARE HERE AND NOT ONLY IN `go test`. VS6 and VS7 both shipped
 	# routes that were green in `go test` and answered 404 in the container,
@@ -894,14 +895,18 @@ phase_arc() {
 	# success and removes nothing, which is exactly the branch DEC-103 exists
 	# to stop the client taking.
 	#
-	# WHAT THE ARC CANNOT SAY, STATED RATHER THAN LEFT AS A GAP. D3's own
-	# promise — "N pins in … KEPT", including the pin whose only visits were on
-	# the deleted trip — needs a PLACE, and nothing in this build can create
-	# one until R6's `PUT /v1/places/{id}`. So the cascade's row counts are
-	# proved at fixture scale in `go test ./internal/seed/` against the
-	# client's own log, and what the arc proves is narrower and is the half
-	# `go test` cannot: the route is mounted, it answers the WHOLE ENVELOPE,
-	# and the trip is gone from it. R6 is where this step grows its pin.
+	# WHAT THE ARC COULD NOT SAY AT R5, AND NOW CAN. D3's own promise — "N pins
+	# in … KEPT", including the pin whose only visits were on the deleted trip
+	# — needs a PLACE, and nothing in this build could create one until R6's
+	# `PUT /v1/places/{id}`. R5 recorded that in terms: "R6 is where this step
+	# grows its pin." A31-A33 below create the city, the pin and its two
+	# occasions, and A29 now asserts the pin survives the cascade with
+	# `visits: []`.
+	#
+	# THE ROW COUNTS ARE STILL `go test ./internal/seed/`'s, at fixture scale
+	# against the client's own log — 96 photographs, 5 pins, 18 itinerary rows.
+	# What the arc adds is the half `go test` cannot: that the DEPLOYED IMAGE
+	# does it.
 	########################################################################
 	local second_trip="arc-share" share_token="arcsharetoken"
 
@@ -962,6 +967,103 @@ phase_arc() {
 	assert_eq Matt "$(in_psql "select name from travellers" | tr -d '[:space:]')" \
 		"the stored name after a refused write — an empty name is not a way to clear it"
 
+	########################################################################
+	# A31-A34: R6's THREE ROUTES, AND THE ROW R5 COULD NOT PROVE HERE.
+	#
+	# THE NUMBERS ARE LABELS AND NOT AN ORDER. A23 has run last since R4 and
+	# says so; these run BEFORE A29 because they are what gives A29 something
+	# to keep. R5's own record: "D3's 'pins are kept' row, IN THE CONTAINER.
+	# The arc cannot create a place until R6 ships PUT /v1/places/{id}, so the
+	# cascade's row counts are proved only in `go test ./internal/seed/`. That
+	# is a real guard; it is not the running stack. R6 is where the arc grows
+	# its pin." This is that pin.
+	########################################################################
+	local arc_city="arc-kyoto" arc_pin="arc-fushimi" arc_doomed="arc-tofuku"
+
+	step "A31: PUT /v1/cities/$arc_city — with attachTo it answers the WHOLE log"
+	code="$(req -X PUT "$base/v1/cities/$arc_city" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$second_trip" \
+			'{name:"Kyoto",country:{code:"JP",name:"Japan"},centre:{lat:35.0116,lng:135.7681},attachTo:$t}')")"
+	assert_eq 200 "$code" "PUT /v1/cities/$arc_city"
+	assert_eq 2 "$(jqbody .version)" "  the format version — this is an ENVELOPE and not a bare city"
+	assert_eq "$arc_city" "$(jqbody -r ".logbook.trips[] | select(.id==\"$second_trip\") | .cityIds[-1]")" \
+		"  the LAST id in the trip's itinerary — the client appends at the end"
+
+	step "A31b: PUT /v1/cities/$arc_city again, with NO attachTo — a bare city"
+	code="$(req -X PUT "$base/v1/cities/$arc_city" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{name:"Kyoto"}')")"
+	assert_eq 200 "$code" "PUT /v1/cities/$arc_city with only a name"
+	assert_eq null "$(jqbody -c .logbook)" "  .logbook — absent, because nothing but the city moved"
+	assert_eq JP "$(jqbody -r .country.code)" "  country — DEC-89: a rename leaves it alone"
+	assert_eq 1 "$(in_psql "select count(*) from trip_cities where city_id='$arc_city'" | tr -d '[:space:]')" \
+		"  rows in trip_cities — a re-PUT does not attach twice"
+
+	step "A32: PUT /v1/places/$arc_pin — C1's pin, and a bare Place never reaches the wire"
+	code="$(req -X PUT "$base/v1/places/$arc_pin" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg c "$arc_city" \
+			'{cityId:$c,name:"Fushimi Inari",coordinates:{lat:34.9671,lng:135.7727}}')")"
+	assert_eq 200 "$code" "PUT /v1/places/$arc_pin"
+	# CF-BLO-3, AGAINST THE WIRE RATHER THAN AGAINST A Go VALUE. `jq -c` renders
+	# a JSON null as the four characters `null`, so this tells `[]` from `null`
+	# — which is the whole distinction, and the one the client throws on.
+	assert_eq "[]" "$(jqbody -c .visits)" "  .visits — [] and NEVER null, on a wishlist pin"
+
+	step "A32b: the whole ordered visits array, and a no-op re-send of it"
+	code="$(req -X PUT "$base/v1/places/$arc_pin" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_pin" --arg t "$second_trip" \
+			'{visits:[{id:"arc-visit-2",placeId:$p,tripId:$t,at:"2027-10-02T09:00:00.000Z",note:"the torii at dawn"},
+			          {id:"arc-visit-1",placeId:$p,tripId:$t,at:"2027-10-01T09:00:00.000Z",note:null}]}')")"
+	assert_eq 200 "$code" "PUT $arc_pin with two occasions"
+	assert_eq "arc-visit-2" "$(jqbody -r '.visits[0].id')" "  newest first — the client reads visits.first.at as lastVisited"
+	assert_eq 2 "$(in_psql "select count(*) from visits where place_id='$arc_pin'" | tr -d '[:space:]')" "  rows in visits"
+	# THE RE-SEND, WHICH IS WHAT THE CLIENT DOES WHENEVER A SCREEN RE-SAVES A
+	# PLACE IT DID NOT CHANGE. Delete-then-insert of these two IDENTICAL rows
+	# leaves both here and nulls photos.visit_id on everything filed to them.
+	code="$(req -X PUT "$base/v1/places/$arc_pin" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_pin" --arg t "$second_trip" \
+			'{visits:[{id:"arc-visit-2",placeId:$p,tripId:$t,at:"2027-10-02T09:00:00.000Z",note:"the torii at dawn"},
+			          {id:"arc-visit-1",placeId:$p,tripId:$t,at:"2027-10-01T09:00:00.000Z",note:null}]}')")"
+	assert_eq 200 "$code" "the same two occasions, re-sent unchanged"
+	assert_eq 2 "$(in_psql "select count(*) from visits where place_id='$arc_pin'" | tr -d '[:space:]')" \
+		"  rows in visits after a no-op re-send"
+	assert_eq "the torii at dawn" \
+		"$(in_psql "select note from visits where id='arc-visit-2'" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" \
+		"  the note on the re-sent occasion — a note is the traveller's own words"
+	# DEC-89's OTHER TWO ANSWERS, from the outside.
+	code="$(req -X PUT "$base/v1/places/$arc_pin" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{plan:"go at first light"}')")"
+	assert_eq 200 "$code" "PUT $arc_pin with the visits key OMITTED"
+	assert_eq 2 "$(jqbody '.visits | length')" "  .visits after a body that never mentioned them"
+	code="$(req -X PUT "$base/v1/places/$arc_pin" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{visits:[]}')")"
+	assert_eq 422 "$code" "PUT $arc_pin with visits: []"
+	assert_eq visits "$(jqbody -r .field)" "  the field it names"
+	assert_eq 2 "$(in_psql "select count(*) from visits where place_id='$arc_pin'" | tr -d '[:space:]')" \
+		"  rows in visits after the refusal — asserted on the ROW COUNT and not on the status"
+
+	step "A33: DELETE /v1/places/$arc_doomed — the parameter is REQUIRED"
+	code="$(req -X PUT "$base/v1/places/$arc_doomed" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg c "$arc_city" \
+			'{cityId:$c,name:"Tofuku-ji",coordinates:{lat:34.9761,lng:135.7741}}')")"
+	assert_eq 200 "$code" "PUT /v1/places/$arc_doomed"
+	code="$(req -X DELETE "$base/v1/places/$arc_doomed" -H "$auth_header")"
+	assert_eq 422 "$code" "DELETE /v1/places/$arc_doomed with no ?photos"
+	assert_eq photos "$(jqbody -r .field)" "  the field it names"
+	code="$(req -X DELETE "$base/v1/places/$arc_doomed?photos=keepp" -H "$auth_header")"
+	assert_eq 422 "$code" "DELETE with ?photos=keepp"
+	assert_eq 1 "$(in_psql "select count(*) from places where id='$arc_doomed'" | tr -d '[:space:]')" \
+		"  the place after two refusals — a request that never said how far to reach must reach nothing"
+	code="$(req -X DELETE "$base/v1/places/$arc_doomed?photos=keep" -H "$auth_header")"
+	assert_eq 200 "$code" "DELETE with ?photos=keep"
+	assert_eq 2 "$(jqbody .version)" "  the format version — D2 answers the WHOLE envelope, not a 204"
+	assert_eq 0 "$(in_psql "select count(*) from places where id='$arc_doomed'" | tr -d '[:space:]')" "  the place"
+	assert_eq 1 "$(in_psql "select count(*) from places where id='$arc_pin'" | tr -d '[:space:]')" \
+		"  the OTHER pin — a removal takes one place and not a city's worth"
+	# THE REPEAT IS A SUCCESS, which is what stops a retried delete taking the
+	# client's failure branch (DEC-103).
+	code="$(req -X DELETE "$base/v1/places/$arc_doomed?photos=keep" -H "$auth_header")"
+	assert_eq 200 "$code" "the SECOND DELETE of the same place"
+
 	step "A29: DELETE /v1/trips/$second_trip — the WHOLE logbook comes back"
 	code="$(req -X DELETE "$base/v1/trips/$second_trip" -H "$auth_header")"
 	assert_eq 200 "$code" "DELETE /v1/trips/$second_trip"
@@ -970,9 +1072,37 @@ phase_arc() {
 	assert_eq 2 "$(jqbody .version)" "the document's format version — this is an ENVELOPE"
 	assert_eq 1 "$(jqbody '.logbook.trips | length')" "trips left"
 	assert_eq "$ARC_TRIP" "$(jqbody -r '.logbook.trips[0].id')" "  and it is the other one"
-	assert_eq "[]" "$(jqbody -c '.logbook.cities')" "cities — [] and not null, on the write path too"
+	# "[] AND NOT NULL, ON THE WRITE PATH TOO" MOVED FROM `cities` TO `walks`,
+	# AND THE MOVE IS THE HONEST FIX RATHER THAN A DELETION. The claim is that
+	# Emit normalises an EMPTY list to `[]` and never to `null` — the shape
+	# `logbook.g.dart` throws on — so it needs a list that is actually empty.
+	# A31 creates a city, so `cities` stopped being one; `walks` is still
+	# untouched by anything in this arc and demonstrates exactly the same rule.
+	assert_eq "[]" "$(jqbody -c '.logbook.walks')" "walks — [] and not null, on the write path too"
+	# AND THE CITY SURVIVES THE CASCADE, which is what `cities` is now good for
+	# and is a stronger claim than the one it carried. Nothing from `trips`
+	# reaches `cities` at all, and trip_cities_city_fk is RESTRICT (DEC-57).
+	assert_eq 1 "$(jqbody '[.logbook.cities[] | select(.id=="'"$arc_city"'")] | length')" \
+		"  the city, still in the answered log — a deleted trip takes its itinerary and never a city"
 	assert_eq 0 "$(in_psql "select count(*) from share_links where trip_id='$second_trip'" | tr -d '[:space:]')" \
 		"share_links rows for the deleted trip — the link dies because the link is on the trip"
+	# D3's "N pins in … — KEPT" ROW, IN THE RUNNING CONTAINER, AND THIS IS WHAT
+	# R5 RECORDED AS GUARDED BY NOTHING HERE. `arc-fushimi` carried BOTH of its
+	# occasions on the trip that has just gone, so it is exactly the `gamcheon`
+	# shape: a pin whose every visit was on the deleted trip survives with none,
+	# which is a wishlist place and is what the sheet promised. The counts are
+	# proved at fixture scale in `go test ./internal/seed/`; what is proved HERE
+	# is that the deployed image does it.
+	assert_eq "$arc_pin" "$(jqbody -r ".logbook.places[] | select(.id==\"$arc_pin\") | .id")" \
+		"the pin, in the answered envelope — a trip owns its visits, not its places"
+	assert_eq "[]" "$(jqbody -c ".logbook.places[] | select(.id==\"$arc_pin\") | .visits")" \
+		"  its visits — every one of them was on the deleted trip, and a pin with none is a WISHLIST place"
+	assert_eq 1 "$(in_psql "select count(*) from places where id='$arc_pin'" | tr -d '[:space:]')" \
+		"  the row itself — the CRUD reflex deletes it and nothing errors"
+	assert_eq 0 "$(in_psql "select count(*) from visits where place_id='$arc_pin'" | tr -d '[:space:]')" \
+		"  its rows in visits — visits_trip_fk takes them"
+	assert_eq 1 "$(in_psql "select count(*) from cities where id='$arc_city'" | tr -d '[:space:]')" \
+		"  the city — nothing in this app authorises destroying one (DEC-57)"
 	# THE REPEAT IS A SUCCESS, which is what stops a retried delete taking the
 	# client's failure branch (DEC-103) — and it moves no ETag, which is what
 	# stops it throwing away the phone's whole cached document.

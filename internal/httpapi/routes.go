@@ -115,9 +115,10 @@ type Route struct {
 	NoStore bool
 }
 
-// Routes is the whole API surface at R5: two credential routes, one
-// conditional read, one whole-state write, D3's cascade, H1's three share
-// writes, U1's pencil, the one revocation surface, and the three media routes.
+// Routes is the whole API surface at R6: two credential routes, one
+// conditional read, one whole-state write, D3's cascade, T5's city, C1's pin,
+// D2's removal, H1's three share writes, U1's pencil, the one revocation
+// surface, and the three media routes.
 func Routes(deps Deps) []Route {
 	return []Route{
 		{http.MethodPost, "/v1/auth/register", register(deps), false, LimitCredential, false},
@@ -129,6 +130,25 @@ func Routes(deps Deps) []Route {
 		// name-confirmation gate the safety lens asked for is DECLINED, in
 		// writing, at the top of trip_handlers.go.
 		{http.MethodDelete, "/v1/trips/{id}", deleteTrip(deps), true, LimitTraveller, false},
+
+		// R6's THREE ROWS: T5's city, C1's pin, and D2's removal.
+		//
+		// NONE OF THE THREE IS `NoStore`, for the reason the share rows below
+		// are not: the flag is for a response carrying a capability the SERVER
+		// MINTED. These carry a log — a city, a place, or the whole document —
+		// and a `coverAsset` inside one is an object id rather than a URL,
+		// which is the whole of DEC-46.
+		//
+		// THE FIRST TWO ARE PUTs ON CLIENT-MINTED KEYS (DEC-33), idempotent by
+		// construction. THE THIRD IS A DELETE WHOSE REACH IS A REQUIRED QUERY
+		// PARAMETER, and it is worth reading beside R5's `?scope=all`, which
+		// is the opposite call made on purpose: optional there, because the
+		// path is singular and the default is the smaller act; required here,
+		// because D2's two branches destroy different amounts and neither is
+		// obvious. See place_handlers.go.
+		{http.MethodPut, "/v1/cities/{id}", putCity(deps), true, LimitTraveller, false},
+		{http.MethodPut, "/v1/places/{id}", putPlace(deps), true, LimitTraveller, false},
+		{http.MethodDelete, "/v1/places/{id}", removePlace(deps), true, LimitTraveller, false},
 
 		// H1's THREE WRITES, ON ONE PATH WITH THREE VERBS — the client's three
 		// methods rather than a REST habit. See share_handlers.go.

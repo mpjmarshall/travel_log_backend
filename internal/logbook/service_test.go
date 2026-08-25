@@ -14,7 +14,8 @@ import (
 	"travellog/internal/logbook"
 )
 
-// THE SERVICE IS THREE OPERATIONS AND R3 BUILDS THE FIRST (DEC-62, PD-05).
+// THE SERVICE IS THREE OPERATIONS, R3 BUILT THE FIRST AND R6 BUILDS THE
+// SECOND (DEC-62, PD-05).
 //
 // DEC-62 named them — RefilePhoto, RemovePlace and the media commit flow — and
 // ruled IN THE SAME BREATH that most routes are plain CRUD where a service
@@ -56,11 +57,19 @@ func TestTheServiceHasOnlyTheOperationsDEC62Named(t *testing.T) {
 		}
 	}
 
-	// AND THE ONE THIS STEP OWNS IS ACTUALLY THERE. Without this the loop
-	// above passes against a Service with no methods at all.
-	if !slicesContains(got, "CommitMedia") {
-		t.Fatalf("logbook.Service has %v and not CommitMedia, which is R3's "+
-			"whole reason for the file existing", got)
+	// AND THE ONES THE SHIPPED STEPS OWN ARE ACTUALLY THERE. Without this the
+	// loop above passes against a Service with no methods at all.
+	//
+	// THE LIST GROWS ONE ENTRY PER STEP AND IS NOT DERIVED FROM `planned`,
+	// which would make it say "the methods that are there are there". R3
+	// shipped CommitMedia; R6 ships RemovePlace, which is the operation
+	// DEC-62 named for "two branches, and a statement ORDER that silently
+	// inverts D2's promise if reversed".
+	for _, shipped := range []string{"CommitMedia", "RemovePlace"} {
+		if !slicesContains(got, shipped) {
+			t.Fatalf("logbook.Service has %v and not %s, which is a shipped step's "+
+				"whole reason for touching this file", got, shipped)
+		}
 	}
 
 	t.Logf("logbook.Service: %s (planned: CommitMedia R3, RemovePlace R6, RefilePhoto R7)",

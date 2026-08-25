@@ -337,7 +337,13 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 			// what it buys is that the interface each handler is handed says
 			// what that handler can reach — the share handlers cannot read the
 			// whole log, and the logbook handlers cannot mint a capability.
-			Share:          postgres.ShareStore{DB: db},
+			Share: postgres.ShareStore{DB: db},
+			// THE GEOGRAPHY GROUP (R6), on the same argument and for the same
+			// price: two more `struct{ DB *sql.DB }` over the same pool, so
+			// the city handler cannot remove a place and the place handlers
+			// cannot attach anything to a trip.
+			Cities:         postgres.CityStore{DB: db},
+			Places:         postgres.PlaceStore{DB: db},
 			Log:            log,
 			AuthLimit:      credential,
 			TravellerLimit: traveller,

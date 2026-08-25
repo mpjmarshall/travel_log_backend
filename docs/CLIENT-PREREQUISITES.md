@@ -815,3 +815,170 @@ the way in exactly once.**
 `logbookFormatVersion` is still 2, the emitted document still has the same six
 keys, and the ETag's emitter half is still 2. What moved is the SURFACE, not the
 format.
+
+---
+
+# Added at R6 — T5's city, C1's pin, and the ONE field where `[]` and absent are different requests
+
+Three routes are live that were not. **Read R6.3 before you write any of it**:
+it is the one place in this API where sending a key you did not mean to change
+destroys somebody's record, and your generated `toJson()` sends it by default.
+
+## R6.1 The three routes, and what each answers
+
+```
+PUT    /v1/cities/{id}                     -> 200 + a City       + ETag
+PUT    /v1/cities/{id}   (with attachTo)   -> 200 + THE ENVELOPE + ETag
+PUT    /v1/places/{id}                     -> 200 + a Place      + ETag
+DELETE /v1/places/{id}?photos=keep|delete  -> 200 + THE ENVELOPE + ETag
+```
+
+## R6.2 `PUT /v1/cities/{id}` is `createCity`, and `attachTo` folds `setTripCities` into it
+
+T5 drives two of your methods — `createCity` and `setTripCities` — and
+`createCity` already takes `attachTo` and does both under one `_commit`. Send
+that argument as a body field and the server does both in one transaction:
+
+```json
+{"name":"Kyoto","country":{"code":"JP","name":"Japan"},
+ "centre":{"lat":35.0116,"lng":135.7681},"attachTo":"autumn-crossing"}
+```
+
+**WITH `attachTo` THE ANSWER IS THE WHOLE ENVELOPE — replace your cache with
+it, do not splice.** Two entities moved: the city was created AND the trip's
+`cityIds` grew, so a bare City would leave you re-deriving the itinerary from
+your own copy of the rule. **Without it the answer is a bare City** and you
+splice it as usual.
+
+Branch on the shape you got, not on what you sent — `logbook` present means
+envelope. The new id lands at the **END** of `cityIds`, exactly as
+`t.withCities([...t.cityIds, id])` does.
+
+**`country` comes from you and the server never derives it** (DEC-59). There is
+no countries table and T5 has no country input, so this is the geocoder's
+answer travelling through. `code` must be ISO-3166-1 alpha-2 — two capitals —
+or it is a 422 naming `country`.
+
+**On a CREATE, `name`, `country` and `centre` are all required**, and each is
+refused by name. On an UPDATE every field is optional and an unsent one is left
+exactly as it was: `{"name":"Kyōto"}` renames and touches nothing else.
+
+**`attachTo` naming a trip you do not have is a 422 on `attachTo`, not a 404**,
+and nothing is written — not even the city. Your own `createCity` treats it the
+same way: it answers null without writing when `log.trip(attachTo) == null`.
+
+**Sending it twice is safe.** A city already on the itinerary stays where it
+is; it is not appended a second time and it is not moved to the end.
+
+## R6.3 `visits` — ABSENT and `[]` are different requests, and one of them is refused
+
+**This is the most important paragraph in this file.**
+
+`PUT /v1/places/{id}` carries the WHOLE ORDERED visits array, newest first, and
+the position in the array IS the order the server stores. Three bodies, three
+different meanings:
+
+| you send | the server does |
+|---|---|
+| no `visits` key at all | **leaves every occasion exactly where it is** |
+| `"visits": [ … ]` | replaces the list with that one, in that order |
+| `"visits": []` | **422 `invalid_field` on `visits`. Nothing is touched.** |
+
+**SO OMIT THE KEY UNLESS YOU MEAN TO WRITE THE ARRAY**, and that is a change to
+how you serialise a place. `Place.toJson()` writes
+`'visits': instance.visits.map((e) => e.toJson()).toList()`, which is `[]` for a
+wishlist place — so **C1's pin, serialised as a whole `Place`, is refused**, and
+so is re-sending any of the nine wishlist places in your own sample log. Build
+the body from the fields you are changing, the way `renameTrip` already sends
+only `{id, name}`.
+
+**Why `[]` is refused rather than obeyed.** An empty array is a request to clear
+every occasion at that place, and clearing them unfiles every photograph filed
+there: measured against your own log at `fushimi-inari`, that is **30
+photographs across 3 trips**, and whole-log **95 photographs and 5 visit notes**.
+No control in the app asks for it — there is no "forget every visit here"
+sheet — so the route refuses it until one exists. A route offering a destruction
+no sheet authorises is the same error as a sheet offering a choice the model
+cannot make.
+
+**A visits array that DROPS an occasion still holding photographs is also
+refused**, on `visits`, and named. Dropping it would clear those photographs'
+`visitId` while leaving their `placeId` standing — a place with no occasion,
+which is a state your model has never held (across all 284 sample photographs:
+95 carry both, 189 carry neither, place-only 0, visit-only 0). Dropping an
+occasion nothing is filed to is allowed.
+
+**Re-sending an unchanged array is a true no-op**, filings included. It is worth
+knowing that this cost a blocker to get right: the obvious implementation
+deletes and re-inserts, and re-inserting the same visit id does NOT restore
+`photos.visitId`.
+
+Each visit carries `{id, placeId, tripId, at, note}`. `placeId` may be omitted
+or empty — the path carries it — but if present it must match, and `tripId` must
+name a trip you have.
+
+## R6.4 `PUT /v1/places/{id}` — C1's pin, and what a create needs
+
+```json
+{"cityId":"kyoto","name":"Tofuku-ji","coordinates":{"lat":34.976,"lng":135.774}}
+```
+
+**`coordinates` is REQUIRED on a create** and is not defaulted server-side.
+`places.lat` and `places.lng` are NOT NULL, and you already resolve
+`coordinates ?? city.centre` before you build the pin — so the server computing
+it too would be a second implementation of one rule. On an UPDATE it is
+optional like everything else.
+
+**The answer always carries `"visits": []` and never `null`.** That is worth one
+sentence because it is the shape you throw on: `place.g.dart` reads
+`(json['visits'] as List<dynamic>)` with no null branch, and a wishlist pin has
+no visits at all, so this is the ordinary create rather than an edge case.
+
+`plan` and each visit's `note` are capped at **4,096 bytes** — this build's
+policy, like a trip's summary. `coverAsset` must name a media object you have
+already COMMITTED (R3.5), or it is a 422 on `coverAsset`.
+
+## R6.5 `DELETE /v1/places/{id}` — `?photos` is REQUIRED and there is no default
+
+D2 makes the user answer this on screen, so the API makes you answer it too:
+
+```
+DELETE /v1/places/tofuku-ji?photos=keep      the photographs stay
+DELETE /v1/places/tofuku-ji?photos=delete    the photographs go
+```
+
+**Anything else — the parameter absent, misspelt, or in the wrong case — is a
+422 `invalid_field` on `photos`, and nothing is removed.** Both refusals give
+the same sentence deliberately: to you they are one condition, and two different
+answers would suggest one of them has a safe fallback.
+
+**It answers THE WHOLE ENVELOPE, not a 204.** Replace your cache with it. What
+each branch does, measured against your own log at `fushimi-inari`:
+
+| | `?photos=keep` | `?photos=delete` |
+|---|---|---|
+| the pin | gone | gone |
+| its occasions | gone — "the visits go with the pin" | gone |
+| the 30 photographs filed there | **kept**, `placeId` AND `visitId` both null | **deleted** |
+| their date, city and **caption** | **untouched** | gone with them |
+| the walks | **untouched** | **untouched** |
+
+That is exactly `Photo.copyWith(clearPlace: true)` on the keep branch — both
+columns, and nothing else. The captions are the row worth checking: your log
+holds 2, and after a `?photos=delete` at `fushimi-inari` it holds 1, because the
+sheet names "the notes you wrote on them" on the destructive branch only.
+
+**Removing a place you do not have is a 200 and moves no ETag**, exactly as the
+trip delete is — and on the destructive branch it takes no photograph with it,
+because the whole thing is one transaction. **Read section 4 again**: a `404`
+here means the SERVER DOES NOT HAVE THE ROUTE.
+
+**There is no `DELETE /v1/cities/{id}`, and there will not be one until a sheet
+says what it does.** The database refuses to delete a city that any place,
+photograph, walk or itinerary points at. If you ever need one, the sheet copy is
+written first.
+
+## R6.6 Nothing in this step changed the log's shape
+
+`logbookFormatVersion` is still 2, the emitted document still has the same six
+keys, and the ETag's emitter half is still 2. What moved is the SURFACE.

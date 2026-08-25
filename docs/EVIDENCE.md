@@ -1045,6 +1045,131 @@ R6's `PUT /v1/places/{id}`. The counts are proved at fixture scale in `go test
 ./internal/seed/`; what the arc proves is that the route is mounted and answers
 the whole envelope. R6 is where this step grows its pin.
 
+## R6 — cities and places, and a named failing test that could not see its own mutation
+
+Run at `1270e8c` and at this working tree, against postgres:17.11 on
+127.0.0.1:5476, 5477 and 5478 under `travellog-r6`, `travellog-r6arc` and
+`travellog-r6seed`. The live stack on 8080/5434 was not written to.
+
+### Every mutation run in this step
+
+Each restored by FILE COPY, and each checked to have actually changed the file
+before the suite ran — a mutation that did not change the file is a green suite
+proving nothing.
+
+| mutation | reddens | stays green |
+|---|---|---|
+| the visits write as **delete-then-insert** | 4 legs in 2 packages: the two no-op re-sends, the reorder, the occupied-occasion guard | every count leg; the dangling check **both ways** |
+| the ordinal offset **downward** | 6 legs, on `visits_ordinal_ck` — a red for a DIFFERENT reason | everything else |
+| the offset is the plan's **fixed `+ 1000`** | **1 leg**: the 1,100-occasion reorder | all 872 others |
+| D2's delete branch **drops the place first** | 2 legs, both on a WHOLE-LOG count | the plan's own assertion (see below) |
+| the two branches collapse: photographs **always** go | 2 legs, both keep-branch | the delete-branch legs |
+| `?photos` **defaults to keep** | 3 legs in 2 packages | the two-branch legs |
+| the attached city is **prepended** | 3 legs | the bare-city legs |
+| `trip_cities` read stops being ordered | 4 legs, 3 of them older than R6 | the count legs |
+| the **occupied-occasion** guard deleted | 2 legs | everything else |
+| the **another-place** guard deleted | 1 leg | everything else |
+| the Service's **disposition** guard deleted | 1 leg | every handler leg |
+| `visits: []` **accepted** | 3 legs in 3 packages | the omitted-key legs |
+| the route answers the **bare `Place`** | 2 legs: the emit leg and the AST sweep | every other leg in the step |
+
+### THE ONE THAT SAID SOMETHING: the plan's own named failing test is GREEN
+
+R6's test strategy writes `TestRemovingAPlaceAndItsPhotographsActuallyRemoves
+Them` out in full and names the mutation it exists for. Its only assertion about
+the photographs is `countPhotos(t, db, place) != 0`. Transcribed literally and
+run against that exact mutation:
+
+```
+### CORRECT CODE:       photographs left in the whole log: 0   --- PASS
+### UNDER THE MUTATION: photographs left in the whole log: 2   --- PASS
+```
+
+With the place deleted first, `photos_place_fk … ON DELETE SET NULL (place_id)`
+clears `place_id`, so a count scoped by `place_id` counts **0** while both
+photographs are still there. What ships asserts `SELECT count(*) FROM photos`
+beside it, and the fixture-scale leg asserts `284 → 254`.
+
+**An assertion scoped by the column the mutation nulls cannot see that
+mutation.** That is the general form, and it is the second time this project has
+found a plan-named leg blind to its own mutation — R5 found the first.
+
+### THE ONE THE PLAN NAMES THAT CANNOT BE CONSTRUCTED
+
+"Clear `place_id` but not `visit_id` on the keep branch" has no source to
+mutate. The keep branch is a single `DELETE FROM places`; both columns are
+cleared by foreign keys, and there is no Go statement between them. The
+four-field leg still guards the claim — a migration touching `photos_visit_fk`
+reddens it — but no source mutation can.
+
+### The visits contract, measured in four states
+
+`fushimi-inari` in the client's own log: **28 occasions, 30 photographs, 3
+trips.**
+
+| the body carries | occasions | filings there | whole-log filings |
+|---|---|---|---|
+| `visits` **omitted** | 28 | 30 | 95 |
+| the same 28 **re-sent unchanged** | 28 | 30 | 95 |
+| the same 28 **reversed** | 28 | 30 | 95 |
+| `visits: []` | 422, 28 | 422, 30 | 95 |
+| *(delete-then-insert of the same 28)* | **28** | **0** | **65** |
+| *(the empty array, obeyed)* | **0** | **0** | **65** |
+
+The dangling-reference check answers **0** on every row of that table.
+
+### D2's two branches at fixture scale
+
+| | before | `?photos=delete` | `?photos=keep` |
+|---|---|---|---|
+| photographs | 284 | 254 | 284 |
+| places | 17 | 16 | 16 |
+| occasions | 49 | 21 | 21 |
+| walks | 2 | 2 | 2 |
+| cities | 12 | 12 | 12 |
+| naming a place | 95 | 65 | 65 |
+| captions | 2 | **1** | **2** |
+
+### The acceptance check, run verbatim and reported both ways
+
+```
+make check                                          exit=0
+make check   (TEST_DATABASE_URL set)                exit=0
+make slice   (travellog-r6arc, 8097/5477/9017)      exit=0   196 ok lines
+make seed    (travellog-r6seed, 8098/5478/9018)     exit=0
+go vet ./...                                        exit=0
+python3 scripts/check-plan.py docs/plan-v7.json     exit=0
+```
+
+**Two of the three inline lines cannot pass as written, and both are reported
+rather than papered over** — this is the plan's own rule 10, landing on the plan
+for the fourth step running.
+
+1. `psql -c "SELECT count(*) FROM photos WHERE place_id IS NOT NULL AND
+   visit_id IS NULL"` answers **0** before and after, as promised. But the
+   sentence beside it — "after re-sending every place unchanged" — cannot be
+   performed: **9 of the 17 places are wishlist places**, so the emitted
+   document carries `"visits": []` for them and sending it back is the 422 the
+   ruling asks for. 8 answered 200; the count is 0 either way.
+2. `DELETE FROM cities WHERE id='kyoto'` refuses, and names
+   **`trip_cities_city_fk`** rather than the `places_city_fk` the plan predicts:
+   the itinerary is checked first. With the itinerary, the photographs and the
+   walks cleared inside a transaction that rolls back, it names `places_city_fk`.
+   Both were run; the city survives both.
+3. The `curl` line passes verbatim — `.visits` is `[]` — **because `tofuku-ji`
+   already exists in the seeded log**, so it is an update and `coordinates` is
+   leave-alone. Against a genuinely new id the same body is a 422 on
+   `coordinates`, which is NOT NULL in the schema.
+
+### A leg older than this step is flaky at a measured 1 in 64
+
+`TestAuthenticateRefusesEveryShapeOfWrongToken` (VS6) builds its
+"one character changed" case as `"Z" + issued.Token[1:]`, which is the issued
+token whenever the first character is already `Z`. Measured over 64,000
+tokens: **1,037 (1.620%)**, against 1/64 = 1.563%. It fired twice inside full
+`go test ./...` runs during this step's mutation work and is nothing to do with
+R6.
+
 ## What is still guarded by nothing
 
 Carried forward so the list does not shorten by silence, with what VS8 moved
@@ -1136,17 +1261,19 @@ TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
 was three commits stale before anybody noticed:
 
 ```bash
-TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 814 at R5
-                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 618, no database
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 872 at R6
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 649, no database
 TEST_S3_ENDPOINT=...   go test -tags integration ./internal/media/ -count=1 -v \
                          | grep -c -- '--- PASS'                           # 39 = 27 unit + 12 integration
 ```
 
-The **196-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
+The **223-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
 the DB tier **skips and says so** without it. It was 133 at `90f6a68`, R3
-measured 154, R4 measured 164, and R5 adds 32 more — the D3 cascade legs, the
-share store and the two revocations, every one of which needs a real database
-because a partial unique index and a column default are not things a twin has.
+measured 154, R4 measured 164, R5 measured 196, and R6 adds 27 more — the two
+new stores and the fixture-scale visits and D2 legs, every one of which needs a
+real database because a foreign key that fires on a DELETE is not a thing a twin
+has. R5's own 32 were the D3 cascade legs, the share store and the two
+revocations, against a partial unique index and a column default.
 
 `make slice` **destroys the named volume** — `docker compose down -v` is its
 first step, because a 201 against a database that already held the row proves

@@ -199,6 +199,8 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		Auth:           service,
 		Logbook:        postgres.LogbookStore{DB: db},
 		Share:          postgres.ShareStore{DB: db},
+		Cities:         postgres.CityStore{DB: db},
+		Places:         postgres.PlaceStore{DB: db},
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),
