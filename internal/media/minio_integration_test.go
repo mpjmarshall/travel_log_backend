@@ -258,6 +258,61 @@ func TestABodyThatDoesNotMatchThePresignedDigestIsRefusedByTheBucket(t *testing.
 	}
 }
 
+// AND THE ATTACKER DOES NOT REPLAY ANYTHING — WHICH IS THE LEG THAT ACTUALLY
+// CATCHES THE BAN, and it is here because the leg above turned out not to.
+//
+// MEASURED, and it was a surprise: with the banned presigner in place (host
+// signed and nothing else) and the four headers still SENT, MinIO validates
+// the digest anyway and answers XAmzContentChecksumMismatch — so the checksum
+// leg above stays GREEN under that mutation. It exercises an honest client.
+// An attacker holding the same URL simply OMITS the digest header, and with
+// only `host` in the signature there is then nothing left to refuse: 200, and
+// arbitrary bytes at an address claiming to be their hash.
+//
+// So this is the leg the ban is falsifiable by at this tier. `make check`'s
+// ban_test.go is the other half, and neither replaces the other: one asserts
+// the code does not call the thing, this one asserts what happens if it does.
+func TestAnUploadThatOmitsTheDigestIsRefused(t *testing.T) {
+	store := freshBucket(t)
+
+	honest := []byte("the bytes the client promised")
+	sum := sha256.Sum256(honest)
+	digest := hex.EncodeToString(sum[:])
+	key := media.Key{Traveller: travellerID, Object: digest}
+
+	url, headers, err := store.PresignPut(t.Context(), key, media.Upload{
+		SHA256: digest, ByteSize: int64(len(honest)), ContentType: "image/png",
+	})
+	if err != nil {
+		t.Fatalf("PresignPut: %v", err)
+	}
+
+	// Everything replayed EXCEPT the digest, and bytes that are not it.
+	stripped := map[string]string{}
+	for k, v := range headers {
+		if k == "x-amz-checksum-sha256" {
+			continue
+		}
+		stripped[k] = v
+	}
+	if len(stripped) != len(headers)-1 {
+		t.Fatal("the digest header is not in the map, so this leg strips nothing")
+	}
+
+	lying := bytes.Repeat([]byte("x"), len(honest))
+	code, status := put(t, url, stripped, lying)
+	if code != "AccessDenied" {
+		t.Fatalf("a PUT that simply omitted the signed digest answered %d %s, want "+
+			"AccessDenied. A 200 here means the URL signs `host` and nothing else "+
+			"— the fail-open shape ban_test.go exists for — and the object below "+
+			"is arbitrary bytes at an address claiming to be their hash",
+			status, code)
+	}
+	if _, err := store.Stat(t.Context(), key); err == nil {
+		t.Fatal("the object exists after an upload that carried no digest at all")
+	}
+}
+
 // DEC-51 asked for content-length SIGNED INTO the PUT "so the BUCKET enforces
 // it rather than the API hoping". What SigV4 can express is an EXACT value,
 // not a ceiling — so what this leg proves is that a minted URL is not an
