@@ -401,39 +401,59 @@ func twoOccasionsOnOneTrip(t *testing.T, db *sql.DB) (older, newer string) {
 // A SERVER THAT PICKS THE VISIT ITSELF is the obvious implementation: an
 // unordered `SELECT id FROM visits WHERE place_id = $1 AND trip_id = $2 LIMIT 1`.
 // It files the photograph to whichever row the planner happened to return, and
-// EVERY FIELD IN THE ANSWER IS INDIVIDUALLY VALID. The occasion named here is
-// deliberately NOT the newest, so a picker that took the newest is caught as
-// surely as one that took the first.
+// EVERY FIELD IN THE ANSWER IS INDIVIDUALLY VALID.
+//
+// ------------------------------------------------------------------------
+// IT ASSERTS BOTH DIRECTIONS, AND THE FIRST DRAFT DID NOT — WHICH IS WHY THIS
+// PARAGRAPH IS HERE RATHER THAN A COMMENT SAYING "deliberately not the newest".
+//
+// The plan's own sketch names ONE occasion, "deliberately NOT the newest", and
+// asserts the photograph landed on it. RUN AGAINST THE MUTATION IT IS FOR,
+// TRANSCRIBED LITERALLY, IT WAS GREEN 10 TIMES OUT OF 10: the unordered SELECT
+// returned the very row the leg had named, so the picker agreed with the
+// client by luck and the assertion could not tell them apart. `-count=10` did
+// not save it, because the luck is not random — the planner returns the same
+// row every time on a two-row table.
+//
+// "NOT THE NEWEST" IS NOT THE PROPERTY THAT MATTERS. The property is "not
+// whichever row the planner returns", and nothing in a test can know which
+// that is. So the leg files the SAME photograph to EACH occasion in turn and
+// asserts it lands on the one named both times. A picker answers with one row;
+// it cannot answer with both.
+// ------------------------------------------------------------------------
 func TestRefilingHonoursTheOccasionTheClientNamedAndNotAnotherOnTheSameDay(t *testing.T) {
 	store, db := photoStore(t)
 	older, newer := twoOccasionsOnOneTrip(t, db)
-	_ = newer
 
-	got, err := store.RefilePhoto(context.Background(), tid, "p-may",
-		logbook.RefileWrite{PlaceID: ptr("wishlist-pin"), VisitID: &older})
-	if err != nil {
-		t.Fatalf("re-file = %v, want it to succeed", err)
-	}
+	for _, wanted := range []string{older, newer} {
+		got, err := store.RefilePhoto(context.Background(), tid, "p-may",
+			logbook.RefileWrite{PlaceID: ptr("wishlist-pin"), VisitID: &wanted})
+		if err != nil {
+			t.Fatalf("re-file to %s = %v, want it to succeed", wanted, err)
+		}
 
-	place, visit := photoFiling(t, db, "p-may")
-	if visit != older {
-		t.Errorf("visitId = %q, want %q — the client named the occasion and the server "+
-			"must not pick another one, least of all one on the same day", visit, older)
-	}
-	if place != "wishlist-pin" {
-		t.Errorf("placeId = %q — placeId and visitId move together, always", place)
-	}
-	if got.Photo.VisitID == nil || *got.Photo.VisitID != older {
-		t.Errorf("the ANSWER carries visitId %v, want %q", got.Photo.VisitID, older)
-	}
-	// AN EXISTING OCCASION MOVED ONE ENTITY, so the answer is the bare
-	// photograph and NOT the whole envelope.
-	if got.Document != nil {
-		t.Error("the answer carries the whole log for a re-file that minted nothing — " +
-			"one entity moved and DEC-32's splice is the right answer")
-	}
-	if got := halfFiled(t, db); got != 0 {
-		t.Errorf("%d photographs are half-filed, want 0", got)
+		place, visit := photoFiling(t, db, "p-may")
+		if visit != wanted {
+			t.Errorf("visitId = %q, want %q — the client named the occasion and the "+
+				"server must not pick another one, least of all one on the same day. "+
+				"Both occasions are asserted because a server that PICKS agrees with "+
+				"the client on one of them by luck", visit, wanted)
+		}
+		if place != "wishlist-pin" {
+			t.Errorf("placeId = %q — placeId and visitId move together, always", place)
+		}
+		if got.Photo.VisitID == nil || *got.Photo.VisitID != wanted {
+			t.Errorf("the ANSWER carries visitId %v, want %q", got.Photo.VisitID, wanted)
+		}
+		// AN EXISTING OCCASION MOVED ONE ENTITY, so the answer is the bare
+		// photograph and NOT the whole envelope.
+		if got.Document != nil {
+			t.Error("the answer carries the whole log for a re-file that minted " +
+				"nothing — one entity moved and DEC-32's splice is the right answer")
+		}
+		if got := halfFiled(t, db); got != 0 {
+			t.Errorf("%d photographs are half-filed, want 0", got)
+		}
 	}
 }
 

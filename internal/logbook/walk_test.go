@@ -64,6 +64,20 @@ func roundedTrack(n int) []logbook.LatLng {
 // which is the mutation the plan names, and it only means something because
 // both halves are here.
 func TestValidateWalkRefuses501PointsByNameAndAccepts500(t *testing.T) {
+	// THE NUMBER IS ASSERTED AS A LITERAL AS WELL AS THROUGH THE CONSTANT, and
+	// that is not belt and braces — it is the difference between a leg that can
+	// fail and one that cannot. Every other assertion here reads
+	// `logbook.MaxWalkPoints + 1`, so raising the constant to 21,600 raises the
+	// inputs with it and the whole leg stays green: measured, that mutation
+	// reddened the ceiling leg alone. DEC-106 FIXES THE NUMBER AT 500 and
+	// removes its provisional marking, so the number is the ruling and belongs
+	// in one falsifiable place.
+	if logbook.MaxWalkPoints != 500 {
+		t.Fatalf("MaxWalkPoints = %d. DEC-106 confirmed 500 and stopped it being "+
+			"provisional; moving it is a ruling and not an edit",
+			logbook.MaxWalkPoints)
+	}
+
 	tooMany := track(logbook.MaxWalkPoints + 1)
 	err := logbook.ValidateWalk(logbook.WalkWrite{ID: walkID("w-busan"), Points: &tooMany})
 
