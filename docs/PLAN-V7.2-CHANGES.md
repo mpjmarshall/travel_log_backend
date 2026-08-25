@@ -3,18 +3,175 @@
 Revised from 7.1 on 24 August 2026, at HEAD `d781d29`. Every change below names the finding or the
 ruling that forced it. Nothing here is a preference.
 
+**Revised to 7.2.1 on 24 August 2026** after an independent FixVerifier read v7.2 against the seven
+lens reports and graded all 93 `claimed_fixes`: 81 LANDED, 5 PARTIAL, 3 FICTION, 3
+CONTAINS-ITS-OWN-DEFECT, 1 GUARD-CANNOT-FAIL. Every one of the twelve non-LANDED verdicts is acted on
+— see [What v7.2.1 fixed](#what-v721-fixed). None is argued with.
+
 The gate is the arbiter: `python3 scripts/check-plan.py` was **red** before this revision and is
-**green** after it, and eleven of its checks are new.
+**green** after it, and fourteen of its checks are new (eleven at v7.2, three at v7.2.1).
 
 ```
-$ python3 scripts/check-plan.py          # at d781d29, before any edit
+$ python3 scripts/check-plan.py          # working tree at d781d29, before any edit
 FAIL: the rulings stamp says 41823 bytes; the file is 80096
 FAIL: the rulings stamp says e43a15e1d308…; the file is 6552054a5bb6…
 2 failure(s); 48 ids; 23 routes; 8 steps; 10 deletions          exit 1
 
 $ python3 scripts/check-plan.py          # after
-0 failure(s); 64 ids; 23 routes; 8 steps; 14 deletions           exit 0
+0 failure(s); 65 ids; 23 routes; 8 steps; 14 deletions           exit 0
 ```
+
+> **Read the word "working tree" above, because v7.2 did not write it and the omission was a real
+> defect (NF-1).** That transcript is real — I ran it — but it is **not reproducible from d781d29**.
+> The v7.1 rulings block sat in `scripts/check-plan.py` **unstaged** while d781d29 committed `docs/`
+> only, so `git show d781d29:scripts/check-plan.py` is 81 lines with 14 `check()` calls and no stamp
+> recomputation at all, and running *that* against d781d29's plan prints
+> `0 failure(s); 48 ids; 23 routes; 8 steps; 10 deletions`, exit 0 — the same four counts, beneath
+> two FAIL lines it cannot emit. `git log --oneline -- scripts/check-plan.py` returns two commits,
+> `7b47bee` and `5c34406`, with nothing between them. **The transcript is real and the commit is not
+> self-contained, and those are different things.** v7.2.1 adds the invariant that follows:
+> `gate_transcripts` carries the sha256 of the script that produced the output, and the script hashes
+> itself and compares.
+
+---
+
+## What v7.2.1 fixed
+
+The FixVerifier confirmed the load-bearing things first, and that is what bounds the work below: the
+blocker count of 21 is real (recounted one-to-one from the seven lens files, no id dropped or
+invented), the four-migration derivation holds, `emit.go` is genuinely in R1/R6/R7 with the
+City/Photo statement, DEC-89 lands in R1 with its three legs written against the client's own body,
+**all seventeen `base.inputs` stamps re-measured by hand and all seventeen match**, and **all eleven
+gate checks were mutated and all eleven went red**, plus two more of the verifier's own.
+
+### The three FICTION entries — all three landed for real, none declined
+
+Each cited a location whose text did not contain the claim. None was wrong on the merits; what was
+wrong was the record saying it was done. That is §6.2's own incident happening three times inside a
+revision that had just written the incident into its own risks.
+
+| entry | the verifier's evidence | what v7.2.1 did |
+|---|---|---|
+| **OPS-MIN-11** | `time.Since` 0 occurrences; R1 item 7 says nothing about the startup ping | **Landed.** R1 gains item 12b — print the elapsed duration with the budget as a second field, so a DNS failure that took 250 ms stops reading as a 10-second wait. The cmd/api file-list entry names it. |
+| **PERF-MIN-10** | `DEF-06` byte-identical to d781d29, field by field; `104.6` 0 occurrences | **Landed.** DEF-06 gains the shape that makes "untuned" actionable: 20 ms per verify at 64 MiB/t=1/p=4 (so the open risk is a weak *work factor*, not a resource ceiling), 104.6 ms and 256 MiB peak at m=128/t=2, and a trigger that says the number needed is a login rate and nothing here has one. |
+| **CF-MIN-14** | `belt-and-braces` 0, `WHERE NOT EXISTS` 0, `exists-branch` 0 — "the claim's only evidence is the claim" | **Landed.** CLIENT-PREREQUISITES item 15: `_freshId`'s guard is belt-and-braces now that `PUT /v1/trips/{id}` is an unconditional upsert; the upsert is right and is not changed, and the `WHERE NOT EXISTS` split is named as a DEC-33 conversation. |
+
+### The guard that could not fail, and the scope statement that was false about it
+
+**SEC-MAJ-4 (GUARD-CANNOT-FAIL) and STO-BLO-1 (CONTAINS-ITS-OWN-DEFECT) are one leg.** PD-19 says
+"**every** presign leg in R2 does three things it did not" and the lens target names two legs; v7.2
+rewrote the checksum leg and left `TestABodyLongerThanTheSignedLength` byte-identical to v7.1 — no
+header replay, only `resp.StatusCode < 400`. Under DEC-87 and DEC-88 the URL now signs `content-type`
+and `if-none-match` too, so an unreplayed request answers **400 AccessDenied whatever the body
+length**: the leg was green with `Content-Length` removed from the signature entirely, over the exact
+mutation it existed to catch.
+
+Rewritten. It now replays every signed header; asserts the S3 code **`SignatureDoesNotMatch`** with
+the three neighbouring codes named in the failure message (`AccessDenied` = a header was not
+replayed and the leg measures nothing; `XAmzContentChecksumMismatch` = the checksum caught it and the
+length is unsigned, which is the mutation); carries a positive control that also proves the replayed
+header set is **complete**; uses a **fresh key** for the oversized PUT, because DEC-88 makes the
+first write-once and a second PUT there answers 412 for an unrelated reason; and adds a
+chunked-bypass leg asserting `411 MissingContentLength`. The mutation "drop the length from the
+signature" now reddens the length leg and leaves the checksum leg green — the pair v7.1 and v7.2 both
+claimed and neither had.
+
+### CF-MAJ-6 — the count was right and the deletion was not
+
+The verifier re-derived the eighteen independently and confirmed every line number. What it found is
+that **OE-17's deletion did not happen where OE-17 said**: `risks[7]` was byte-identical to v7.1 and
+still read "four sentences of copy"; RULE-07's `what_is_already_true` was a **fourth survival OE-17
+did not list**; and OE-17's own pointer was stale, because R1 work item 6 became DEC-94's gzip item
+when R1 was rewritten.
+
+All four corrected, OE-17 re-pointed — **and made mechanical**, which is the part worth having. The
+phrase may now be *named in order to be corrected* and may not be *asserted*, tested as: any string
+carrying it also carries "eighteen". Its own first draft was a location allowlist and went red on
+three sites that were correct — a permitted-key list cannot tell "still says four" from "says four
+was wrong". Rewritten as a predicate about the claim, **it then found three more survivals beyond
+the two the verifier listed.**
+
+### Two counting errors inside the correction to a counting error
+
+- **NF-3 / item 5 — eleven screens is ten.** The three greps touch eleven screen *files*, and one of
+  them is `settings_screen.dart`, the site correctly excluded. So it is **nineteen sentences across
+  eleven screens, or eighteen across ten** — and v7.2 paired the post-exclusion sentence count with
+  the pre-exclusion screen count, which is the same mixing error the count itself was correcting. The
+  stamped fourth command is annotated with its real output (10) and the union command that produces
+  11 is written beside it. PD-16's title now reads "eighteen client sentences across ten screens".
+- **NF-4 / item 6 — the nineteenth site.** PD-16's class (ii) had absorbed `delete_sheets.dart:195`,
+  which **none of the three greps matches**. It reads *"Your note goes with it. Nothing is
+  recoverable — there is no bin"* — D1's **finality** claim, made on the way in, not a failed-save
+  sentence. Counting it inside a set derived by greps that do not find it gives a headline of
+  eighteen with nineteen items of work under it, and a designer handed the eighteen line numbers will
+  never locate it. It is now **PD-23**, the retention correction, with its own reason
+  (`photos_asset_fk` is RESTRICT, nothing in R1–R8 deletes a bucket object, and the sweep "has a
+  schedule of nobody") and its own fix. Same pass, different item.
+
+### NF-1 — the transcript, with the mechanism corrected
+
+The verifier's evidence is right and its conclusion overshoots: it reads the unreproducible
+transcript as fabricated. It was not — see the note under the transcript above. The finding stands
+with the wording changed: **the commit is not self-contained.** Corrected in four places (the gate
+docstring, `base.inputs[CLAUDE.md].status`, `M-GATE-MUTATIONS`, and SEC-MAJ-8's self-grade), and the
+invariant it implies is now mechanical rather than stated.
+
+### The five PARTIALs
+
+| entry | what was missing | what v7.2.1 did |
+|---|---|---|
+| **OPS-MAJ-4** | "`-migrate-only` already works" — 0 occurrences in the plan | R1 item 8 names the split-migration alternative and declines it in the same sentence, with the reason (it changes the deploy *procedure*, not one line). |
+| **SAF-MAJ-6**, **PERF-MAJ-4** | both pointed at "R3 work item 9 for the lower bound", which enumerated three additions to 0003 and not `CHECK (jsonb_array_length(points) > 0)` — and R7's file list holds no migration file, so no step wrote it | R3 item 9 now enumerates **four**, with the reason DEC-89's contract makes the bound necessary. |
+| **OPS-MIN-13** | its own text said "one comment in the compose file is the whole of the fix" and then deferred the whole item with nothing to fire on | Split. The comment lands in **R2 item 14** (R2 already edits compose); restart-on-unhealthy stays in `next_slice` as a seventh-service conversation with the trigger it lacked — the first unattended box. |
+| **SEC-MIN-12** | carried to an unscheduled list with no trigger | Gains SEC-MIN-9's trigger: before anything is published beyond loopback. |
+
+### The remaining new findings
+
+- **NF-2** — "five acceptance checks" is **four**, in four places at once. Recounted at d781d29: the
+  string occurs exactly four times, all in R5–R8. R4 ran `make seed` first on its own line, so it
+  needed the same reorder and never carried the string. **Five steps reordered, four carried the
+  string** — the distinction the count kept losing.
+- **NF-5** — `place.g.dart:33-35` is wrong on both branches; the visits decode is at **30-32**
+  (33-35 is `plan:`, `coverAsset:`, `);`). `photo.g.dart:46-48` is **47-49**. Both corrected, because
+  this plan's own standard is that a line number is a measurement.
+- **NF-7** — DEC-99's twice-run guard runs against a `testdata` fixture migration that no file list
+  named. R3's file list now names the pair.
+- **NF-8** — R1 stated "each mutation names the OTHER leg that must stay green" and eight of nine
+  did. The ninth now names leg five, and the pairing is load-bearing: if removing the *migrator's*
+  lock timeout reddens the request-bound leg too, the three bounds are one bound wearing three names,
+  which is OE-19's whole point.
+- **NF-9** — R2 said `MEDIA_MAX_BYTES` joins "the other eight"; it is nine after R1 adds
+  `REQUEST_TIMEOUT`.
+
+### Three more mechanical checks, all mutation-proved
+
+| # | mutation | result |
+|---|---|---|
+| M12 | remove `gate_transcripts` | `the plan records no gate_transcripts, so its quoted gate output is unattributable` |
+| M13 | transcript records 64 ids, plan derives 65 | `records (64,23,8,14); this run derives (65,23,8,14) — the transcript belongs to a different plan` |
+| M14 | an unreproducible historical entry with a one-line reason | `is not reproducible and says nothing about why` |
+| M15 | append a comment to the script without re-stamping | `stamps script 012596dec393…; this script is 92f86e25433c…` |
+| M16 | revert `risks[7]` to the deleted phrase — **the verifier's own finding, replayed** | `'four sentences' survives at risks[7].risk without its correction beside it` |
+| M17 | revert RULE-07's `what_is_already_true` — **the second survival, replayed** | `'four sentences' survives at open_rulings[6].what_is_already_true` |
+
+M16 and M17 are the ones that matter: a check earns the claim that it would have caught something
+only by being run against that something.
+
+### What turned out to be wrong when I looked
+
+Two things, and both are refinements rather than reversals.
+
+1. **NF-1's mechanism**, as the coordinator anticipated: the transcript is real, produced by an
+   unstaged working tree, not fabricated. The finding stands; the wording changes.
+2. **The first draft of the "four sentences" check** — my own — was a location allowlist and went red
+   on three *correct* sites. A permitted-key list cannot express the distinction the finding is
+   about. Recorded in the gate docstring as the fourth instance in that file of a check that could
+   not fail as first written, and the first where fixing it immediately paid.
+
+Everything else on the list reproduced exactly as stated when I ran it: `risks[7]` byte-identical,
+RULE-07's fourth survival, the twin presign leg byte-identical, DEF-06 byte-identical,
+`git show d781d29:scripts/check-plan.py` at 81 lines printing `0 failure(s)` and exit 0, the fourth
+grep returning 10, and `delete_sheets.dart:195` matching none of the three commands.
 
 ---
 

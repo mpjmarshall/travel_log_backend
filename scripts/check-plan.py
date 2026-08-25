@@ -47,6 +47,40 @@ and from the seven lens reports:
   * `internal/logbook/emit.go` appears in some step's file list, and the
     migration count is DERIVED from the file lists rather than stated.
 
+WHAT v7.2.1 ADDS, AFTER AN INDEPENDENT FixVerifier READ v7.2 AGAINST THE SEVEN
+LENS REPORTS. It graded 81 LANDED, 5 PARTIAL, 3 FICTION, 3 CONTAINS-ITS-OWN-DEFECT
+and 1 GUARD-CANNOT-FAIL, and re-ran all eleven checks above and reproduced every
+red. Two of its findings are about this file:
+
+  * THE HEADLINE "BEFORE" TRANSCRIPT WAS NOT REPRODUCIBLE FROM THE COMMIT IT
+    NAMES. `git show d781d29:scripts/check-plan.py` is 81 lines with 14 check()
+    calls and NO rulings block, and run against that commit's plan it prints
+    `0 failure(s); 48 ids; 23 routes; 8 steps; 10 deletions` and exits 0 — the
+    same four counts the record quotes beneath two FAIL lines it cannot emit.
+    The transcript is REAL: the v7.1 rulings block was in the working tree,
+    UNSTAGED, while d781d29 committed docs/ only, and 5c34406 then swept the
+    script in as 293 insertions. So the finding is not fabrication, it is that
+    THE COMMIT IS NOT SELF-CONTAINED. `plan.gate_transcripts` now carries the
+    sha256 of the script that produced the output, this file hashes ITSELF and
+    compares, and the summary line's ids/routes/steps/deletions are recomputed —
+    so editing the gate without re-running and re-stamping is a gate failure.
+    The d781d29 entry is marked `reproducible_from_the_commit: false` with the
+    reason, because the script that produced it no longer exists anywhere and it
+    is the one case the rule cannot retrofit.
+
+  * A DELETION RECORDED AGAINST A LOCATION IS A CLAIM ABOUT THAT LOCATION.
+    OE-17 deleted the phrase "four sentences"; its first draft named three sites,
+    missed two, and one of the three had moved. The phrase may now be NAMED in
+    order to be corrected and may not be ASSERTED, tested as: any string carrying
+    it also carries "eighteen".
+
+THAT SECOND CHECK'S OWN FIRST DRAFT WAS AN ALLOWLIST OF TOP-LEVEL KEYS AND WENT
+RED ON THREE CORRECT SITES — a permitted-location list cannot tell "still says
+four" from "says four was wrong". Rewritten as a predicate about the claim, it
+then found THREE MORE SURVIVALS beyond the two the verifier listed. That is the
+fourth instance in this file of a check that could not fail as first written, and
+the first where fixing it immediately paid.
+
 EVERY ONE OF THE TEN WAS MUTATION-PROVED, and one of them failed that proof on
 its first draft: the migration-count prose check asserted `word in note`, and the
 note recites its own history ("v7.1 said THREE and v7.0 said TWO"), so every
@@ -354,6 +388,101 @@ if mc:
             check(f"{w} up-files" not in note,
                   f"the MIGRATION COUNT note claims {w} up-files as well as "
                   f"{mc['word']} — two counts in one sentence")
+
+# ADDED AT v7.2.1 — A RECORDED GATE TRANSCRIPT MUST BE REPRODUCIBLE FROM THE
+# COMMIT IT IS RECORDED AGAINST. It was not: the "before" transcript this plan
+# quotes as its headline was produced by a working tree in which this file's
+# rulings block sat UNSTAGED, so `git show d781d29:scripts/check-plan.py` is 81
+# lines with no stamp recomputation at all and prints `0 failure(s)` against the
+# very plan the transcript reports two failures for. The transcript is real; the
+# commit is not self-contained, and those are different things.
+#
+# The mechanical form is the cheapest one that works: the transcript carries the
+# sha256 of the script that produced it, and the script hashes ITSELF. Edit the
+# gate without re-running it and re-stamping, and the gate fails — which turns
+# "re-run the gate after every script edit" from a discipline into a
+# precondition. §6.5 already says a mutation count is evidence only if it was run
+# at a stated commit; this is that rule applied to the gate's own output.
+gt = plan.get("gate_transcripts")
+check(gt is not None, "the plan records no gate_transcripts, so its quoted gate output is "
+                      "unattributable to any version of this script")
+if gt:
+    cur = gt.get("current", {})
+    mine = hashlib.sha256(open(__file__, "rb").read()).hexdigest()
+    check(cur.get("script_sha256") == mine,
+          f"gate_transcripts.current stamps script {str(cur.get('script_sha256'))[:12]}…; this "
+          f"script is {mine[:12]}… — re-run the gate and re-stamp, or the recorded output "
+          f"belongs to a file that no longer exists")
+    check(bool(cur.get("output")) and cur.get("exit_code") is not None,
+          "gate_transcripts.current records no output or no exit code, which is a citation "
+          "rather than a transcript")
+    # AND THE FOUR COUNTS IN THE RECORDED LINE ARE THE FOUR THIS RUN DERIVES.
+    # Not circular: the failure count is not checked (that would be), but the
+    # ids/routes/steps/deletions in the summary line are facts about the plan and
+    # are recomputed here. A transcript stamped against the right script and
+    # carrying the wrong counts is a transcript from a different plan — which is
+    # exactly what happened once already, when four counts were quoted correctly
+    # beneath two FAIL lines the script could not emit.
+    m = re.search(r"(\d+) ids; (\d+) routes; (\d+) steps; (\d+) deletions",
+                  cur.get("output", ""))
+    check(m is not None,
+          "gate_transcripts.current.output carries no summary line to check against")
+    if m:
+        want = (len(ids), len(rt), len(plan["steps"]), len(plan["deletions"]))
+        got = tuple(int(x) for x in m.groups())
+        check(got == want,
+              f"gate_transcripts.current records {got} ids/routes/steps/deletions; this run "
+              f"derives {want} — the transcript belongs to a different plan")
+    for h in gt.get("historical", []):
+        if h.get("reproducible_from_the_commit"):
+            check(len(str(h.get("script_sha256", ""))) == 64,
+                  f"gate_transcripts historical entry at {h.get('at_commit')} claims to be "
+                  f"reproducible and stamps no script hash")
+        else:
+            check(len(h.get("why_not", "")) > 80,
+                  f"gate_transcripts historical entry at {h.get('at_commit')} is not reproducible "
+                  f"and says nothing about why")
+
+# ADDED AT v7.2.1 — NO SURVIVING "FOUR SENTENCES". OE-17 deletes the phrase, and
+# its first draft named three locations, missed two, and one of the three had
+# moved when R1 was rewritten. A deletion recorded against a location is a claim
+# about that location; this is the claim in a form that can fail.
+#
+# THE FIRST DRAFT OF THIS CHECK USED AN ALLOWLIST OF TOP-LEVEL KEYS AND WAS
+# WRONG IN THE OTHER DIRECTION — it went red on three sites that name the phrase
+# precisely in order to correct it (the measurement's own headline, this check's
+# own description, and the lens table's summary of the finding). A location
+# allowlist cannot tell "still says four" from "says four WAS wrong", and the
+# difference is the whole point. The predicate is about the CLAIM instead: the
+# phrase may appear only in a string that also carries its correction. A site
+# still asserting four will not also say eighteen — risks[7] did not, and neither
+# did RULE-07's what_is_already_true, which are the two the verifier found.
+def phrase_sites(node, path=""):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from phrase_sites(v, f"{path}.{k}" if path else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from phrase_sites(v, f"{path}[{i}]")
+    elif isinstance(node, str):
+        low = node.lower()
+        if "four sentences" in low or "four client sentences" in low:
+            yield path, ("eighteen" in low or "18 " in low)
+
+
+for where, corrected in sorted(set(phrase_sites(plan))):
+    # claimed_fixes[*].finding is a VERBATIM COPY of the lens report's `target`
+    # string and is checked for equality against it elsewhere in this run.
+    # Rewording it to satisfy this check would break that equality and would
+    # falsify a quotation — the exact failure this repository has recorded seven
+    # times from the other direction, a worker weakening the artefact to satisfy
+    # a checker.
+    if re.fullmatch(r"claimed_fixes\[\d+\]\.finding", where):
+        continue
+    check(corrected,
+          f"'four sentences' survives at {where} without its correction beside it — OE-17 "
+          f"deletes that phrase, and PD-16 re-derived the count as eighteen across ten "
+          f"screens. Naming the phrase to correct it is fine; asserting it is not")
 
 # §6.3 — a revision deletes something.
 check(len(plan["deletions"]) > 0, "deletions is empty and carries no stated reason")

@@ -1,0 +1,779 @@
+{
+ "verdicts": [
+  {
+   "finding_id": "CF-BLO-1",
+   "claim": "Ruled by DEC-90 and split across both repositories, with the side that converts named rather than left to whoever notices first. THE SERVER KEEPS REFUSING and gains a leg asserting a zoneless string is REFUSED and not reinterpreted — the cheap fallback the lens lists as option (b) is written into R1",
+   "verdict": "LANDED",
+   "evidence": "PD-14: {\"id\": \"PD-14\", \"status\": \"NEW at v7.2 — implementing ruling DEC-89, which is a fix to SHIPPED code\", \"title\": \"R1 stops being the migration step and becomes the step where what already ships is corrected\", \"evidence\": \"MEASURED B || R1 work item 4: **THE SERVER KEEPS REFUSING A ZONELESS DATE** (DEC-90). `showDatePicker` returns `DateTime(y,m,d)` in the device's local zone, `_addDates` passes it through with no conversion, and `toIso8601String()` emits no zone suffix for a no"
+  },
+  {
+   "finding_id": "CF-BLO-2",
+   "claim": "DEC-91's `shared` boolean, derived as a correlated subquery on `share_links`, emitted on every Trip. THE LEG IS REWRITTEN AGAINST A TRIP THAT HAS A LIVE LINK — v7.1's uses one that does not, which is exactly why it passes while the token is destroyed — and the second half asserts that revoking flips",
+   "verdict": "LANDED",
+   "evidence": "PD-14: {\"id\": \"PD-14\", \"status\": \"NEW at v7.2 — implementing ruling DEC-89, which is a fix to SHIPPED code\", \"title\": \"R1 stops being the migration step and becomes the step where what already ships is corrected\", \"evidence\": \"MEASURED B || R1 work item 5: **THE EMITTED TRIP GAINS `shared`** (DEC-91), derived as `EXISTS (SELECT 1 FROM share_links WHERE traveller_id=$1 AND trip_id=t.id AND revoked_at IS NULL)`. DEC-85 hashes tokens at rest, so the server can no longer emit `Trip.shar || R5 work item 6: **SHARE TOKENS ARE HASHED AT REST** (DEC-85), which is migration 0004 and is why the migration count is four. `share_links.token_hash bytea` replaces the plaintext column, sha256 of the raw token, constant-time compared — the same"
+  },
+  {
+   "finding_id": "CF-BLO-3",
+   "claim": "`internal/logbook/emit.go (EDIT — EmitPlace)` joins R6's file list and `(EDIT — EmitWalk)` joins R7's. It was in NO step's file list, so the definition_of_done's rule had nowhere to land. CITY AND PHOTO ARE NAMED AS NEEDING NONE, with the reason (neither carries a list field, so there is no nil slic",
+   "verdict": "LANDED",
+   "evidence": "internal/logbook/emit.go is in three file lists — R1 '(EDIT — EmitTrip carries `shared`)', R6 '(EDIT — EmitPlace; CF-BLO-3, and `emit.go` was in NO step's file list)', R7 '(EDIT — EmitWalk; CF-BLO-3. Photo needs none: it carries no list field)'. definition_of_done[9] carries the City/Photo negative with its reason: 'CITY AND PHOTO NEED NONE AND THE REASON IS STATED SO NOBODY ADDS TWO FUNCTIONS THAT ARE NOISE: neither entity carries a list field, so there is no nil slice for the marshaller to write as null.' Restated in R6 item 7 (City) and R7 item 6 (Photo). R6 leg (b) and R7 leg (c) each OMIT the list key from the request and each has a mutation returning the bare entity that 'reddens alone'. The AST sweep moved to R6. Gate check M7 (strip emit.go from every file list) goes red."
+  },
+  {
+   "finding_id": "CF-BLO-4",
+   "claim": "SPLIT INTO THE HALF THAT IS SCHEDULED AND THE HALF THAT IS A RULING. The client half is scheduled regardless of the answer: CLIENT-PREREQUISITES requires the API layer to branch on the HTTP STATUS as well as the code, so a 404 or 405 on a route the client's own table believes in is a DEPLOYMENT MISM",
+   "verdict": "LANDED",
+   "evidence": "RULE-11 is new and carries the live measurement (405 and 404 both answering `{\"code\":\"not_found\"}`), the two consequences, and the recommendation the claim quotes: 'CLIENT-PREREQUISITES requires the API layer to branch on the HTTP STATUS as well as the code, so a 404 or 405 on a route the client's own table believes in is a DEPLOYMENT MISMATCH and never the delete-succeeded branch.' The mux.go:89 status/code disagreement is recorded there as deliberate. R1 work item 14 item (14) carries the client half. The count 18 is right: the gate asserts 5 LIVE and 18 step-attributed rows out of 23 (mutation E5 red)."
+  },
+  {
+   "finding_id": "CF-BLO-5",
+   "claim": "CONFIRMED UNLANDED AND UNCHANGED, which is what the lens asked for: DEC-76 rules that the CLIENT bumps `logbookFormatVersion` to 2 and there is no server change. The re-measurement adds something worth carrying and it is now written into the lens row: the rest of the document is ALREADY CONFORMANT —",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 14 item (1): 'DEC-76's `logbookFormatVersion` -> 2, before the first real request, and the client must SEND `X-Logbook-Format` so a future disagreement is a clean 406 rather than a quarantine' — which is the half v7.1 omitted, present. open_rulings RULE-01 is CLOSED (DEC-76). The claim is 'confirmed unlanded on the server, unchanged', which is what the lens asked for; nothing on the server side was supposed to change."
+  },
+  {
+   "finding_id": "CF-MAJ-6",
+   "claim": "The phrase 'DEC-56's four sentences' is DELETED wherever this plan carried it (OE-17) and replaced by eighteen in three classes, RE-DERIVED here with the lens's three commands rather than transcribed — 16 + 2 + 1 = nineteen sites across eleven screens, minus `settings_screen.dart:423` which is `pref",
+   "verdict": "CONTAINS-ITS-OWN-DEFECT",
+   "evidence": "The count fix is right (16+2+1=19 sites re-derived by me on wipe/mock-data; all 18 line numbers verified exact; settings_screen.dart:423 correctly excluded) but the DELETION it rests on did not happen where it says. OE-17.what: \"The phrase 'DEC-56's four sentences' wherever this plan carries it — R1 work item 6, THE CLIENT-WORK RISK, and the CLIENT-PREREQUISITES outline.\" risks[7] is BYTE-IDENTICAL to v7.1 and still reads \"a sign-in screen that does not exist, DEC-45's seventh dependency, FOUR SENTENCES OF COPY\". A fourth survival OE-17 does not even list: open_rulings[6] (RULE-07).what_is_already_true — \"it is the number four sentences of client copy (DEC-56) will be written against\". OE-17's own pointer is stale too: R1 work item 6 is now the gzip item; CLIENT-PREREQUISITES moved to item 14. And the derivation itself carries a wrong command output: base.measured M-EIGHTEEN-SENTENCES quotes `grep -rn 'could not be saved' lib/src/screens/ | grep -v '///' | cut -d: -f1 | sort -u | wc -l   # -> 11 screens`; I ran it on wipe/mock-data and it returns 10.",
+   "what_is_missing": "risks[7] and open_rulings[6] still carry FOUR; OE-17's location list must be re-derived rather than named; M-EIGHTEEN-SENTENCES' fourth command output must read 10."
+  },
+  {
+   "finding_id": "CF-MAJ-7",
+   "claim": "A table of TWELVE ROWS in three lanes — RETRY (`rate_limited`, `timeout`, plus transport failure as a thirteenth row that is not a code), REPORT (eight), RE-AUTHENTICATE (`unauthenticated`) — with `unsupported_format` in a lane of its own that MUST NEVER RETRY. Each row answers the two questions the",
+   "verdict": "LANDED",
+   "evidence": "PD-17: {\"id\": \"PD-17\", \"status\": \"NEW at v7.2 — from the client-fidelity lens's second major\", \"title\": \"Twelve error codes, three lanes, and `unsupported_format` in a lane of its own\", \"evidence\": \"`grep -c 'Code = \\\"' internal/httpx/er"
+  },
+  {
+   "finding_id": "CF-MAJ-8",
+   "claim": "DEC-47's item is promoted from a cache-key argument to the sentence that is true: on `wipe/mock-data` there are FIVE `AssetImage` constructions and ZERO declared assets, so after DEC-46 makes every argument a 64-hex id, EVERY IMAGE IN THE APP IS THE FAILURE PLATE until an object-id ImageProvider lan",
+   "verdict": "LANDED",
+   "evidence": "M-ASSETS-ZERO: ON `wipe/mock-data` THERE ARE FIVE `AssetImage` CONSTRUCTIONS AND ZERO DECLARED ASSETS (CF-MAJ-8). `pubspec.yaml` declares only `fonts`, and `assets/imagery/` does not exist. After DEC-46 the argument to all five is a 64-hex objec"
+  },
+  {
+   "finding_id": "CF-MAJ-9",
+   "claim": "R1's CLIENT-PREREQUISITES outline is replaced. THE FIVE MISSING ITEMS ARE ADDED: DEC-85's `shareLinkId` consequence; DEC-84's fifteen minutes as the sentence the copy is written against (with PD-16's corrected count); DEC-61's ACTUAL consequence, which v7.1 conflated — register does not sign you in,",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 14: **docs/CLIENT-PREREQUISITES.md IS CREATED**, for a reader who has NOT read this repository, and v7.2 rewrites its outline because the client-fidelity lens found five items missing and one that is ALREADY DONE. In order: (1) DEC-76"
+  },
+  {
+   "finding_id": "CF-MIN-10",
+   "claim": "The truncation is STATED AS THE CONTRACT rather than widened: millisecond precision on the wire, and the client truncates before sending, so the round trip IS byte-identical. `instantLayout` stays `.000`. The golden legs gain the six-digit input, and `expiresAt` is named as outside DEC-68's six fiel",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 4: **THE SERVER KEEPS REFUSING A ZONELESS DATE** (DEC-90). `showDatePicker` returns `DateTime(y,m,d)` in the device's local zone, `_addDates` passes it through with no conversion, and `toIso8601String()` emits no zone suffix for a no"
+  },
+  {
+   "finding_id": "CF-MIN-11",
+   "claim": "One line, and it is worth the line because the key name invites the mistake and the failure is a hard throw on the very first screen after sign-up: the register and session responses are their own types and must NOT be decoded with `Traveller.fromJson`, whose `name` is non-nullable while DEC-61 rule",
+   "verdict": "LANDED",
+   "evidence": "where = CLIENT-PREREQUISITES item 2, beside DEC-61"
+  },
+  {
+   "finding_id": "CF-MIN-12",
+   "claim": "Scan `v.At`, `p.TakenAt` and `w.RecordedOn` into `time.Time` directly (DEC-102), so the driver errors on a NULL instead of the emitter inventing `0001-01-01T00:00:00.000Z` — which `DateTime.parse` accepts happily and every screen renders as a year-1 date. One line each, no behaviour change today, an",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 12: **THE THREE DATE COLUMNS ARE SCANNED INTO `time.Time`** (DEC-102). `v.At`, `p.TakenAt` and `w.RecordedOn` are read out of `sql.NullTime` with `.Valid` never checked — correct today because all three are NOT NULL, but the constrain"
+  },
+  {
+   "finding_id": "CF-MIN-13",
+   "claim": "The four `IS NULL OR <> ''` CHECKs go into 0003, which is already opening those tables. The drawn consequence the lens names is what makes `photos.caption` the load-bearing one: `setPhotoCaption` deliberately converts `''` to null because M2 guards both note blocks on `caption != null`, so an empty ",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 9: Migration 0003 also carries three things the database lens found while it was open: `media_objects_uploaded_after_created_ck CHECK (uploaded_at IS NULL OR uploaded_at >= created_at)` — a row could be committed ten years before it "
+  },
+  {
+   "finding_id": "CF-MIN-14",
+   "claim": "Named rather than changed, which is what the lens recommended. `PUT /v1/trips/{id}` is an unconditional upsert with no exists-branch, so the client's `log.holdsId(id)` guard is now belt-and-braces rather than the guarantee its comment claims — at 31^12 the risk is a stale cache and not a random coll",
+   "verdict": "FICTION",
+   "evidence": "where = 'CLIENT-PREREQUISITES, in the same section as the error table'. R1 work item 14 is the CLIENT-PREREQUISITES outline and lists fourteen numbered items; none concerns `_freshId`, `log.holdsId`, the unconditional upsert or a create/update split. Searched the whole plan with claimed_fixes and changelog excluded: 'belt-and-braces' 0, 'WHERE NOT EXISTS' 0, 'exists-branch' 0. `holdsId` occurs once, in DEF-04's what_is_open, about cross-kind id uniqueness — a different subject. `_freshId` occurs once, in R1 item 14(12), about refilePhoto's signature. The claim's only evidence is the claim.",
+   "what_is_missing": "No text anywhere names the upsert-has-no-exists-branch consequence or the DEC-33 conversation it defers to."
+  },
+  {
+   "finding_id": "CF-MIN-15",
+   "claim": "The entry now says DECODE BOTH AND COMPARE THE DECODED VALUES, and quotes the concrete case so nobody 'fixes' the emitter: the client wrote `\"lat\":-45.0` and Go emits `\"lat\":-45`, at `nz-wish-0` / Roys Peak, accounting for exactly 2 of the 2-byte difference. The values are equal as float64 and `(jso",
+   "verdict": "LANDED",
+   "evidence": "where = definition_of_done, the whole-log round-trip entry, rewritten"
+  },
+  {
+   "finding_id": "DB-BLO-1",
+   "claim": "UNCHANGED FROM v7.1 AND STILL CORRECT: upsert plus an UPWARD ordinal offset, with the executed arithmetic in the step text and the no-op re-send leg written out in full. WHAT v7.2 ADDS IS THE HALF IT DID NOT CLOSE — see SAF-MAJ-4: the fix ends 'DELETE only the ids absent from the incoming array', an",
+   "verdict": "LANDED",
+   "evidence": "PD-06 carries the executed arithmetic (upward offset +1000, ON CONFLICT ON CONSTRAINT visits_pkey, then DELETE the absent ids; downward offset shown failing visits_ordinal_ck). R6 work item 2b restates it with the reproduction. definition_of_done[5] carries 'A DANGLING-REFERENCE CHECK IS NOT A FILING CHECK'. The 'UNCHANGED FROM v7.1' claim is true and the entry does not stop there — it names the half it does not close and hands it to SAF-MAJ-4, which lands as R6 item 8 and R6 leg (a) plus its twin."
+  },
+  {
+   "finding_id": "DB-BLO-2",
+   "claim": "UNCHANGED FROM v7.1: three row rules replace one, with the nested-visits rule stated explicitly, and R8 gains the leg asserting `fushimi-inari` publishes exactly ONE visit. The visible consequence — `visits.first.at` dating the public page to an unshared trip — is inside the leg's own message.",
+   "verdict": "LANDED",
+   "evidence": "PD-07's three row rules are restated in R8 work item 3, and R8's second failing test is written out in full — TestAPublishedPlaceCarriesOnlyTheSharedTripsVisits — with a `len(all) < 2 || len(mine) != 1` fixture precondition guarding against vacuity, an assertion that fushimi-inari publishes exactly ONE visit, and the visits.first.at dating assertion inside the leg. The mutation 'filter places but not the visits inside them (the SECOND leg reddens and the first does NOT)' is the pair proving v7.0's leg could not see it."
+  },
+  {
+   "finding_id": "DB-MAJ-3",
+   "claim": "UNCHANGED FROM v7.1: the conflict branch is bounded by `WHERE media_objects.uploaded_at IS NULL`, with the leg that begins-uploads-commits and then re-begins with a different byteSize and type. The deleted RETURNING's real reason is recorded — `DO UPDATE … WHERE <false>` and `DO NOTHING` both return",
+   "verdict": "LANDED",
+   "evidence": "where = R3 work items 2 and 3, R3's second failing test, R3's mutation list"
+  },
+  {
+   "finding_id": "DB-MAJ-4",
+   "claim": "The mutation is REPLACED rather than reworded, because it goes green: `UPDATE … SET col = DEFAULT` is legal SQL and after 0002 it produces exactly true/true/false. The sentence 'a DEFAULT does not reach an UPDATE' is narrowed to 'an UPDATE THAT DOES NOT NAME THE COLUMN'. The leg is kept — it is righ",
+   "verdict": "LANDED",
+   "evidence": "R5 work item 10: **THE SHARE-RESET MUTATION v7.1 NAMED GOES GREEN, SO IT IS REPLACED** (DB-MAJ-4). `UPDATE … SET col = DEFAULT` is legal SQL, it reaches the column default, and after migration 0002 it produces exactly true/true/false — the correct"
+  },
+  {
+   "finding_id": "DB-MAJ-5",
+   "claim": "UNCHANGED FROM v7.1: 0002 backfills, the down file is not an inverse and says so in its own text, and the leg migrates to 0001 only, writes a trip, asserts `[false false false]` as a `t.Fatalf` PRECONDITION, migrates to 0002 and asserts `[true true false]`.",
+   "verdict": "LANDED",
+   "evidence": "PD-01: {\"id\": \"PD-01\", \"status\": \"NEW at v7.0; AMENDED at v7.1 by ruling DEC-82, and the amendment is the half v7.0 got wrong\", \"title\": \"The share flag defaults move to the client's in migration 0002 — and 0002 BACKFILLS the rows alread || R1 work item 10: Migration 0002 alters `share_photos` and `share_notes` to DEFAULT true, with a comment carrying the client's own sentence about why `share_coordinates` stays false: a pin on your accommodation is not something to hand out by link,"
+  },
+  {
+   "finding_id": "DB-MAJ-6",
+   "claim": "UNCHANGED FROM v7.1: proof method (b) is deleted as evidence, the catalog leg is the sole load-bearing proof and EVIDENCE.md says so, and R4 gains the constraint-trigger measurement that DEC-70's withdrawn reason had forbidden.",
+   "verdict": "LANDED",
+   "evidence": "OE-13: {\"id\": \"OE-13\", \"what\": \"DEC-70's proof method (b) — `SET enable_seqscan=off` as evidence that an index is used — and the sentence in DEC-70 giving the reason method (a) was withdrawn.\", \"why\": \"BOTH HALVES ARE WRONG AND THE DATAB || R4 work item 6: **DEC-70's PROOF METHOD (b) IS NOT USED, AND ITS STATED REASON IS CORRECTED** (OE-13). `SET enable_seqscan=off` is vacuous for every index on `photos`: the planner picks any index leading on `traveller_id` and filters, so the asse"
+  },
+  {
+   "finding_id": "DB-MIN-7",
+   "claim": "`lock_timeout` lands on the migration connection AND v7.1's claim about what it closes is DELETED (OE-19). It is kept because DEC-96 keeps it — 'the third of three and not the whole' — and the other two bounds arrive in the same step, which is the correction OPS-BLO-1 forced.",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 11: `Migrator.Migrate` sets `lock_timeout` on the migration connection, beside the existing `set_config('search_path', …)`. IT IS THE THIRD OF THREE AND NOT THE WHOLE, and v7.1's claim that it closes the stall class is deleted as OE-1"
+  },
+  {
+   "finding_id": "DB-MIN-8",
+   "claim": "UNCHANGED FROM v7.1: DEC-70's sentence that RI checks never appear in EXPLAIN is corrected, the conclusion is kept, and R4 uses the trigger lines as a real measurement of which cascades fired and what each cost.",
+   "verdict": "LANDED",
+   "evidence": "OE-13: {\"id\": \"OE-13\", \"what\": \"DEC-70's proof method (b) — `SET enable_seqscan=off` as evidence that an index is used — and the sentence in DEC-70 giving the reason method (a) was withdrawn.\", \"why\": \"BOTH HALVES ARE WRONG AND THE DATAB || R4 work item 6: **DEC-70's PROOF METHOD (b) IS NOT USED, AND ITS STATED REASON IS CORRECTED** (OE-13). `SET enable_seqscan=off` is vacuous for every index on `photos`: the planner picks any index leading on `traveller_id` and filters, so the asse"
+  },
+  {
+   "finding_id": "DB-MIN-9",
+   "claim": "UNCHANGED FROM v7.1: `internal/postgres/schema_test.go` is in R3's file list for the renamed constraint and the allowlist, and `image/jpeg` and `image/png` are required explicitly because `schema_test.go:62` seeds shared helpers with the first.",
+   "verdict": "LANDED",
+   "evidence": "where = R3's file list, R3 work items 6 and 10"
+  },
+  {
+   "finding_id": "DB-MIN-10",
+   "claim": "UNCHANGED FROM v7.1: TEN tables, re-derived and with `sessions` named as the eleventh that the seed does not write, because the session is minted by the route afterwards.",
+   "verdict": "LANDED",
+   "evidence": "where = R4's size field"
+  },
+  {
+   "finding_id": "DB-MIN-11",
+   "claim": "UNCHANGED FROM v7.1: `media_objects_uploaded_after_created_ck` in 0003, with the reason — the sweep's grace window keys off exactly these timestamps, so an incoherent pair is a sweep that fires early or never.",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 9: Migration 0003 also carries three things the database lens found while it was open: `media_objects_uploaded_after_created_ck CHECK (uploaded_at IS NULL OR uploaded_at >= created_at)` — a row could be committed ten years before it "
+  },
+  {
+   "finding_id": "DB-MIN-12",
+   "claim": "UNCHANGED FROM v7.1: four one-line CHECKs in 0003 on `photos.caption`, `visits.note`, `trips.summary` and `places.plan`, on DEC-58's argument that a Go check can be bypassed by the next route somebody adds.",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 9: Migration 0003 also carries three things the database lens found while it was open: `media_objects_uploaded_after_created_ck CHECK (uploaded_at IS NULL OR uploaded_at >= created_at)` — a row could be committed ten years before it "
+  },
+  {
+   "finding_id": "DB-MIN-13",
+   "claim": "UNCHANGED FROM v7.1: DEC-83 leaves it in Go, the comment becomes a `COMMENT ON COLUMN` in 0003 because 0001 cannot be edited, and PD-13 records that the tempting paired CHECK is UNEXECUTABLE — it aborts D2's keep branch. AT v7.2 THE RULE GAINS THE ASSERTION IT WAS MISSING: pair-agreement cannot see ",
+   "verdict": "LANDED",
+   "evidence": "PD-13: {\"id\": \"PD-13\", \"status\": \"NEW at v7.1 — and it is a conflict between two instructions that both look right\", \"title\": \"DEC-83's comment CANNOT go in 0001, and the paired CHECK a reader will reach for instead is unexecutable\", \"ev || R3 work item 9: Migration 0003 also carries three things the database lens found while it was open: `media_objects_uploaded_after_created_ck CHECK (uploaded_at IS NULL OR uploaded_at >= created_at)` — a row could be committed ten years before it "
+  },
+  {
+   "finding_id": "DB-MIN-14",
+   "claim": "SUPERSEDED RATHER THAN FIXED AS FOUND, and a verifier should grade it against DEC-96. The lens found search_path unpinned at runtime and the two timeouts unset, and v7.1 put the first in R4 and deferred the second to DEF-03. DEC-96 chose the numbers and moved BOTH to R1, on the same `options=` line:",
+   "verdict": "LANDED",
+   "evidence": "OE-16: {\"id\": \"OE-16\", \"what\": \"DEF-03 — the deferral of `statement_timeout` and `idle_in_transaction_session_timeout` on the application role — and R4 work item 8's conditional clause that carried it ('…go on the same line if DEF-03's n || R1 work item 7: **THREE BOUNDS AND A 503** (DEC-96), all in this step and not conditionally in R4. Wire `httpx.Timeout` with a `REQUEST_TIMEOUT` variable at 15s — the middleware is written and has ZERO production call sites, and main.go already s"
+  },
+  {
+   "finding_id": "DB-MIN-15",
+   "claim": "UNCHANGED FROM v7.1: the generator's stub comment gains the arithmetic — 50,000 photographs at 13 written columns is 650,000 bind parameters against the wire protocol's int16 count, so the generator chunks and the 284-row seed does not need to. PERF-MIN-8 adds the same cap as a constraint on R6's mu",
+   "verdict": "LANDED",
+   "evidence": "R4 work item 7: `internal/seed/generate.go` stays a stub, and its comment gains one sentence with arithmetic: a single multi-row INSERT of 50,000 photographs at 13 written columns is 650,000 bind parameters, well over the wire protocol's int16 co"
+  },
+  {
+   "finding_id": "OPS-BLO-1",
+   "claim": "THE BELIEF IS DELETED AND THE THREE BOUNDS ARE LANDED. v7.1's claim that `lock_timeout` closes the stall class is struck (OE-19) — it bounds the migration's WAIT and nothing else. DEC-96's three arrive together in R1: `REQUEST_TIMEOUT` wiring `httpx.Timeout`, which has zero production call sites tod",
+   "verdict": "LANDED",
+   "evidence": "OE-19 deletes the lock_timeout over-claim; R1 work items 7 and 8 land DEC-96's three bounds, the 503+Retry-After branch and start_period: 150s; R1's FIFTH failing test is written out as TestARequestBlockedOnALockGetsABoundedAnswerAndNotSilence, answering from a goroutine behind a `select` with a deadline and asserting the STATUS rather than elapsed time, with the mutation 'reddens on the status and NOT on the deadline'. DB-MIN-7's claimed_fix records the correction from the other side."
+  },
+  {
+   "finding_id": "OPS-BLO-2",
+   "claim": "DEC-99's four parts land with R3, which is the step that introduces 0003: the twice-run test, the greppable `IF NOT EXISTS` header rule, the documented recovery (the psql to inspect `schema_migrations` plus the `DROP INDEX` for the INVALID index `CREATE INDEX CONCURRENTLY` leaves), and a failure mes",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 12 carries all four parts of DEC-99 and names the vacuity in terms: '0003 AS SPECIFIED IS ENTIRELY TRANSACTIONAL and carries no directive at all, so today the twice-run test has no real subject ... the leg asserts the subject set is NON-EMPTY before running it.' R3's leg (b) restates the precondition, and R3's file list carries migrate.go and migrate_test.go."
+  },
+  {
+   "finding_id": "OPS-BLO-3",
+   "claim": "DEC-97 and DEC-86 land as one pair because they were the collision. R4's refusal becomes ONE PREDICATE — refuse when ANY TRAVELLER ROW EXISTS, the same one DEC-86 puts on register — which covers both directions and removes the ambiguity about a registered-but-unwritten account. A SECOND GUARD is add",
+   "verdict": "LANDED",
+   "evidence": "R4 work items 3 and 5 make the refusal one predicate ('refuse when ANY TRAVELLER ROW EXISTS'), add the --i-know-this-is-a-dev-database marker, generate the passphrase per run and print the DSN and traveller id in the refusal; R5 work item 7 lands DEC-86 and states the pairing. R4's acceptance check runs `make seed` three times with three expected outcomes."
+  },
+  {
+   "finding_id": "OPS-MAJ-4",
+   "claim": "`start_period: 150s`, above `migrateTimeout`, with the reasoning in the same comment block that nests the other three budgets — and the measurement in it: `health=unhealthy` at t=61s while a CORRECT migration was still waiting for its lock and applied at t=98s, so `make up --wait` failed a deploy th",
+   "verdict": "PARTIAL",
+   "evidence": "The start_period half landed in full: R1 work item 8 ('**AND RAISE `start_period` ABOVE `migrateTimeout`** ... Measured: `health=unhealthy` at t=61s while a CORRECT migration was still waiting for its lock and went on to apply at t=98s ... `start_period: 150s` costs nothing'), R1's file list carries the Dockerfile, and the acceptance check greps `start_period` in Dockerfile and compose. The second half of the claim — 'The split-migration-out-of-boot alternative is named and not taken: `-migrate-only` already works' — is nowhere: '-migrate-only' has 0 occurrences in the plan outside claimed_fixes.",
+   "what_is_missing": "The declined alternative is not named in any of the three locations the claim points at."
+  },
+  {
+   "finding_id": "OPS-MAJ-5",
+   "claim": "`restart: always` on all services (DEC-95), with the reason in the compose file's own voice — `unless-stopped` remembers a human decision that the human will not remember — and the controlled pair that makes the distinction visible: a container that dies on its own reaches `restarting restarts=6` in",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 13: **THE OPERATIONS HYGIENE THAT BELONGS WITH THE THIRD SERVICE** (DEC-95). `restart: always` on all services, with the reason in the compose file's own voice: `unless-stopped` does not restart a container stopped from OUTSIDE and th"
+  },
+  {
+   "finding_id": "OPS-MAJ-6",
+   "claim": "THREE THINGS, ALL IN R4, WHICH IS WHERE THE VOLUME STOPS BEING DISPOSABLE. `make backup` (`pg_dump -Fc`, keep 7); ONE RESTORE REHEARSAL recorded in EVIDENCE.md with its output; and `make slice` under its own `COMPOSE_PROJECT_NAME`, refusing the live project unless `SLICE_DESTROY_VOLUME=1` — matching",
+   "verdict": "LANDED",
+   "evidence": "R4 work item 10: **A BACKUP, AND `make slice` STOPS BEING ABLE TO DESTROY THE LIVE VOLUME** (DEC-92, SAF-BLO-3, OPS-MAJ-6). R4 IS WHERE THE VOLUME STOPS BEING DISPOSABLE, which is why it is here: the plan's own premise is that PostgreSQL is the re"
+  },
+  {
+   "finding_id": "OPS-MAJ-7",
+   "claim": "`EnsureBucket` joins the interface and is CALLED AT BOOT in cmd/api, on the same argument `run()` already makes for its Postgres ping. `depends_on: minio: condition: service_healthy` on api, and the SHIPPED MinIO tag is pinned rather than only the test one. THE DEFINITION OF DONE ASSERTS THE BUCKET ",
+   "verdict": "LANDED",
+   "evidence": "where = R2 work items 9 and 10, R2's file list, R2's bucket leg, R2's acceptance check, definition_of_done"
+  },
+  {
+   "finding_id": "OPS-MAJ-8",
+   "claim": "Driver-level connectivity failures (pgconn connect errors, `sql.ErrConnDone`, a pool-acquire deadline) map to **503 with `Retry-After: 5`**, leaving 500 for genuine handler faults. THE ERROR VOCABULARY DOES NOT GROW — this is a status and a header, and DEC-12's twelve codes are untouched, which is s",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 7: **THREE BOUNDS AND A 503** (DEC-96), all in this step and not conditionally in R4. Wire `httpx.Timeout` with a `REQUEST_TIMEOUT` variable at 15s — the middleware is written and has ZERO production call sites, and main.go already s"
+  },
+  {
+   "finding_id": "OPS-MAJ-9",
+   "claim": "All four parts of DEC-101. `durationUs` rather than `durationMs`, and THE LEG ASSERTS NON-ZERO rather than presence — a leg asserting the field exists would have passed against the defect, which was 15,151 of 15,960 lines reading 0. `travellerId` on the request-scoped logger where auth resolves it. ",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 9: **THE ACCESS LOG LEARNS THREE FIELDS AND LOSES ONE CALLER** (DEC-101). `durationUs` instead of `durationMs` — 15,151 of 15,960 lines over 21.35 hours of the live stack read `durationMs:0`, and the only non-zero values in the whole"
+  },
+  {
+   "finding_id": "OPS-MIN-10",
+   "claim": "Both halves taken. `logging: {driver: json-file, options: {max-size: 10m, max-file: 3}}` on all services, and `/healthz` comes off the Info access log — 94.9% of 21.35 hours of lines was the healthcheck talking to itself, so the disk cost is survivable anywhere and the signal cost is a 20:1 dilution",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 13: **THE OPERATIONS HYGIENE THAT BELONGS WITH THE THIRD SERVICE** (DEC-95). `restart: always` on all services, with the reason in the compose file's own voice: `unless-stopped` does not restart a container stopped from OUTSIDE and th"
+  },
+  {
+   "finding_id": "OPS-MIN-11",
+   "claim": "One `time.Since(start)`: the boot failure prints the ELAPSED duration with the budget as a second field, so a DNS failure that took 247ms stops reading as a 10-second wait. It rides with R1's other cmd/api changes rather than being its own item.",
+   "verdict": "FICTION",
+   "evidence": "where = \"R1 work item 7's DSN and bounds work, in cmd/api/main.go\". R1 item 7 is DEC-96's three bounds and the 503 branch; it says nothing about the startup ping's error text. Searched the plan with claimed_fixes and changelog excluded: 'time.Since' 0 occurrences, 'elapsed' 0, 'startup ping' 0. R1's file list entry for cmd/api/main.go reads '(EDIT — wire httpx.Timeout, the DSN `options=` line, the WriteTimeout ceiling said out loud)' — no third item.",
+   "what_is_missing": "Nothing in the plan asks for the boot failure to print the elapsed duration."
+  },
+  {
+   "finding_id": "OPS-MIN-12",
+   "claim": "`mem_limit` per service, and the three numbers written down as the sizing derivation rather than left in a lens report: API 140.5 MiB steady after one Argon2 run against 12.42 idle and it does NOT come back down, so each +1 on ARGON2_MAX_CONCURRENT is +64 MiB of steady working set; MinIO 214.7 MiB i",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 13: **THE OPERATIONS HYGIENE THAT BELONGS WITH THE THIRD SERVICE** (DEC-95). `restart: always` on all services, with the reason in the compose file's own voice: `unless-stopped` does not restart a container stopped from OUTSIDE and th"
+  },
+  {
+   "finding_id": "OPS-MIN-13",
+   "claim": "CARRIED with both halves written down rather than actioned: `/healthz` is a LIVENESS probe answering a READINESS question (its answer is a fact about the connection pool, and both inversions were observed in one run), and NOTHING CONSUMES `unhealthy` — compose does not restart on it and no orchestra",
+   "verdict": "PARTIAL",
+   "evidence": "Carried to next_slice.what_else_is_in_it[11], which does state both halves verbatim ('`/healthz` is a LIVENESS probe answering a READINESS question ... and NOTHING CONSUMES `unhealthy`'). It has no trigger. next_slice items carry no trigger field and this one names no observable condition — unlike SEC-MIN-9/11, which say 'before anything is published'. The claim's own text says 'One comment in the compose file is the whole of the fix', so the cheap half is deferred with nothing to fire on rather than done.",
+   "what_is_missing": "No trigger. A one-comment fix deferred to an unscheduled slice with no condition attached."
+  },
+  {
+   "finding_id": "PERF-BLO-1",
+   "claim": "Both halves of DEC-94, and they are independent. gzip with `Accept-Encoding` honoured and `Vary` SET — measured, level 1 takes the fixture's 99,271 bytes to 6,806 in 0.3 ms — and the ETag asserted UNCHANGED by the encoding, so a client switching Accept-Encoding does not re-download an unchanged log.",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 6 carries both halves of DEC-94 with the measured numbers; R1's FOURTH failing test is written out as TestTheWholeLogIsCompressedWhenAskedAndSaysSo, asserting Content-Encoding, Vary, absence on a plain request, ETag equality across encodings and gunzip equality; definition_of_done[36] carries it, and the mutation 'Drop `Vary` — leg four reddens on Vary only' is the pair."
+  },
+  {
+   "finding_id": "PERF-MAJ-2",
+   "claim": "DEC-100: `TouchSession` leaves `WithTravellerLock` and becomes granular. It lands in R5 rather than R1 because it is auth work and R5 is the auth step — putting every measured defect in one step is how a step stops being reviewable. The acceptance check measures it from outside: `pg_stat_statements`",
+   "verdict": "LANDED",
+   "evidence": "R5 work item 8: **TouchSession LEAVES THE TRAVELLER'S ADVISORY LOCK AND BECOMES GRANULAR** (DEC-100). Measured with pg_stat_statements reset around exactly one 304: NINE database round trips, FIVE of them to stamp a timestamp — `begin`, `pg_advis"
+  },
+  {
+   "finding_id": "PERF-MAJ-3",
+   "claim": "The trigger becomes A NUMBER rather than a feeling, and it is the same number as PERF-BLO-1's: the emitted body exceeding the point at which a forced re-read stops fitting the WriteTimeout budget. MEASURED AGAINST THE LINK, NOT THE SERVER — the server side of the 100x re-read is 74.9 ms and the wire",
+   "verdict": "LANDED",
+   "evidence": "DEF-09: {\"id\": \"DEF-09\", \"title\": \"Per-resource ETags, and the number that triggers them\", \"deferred_to\": \"unscheduled — but the trigger is now a number rather than a feeling\", \"what_is_open\": \"`logbook_version` is the whole-log cache key"
+  },
+  {
+   "finding_id": "PERF-MAJ-4",
+   "claim": "DEC-93's cap, implemented at 500 with the derivation written out rather than the number alone, and enforced in `ValidateWalk` with its own 422 NAMING THE FIELD — not by `http.MaxBytesReader`, which answers `ErrBodyTooLarge` with no field name, so the user's longest walk would fail with a sentence ab",
+   "verdict": "PARTIAL",
+   "evidence": "The cap landed: PD-21 with the derivation, R7 work item 9, and R7's leg (d) as a pair ('refuses 501 points with a 422 NAMING `points`, and accepts 500 — the pair, because a cap asserted only from above passes against a cap of zero') with the mutation 'raise the cap to 21,600'. Same false pointer as SAF-MAJ-6: where = 'R3 work item 9 for the lower bound', and R3 work item 9 does not mention `jsonb_array_length(points) > 0`.",
+   "what_is_missing": "The 0003 lower bound is not in the step that writes 0003."
+  },
+  {
+   "finding_id": "PERF-MAJ-5",
+   "claim": "The open question the lens said the plan could not proceed without is ANSWERED by DEC-93 and the track stays IN the log document: capped at a few hundred, it is fine where it is. The fixture's blindness is recorded as the reason the question existed — two walks, seven points between them, so every s",
+   "verdict": "LANDED",
+   "evidence": "PD-21: {\"id\": \"PD-21\", \"status\": \"NEW at v7.2 — implementing ruling DEC-93, which names 'a few hundred' and leaves the number to this plan\", \"title\": \"`Walk.points` is capped at 500, in ValidateWalk, with its own 422 naming the field\", \" || DEF-09: {\"id\": \"DEF-09\", \"title\": \"Per-resource ETags, and the number that triggers them\", \"deferred_to\": \"unscheduled — but the trigger is now a number rather than a feeling\", \"what_is_open\": \"`logbook_version` is the whole-log cache key || R7 work item 9: **`Walk.points` IS CAPPED AT 500 IN `ValidateWalk`, WITH ITS OWN 422 NAMING THE FIELD** (DEC-93, PD-21). The fixture's two walks carry SEVEN POINTS BETWEEN THEM, so every size argument in v7.0 and v7.1 was calibrated on a log with"
+  },
+  {
+   "finding_id": "PERF-MIN-6",
+   "claim": "99,271 replaces 85,422 as THE PREMISE NUMBER, with the derivation rather than the figure alone and with the two numbers distinguished where both appear: 85,422 is the CLIENT's file and 99,271 is what this build emits, and the difference is DEC-46's 64-hex ids across 284 photographs plus three cover ",
+   "verdict": "LANDED",
+   "evidence": "R4 work item 11: **THE TWO NUMBERS THIS PLAN CARRIED WRONGLY ARE CORRECTED WHERE THEY ARE MEASURED** (DEC-102). The emitted body at fixture scale is **99,271 bytes**, not 85,422 — that second figure is the CLIENT's format-1 file, and DEC-46's 64-h"
+  },
+  {
+   "finding_id": "PERF-MIN-7",
+   "claim": "TEN, not six, corrected in `logbook_store.go`'s own doc comment while R1 is already editing that file for the date scans. The ten are named. And the number is carried with what it explains: nine round trips at roughly 0.3 ms over 0.176 ms of server work is what makes the 3 ms 304 legible.",
+   "verdict": "LANDED",
+   "evidence": "M-TEN-QUERIES: ONE WHOLE-LOG READ IS TEN SELECTs, NOT SIX (DEC-102, PERF-MIN-7). pg_stat_statements after exactly one read, each with calls = 1: photos, visits, trip_cities, places, cities, trips, walk_points, walks, logbook_version, and the tra || R1 work item 12: **THE THREE DATE COLUMNS ARE SCANNED INTO `time.Time`** (DEC-102). `v.At`, `p.TakenAt` and `w.RecordedOn` are read out of `sql.NullTime` with `.Valid` never checked — correct today because all three are NOT NULL, but the constrain"
+  },
+  {
+   "finding_id": "PERF-MIN-8",
+   "claim": "Nothing for trips, where the worst case in the fixture is five cities. For `PUT /v1/places/{id}` the existence check is one `= ANY($2)` and the insert is one multi-row INSERT, because the fixture already holds a place with 28 visits and a real ten-year log would hold more. The database lens's wire-p",
+   "verdict": "LANDED",
+   "evidence": "R6 work item 10: **THE VISITS WRITE IS ONE STATEMENT PER PHASE, NOT ONE PER ROW** (PERF-MIN-8). `PutTrip` is two round trips per child inside the advisory lock — one `SELECT 1 FROM cities` per city id, then one INSERT per city — which is irrelevan"
+  },
+  {
+   "finding_id": "PERF-MIN-9",
+   "claim": "`httpx.Timeout` is WIRED with a `REQUEST_TIMEOUT` variable rather than deleted. The lens offered both branches — wire it, or delete it and say plainly that WriteTimeout is the only bound — and DEC-96 takes the first. The DSN half lands on the same line, which is the cheaper half and closes the trans",
+   "verdict": "LANDED",
+   "evidence": "OE-19: {\"id\": \"OE-19\", \"what\": \"The claim, in R1's `why_first` and in the operations row of the lens table, that `lock_timeout` on the migration connection closes the database lens's stall finding.\", \"why\": \"IT BOUNDS THE MIGRATION'S WAI || R1 work item 7: **THREE BOUNDS AND A 503** (DEC-96), all in this step and not conditionally in R4. Wire `httpx.Timeout` with a `REQUEST_TIMEOUT` variable at 15s — the middleware is written and has ZERO production call sites, and main.go already s"
+  },
+  {
+   "finding_id": "PERF-MIN-10",
+   "claim": "CARRIED into DEF-06 with the number the deferral lacked: 64 MiB / t=1 / p=4 costs 20 ms per verify on this machine, which is fast for a passphrase KDF, so the open risk is a weak work factor rather than a resource ceiling — and at ARGON2_MAX_CONCURRENT=2 the gate is not the binding constraint. m=128",
+   "verdict": "FICTION",
+   "evidence": "where = 'DEF-06, unchanged, with the lens's shape added'. DEF-06 in plan-v7.json at 5c34406 is BYTE-IDENTICAL to DEF-06 at d781d29 — compared field by field, equal. Nothing was added. The numbers the claim says the deferral gained are absent: '104.6' has 0 occurrences in the plan, and DEF-06 carries no per-verify cost, no ARGON2_MAX_CONCURRENT observation and no m=128/t=2 comparison. The deferral itself is genuine and its trigger ('A VPS, or any deploy with a real login rate') is observable.",
+   "what_is_missing": "DEF-06 gained nothing; the lens's measurement is only in the claimed_fix that says it was carried."
+  },
+  {
+   "finding_id": "PERF-MIN-11",
+   "claim": "STATED SO NOBODY OPTIMISES THE WRONG HALF, which is what the lens asked for and the only action it warranted: at 100x, 37.06 ms of a 61.20 ms read is Postgres and 24.1 ms is row-to-struct scanning through database/sql. The query plans are already sane and the planner is right to decline indexes on t",
+   "verdict": "LANDED",
+   "evidence": "R4 work item 11: **THE TWO NUMBERS THIS PLAN CARRIED WRONGLY ARE CORRECTED WHERE THEY ARE MEASURED** (DEC-102). The emitted body at fixture scale is **99,271 bytes**, not 85,422 — that second figure is the CLIENT's format-1 file, and DEC-46's 64-h"
+  },
+  {
+   "finding_id": "PERF-MIN-12",
+   "claim": "NOTHING DONE, WHICH IS THE FINDING. The batching is already right — mint takes a LIST and answers a list — and the presign itself is free. OE-1 and OE-2 already declined a cache, a batch store method and a background minter, and the measurement says they were right by three orders of magnitude. Reco",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 5: POST /v1/media/mint takes a LIST of ids and answers a list of URLs. No singular GET (OE-1), no batch store method (OE-2) — presigning is a local HMAC, so the loop is in the handler."
+  },
+  {
+   "finding_id": "SAF-BLO-1",
+   "claim": "DEC-89, and it reshapes the step. Every field on every write type becomes a pointer and a nil field is LEFT ALONE — exactly as the three sharing flags already are, in a comment one line above the statement that got the other answer for five columns. THE THREE LEGS ARE WRITTEN AGAINST THE BODY THE CL",
+   "verdict": "LANDED",
+   "evidence": "R1 work item 1 states the pointer contract ('Every field on every write struct becomes a pointer and a nil field is LEFT ALONE'); R1's FIRST failing test is written out in full as TestRenamingATripLeavesItsItineraryAndItsDatesAlone, sending `logbook.TripWrite{ID: ptr(\"autumn\"), Name: ptr(\"Autumn crossing, renamed\")}` — two keys, the body T4's pencil sends — and asserting len(got.CityIDs)==3, both dates non-nil, and countTripCities==3 so the response cannot be satisfied by an echoing handler. R1 records BOTH reds (build red on the type change, assertion red on the statement). definition_of_done[29] carries 'ABSENT MEANS LEAVE ALONE, ON EVERY WRITE TYPE (DEC-89)' with the three client bodies named. definition_of_done[30] carries the standing count. The mutation pairs each name the leg that must stay green."
+  },
+  {
+   "finding_id": "SAF-BLO-2",
+   "claim": "RE-READ AND RE-STAMPED, and the correction is larger than the one the lens saw: it reported 35 rulings at 45,474 bytes, and by the time this revision opened the file there were FIFTY-ONE at 80,096 — DEC-43..DEC-102, with NINETEEN never read by any revision. All nineteen are folded in and named in th",
+   "verdict": "LANDED",
+   "evidence": "MEASURED BY ME, not read. `wc -c docs/rulings-v3-pending.json` -> 80096 and `shasum -a 256` -> 6552054a5bb676615b4241e905b04386e7001eecc55d26cb60029923dc9c1b07, both matching base.inputs exactly; `python3 -c \"...len(r), r[0]['id'], r[-1]['id']\"` -> 51 DEC-43 DEC-102, matching count/first/last. CLAUDE.md measures 207684 / 335a39cae66ad27e, matching. All seventeen base.inputs stamps re-measured and all seventeen match. The gate recomputes both (mutations M1, M2, E1, E2 all red)."
+  },
+  {
+   "finding_id": "SAF-BLO-3",
+   "claim": "See OPS-MAJ-6, which is the same finding from the operations side and lands in the same place. The half that is specific to this lens is the ARGUMENT rather than the mechanism: after R4 the compose volume holds the only copy of the record, the plan's own premise says so, and the documented acceptanc",
+   "verdict": "LANDED",
+   "evidence": "R4 work item 10 carries all three parts (make backup pg_dump -Fc keep 7; ONE recorded restore rehearsal in EVIDENCE.md; make slice under its own COMPOSE_PROJECT_NAME refusing the live project unless SLICE_DESTROY_VOLUME=1), R4's file list carries the Makefile and slice-arc.sh, R4's acceptance check asserts `docker volume ls | grep -c travellog_pgdata -> 1, before AND after make slice`, and the ordering check is enforced by the gate (mutation M6 red). See new finding NF-4: the accompanying count 'FIVE acceptance checks' is four."
+  },
+  {
+   "finding_id": "SAF-MAJ-4",
+   "claim": "THE HALF PD-06's FIX DOES NOT CLOSE. The mandated shape ends 'DELETE only the ids absent from the incoming array', and when the array is empty or absent EVERY id is absent — so it does exactly what delete-then-insert did, with the fix in place. THE CONTRACT IS NOW STATED AND THE TWO CASES ARE DIFFER",
+   "verdict": "LANDED",
+   "evidence": "R6 work item 8 states the contract in both directions ('`visits` absent = do not touch the visits at all ... `visits: []` = an explicit request to clear, which no client control issues, so it is REFUSED with a 422 naming the field until one exists') with the measured damage (30 photographs at Fushimi, 95 whole-log). R6's leg (a) and its twin are written out: omitted key -> all 28 visits and all 30 filings survive; `visits: []` -> 422 with field: visits and NOTHING removed, asserted on the row count and not the status alone."
+  },
+  {
+   "finding_id": "SAF-MAJ-5",
+   "claim": "The standing pair-agreement assertion is KEPT — it is the right constraint and PD-13 executed why it is the only form it can take — and A COUNT THAT MUST NOT FALL is added beside it, because unfiling sets BOTH columns to NULL so the pair agrees and all three of the plan's guards return zero. The fix",
+   "verdict": "LANDED",
+   "evidence": "R7 work item 8 keeps the pair-agreement assertion and adds the count beside it, and it covers the right route set: unchanged across PUT /v1/photos/{id}, POST /v1/photos/snooze, PUT /v1/walks/{id} and DELETE /v1/photos/{id} where the photograph was unfiled; RISES on refile; falls by a KNOWN amount on a delete of a filed photograph — i.e. every R7 route except refile and the D1 delete. R6 work item 9 covers R6's three (D2's delete is the known fall). R1 work item 3 states the general rule and definition_of_done[30] carries it with the reason all three standing guards are blind. The fixture numbers that make it writable (95/189/0/0) are measured in R4."
+  },
+  {
+   "finding_id": "SAF-MAJ-6",
+   "claim": "Folded into DEC-89's contract, and the leg is rewritten to send EXACTLY what N1's Discard sends — `{dismissed:true}` alone — rather than a synthesised whole walk, which is the server twin of 'assert on what the widget actually renders'. `walks_points_array_ck` does not stop `points='[]'` because an ",
+   "verdict": "PARTIAL",
+   "evidence": "The behavioural half landed: R7 work item 7(b) and R7's leg (b) send `{dismissed:true}` alone and assert points intact byte for byte, with a pair mutation. The schema half's pointer is false. where = 'R3 work item 9 for the schema half'; R3 work item 9 enumerates exactly three additions to 0003 — `media_objects_uploaded_after_created_ck`, the four `IS NULL OR <> ''` CHECKs, and `COMMENT ON COLUMN photos.place_id`/`visit_id` — and does not include `CHECK (jsonb_array_length(points) > 0)`. R7's file list holds no migration file, so the constraint has no step that writes it. It survives only in R7's prose, PD-21 and base.measured M-MIGRATIONS-4.",
+   "what_is_missing": "The lower-bound CHECK is assigned to 0003 but R3, which owns 0003, does not carry it."
+  },
+  {
+   "finding_id": "SAF-MAJ-7",
+   "claim": "DECLINED, along the branch the lens itself offers ('if that is judged over-strict for a single-user loopback stack, then say so IN R5 with the reason'). Three reasons, in order of weight: the sheet's gate is a gate on the HUMAN and its value is the pause before the typing, while a body field gates t",
+   "verdict": "LANDED",
+   "evidence": "PD-22 exists with a full why_declined and R5 work item 9 carries the decline in the step text as the lens demanded ('say so IN R5 with the reason'). It answers the lens's actual argument rather than a weaker one: the lens argued a body field makes 'the API's guard and the sheet's guard the same guard rather than two independent ones that can drift', and PD-22 inverts exactly that — a cached name on a second device disarms the delete after a rename, a failure the sheet does not have. It engages the lens's compounding note by name and closes the half that compounds (DEC-86). It strengthens the recovery side the lens flagged (R5 item 4, revoke-all sibling). The trigger is observable: 'a second traveller, or any caller of this route that is not the sheet'. Gate mutation M5 (strip why_declined) goes red."
+  },
+  {
+   "finding_id": "SAF-MAJ-8",
+   "claim": "Two of the three parts are DEC-97's and land with it: 'non-empty' becomes 'any traveller row exists', which is one predicate covering both directions, and the DSN and traveller id are printed in the REFUSAL as well as the success. The third is the one nobody had written down and it goes into R4 and ",
+   "verdict": "LANDED",
+   "evidence": "where = R4 work items 3 and 12, and R4's acceptance check"
+  },
+  {
+   "finding_id": "SAF-MIN-9",
+   "claim": "DECIDED IN WRITING RATHER THAN BY SILENCE, which is the fix the lens asked for and the same one DEC-82 got. `share_links_trip_fk ON DELETE CASCADE` destroys the revocation history DEC-67 chose its primary key to keep, and it is ACCEPTED: the trip is gone, so 'which token was live on a trip that no l",
+   "verdict": "LANDED",
+   "evidence": "R5 work item 11: **AND ONE THING DEC-67's OWN ARGUMENT DOES NOT SURVIVE, DECIDED IN WRITING RATHER THAN BY SILENCE** (SAF-MIN-9). `share_links_trip_fk` is ON DELETE CASCADE, so deleting a trip destroys the whole revocation history for that trip, r"
+  },
+  {
+   "finding_id": "SAF-MIN-10",
+   "claim": "It becomes the SECOND sentence in the revocation class rather than a separate item, on DEC-84's own precedent that sentences sharing a correction share an item. D1's 'Nothing is recoverable — there is no bin' was true of a JSON file on the phone and is false of a server where `photos_asset_fk` is RE",
+   "verdict": "LANDED",
+   "evidence": "PD-16: {\"id\": \"PD-16\", \"status\": \"NEW at v7.2 — from the client-fidelity lens's first major; it deletes a count three documents carry (OE-17)\", \"title\": \"Eighteen client sentences, in three classes, re-derived by command\", \"evidence\": \"R"
+  },
+  {
+   "finding_id": "SAF-MIN-11",
+   "claim": "`LogbookSource` had ZERO mentions across the plan and now has a mapping: 200 with content -> `restored`; 200 with an empty log at version 0 -> `fresh`; a decode or format failure -> `unreadable`; a transport failure -> `unavailable`. The harm is what makes it worth a decision rather than a note — a ",
+   "verdict": "LANDED",
+   "evidence": "PD-18: {\"id\": \"PD-18\", \"status\": \"NEW at v7.2 — from the safety lens's third minor, and it is the one whose harm is a screen lying to somebody\", \"title\": \"`LogbookSource` has a server equivalent, and it is four HTTP outcomes\", \"evidence\""
+  },
+  {
+   "finding_id": "SAF-MIN-12",
+   "claim": "The seam is STATED in both places it appears and the commit gains a retry contract: a second commit of an already-uploaded object is a 200 and NOT a 409, so a client that lost the response can just ask again. R4's seed ordering gets its sentence — the two PNGs upload before the ten-table transaction",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 13: **THE COMMIT SEAM IS THE ONLY NON-ATOMIC ONE IN THE PLAN, AND IT GETS A RETRY CONTRACT** (SAF-MIN-12). Every destructive path in R5, R6 and R7 is a single transaction and cannot half-apply — the safety lens could not construct a p || R4 work item 4: It uploads the two PNGs through internal/media and commits them through the same path POST /v1/media/{id}/commit uses (ruling DEC-78), so a seeded object is indistinguishable from an uploaded one."
+  },
+  {
+   "finding_id": "SEC-BLO-1",
+   "claim": "UNCHANGED FROM v7.1: `httpx.LoggedPath(r)` and all four call sites routed through it, one leg per site and A MUTATION PER SITE — a fix applied to AccessLog alone must redden three legs — with a positive control in each, because `grep -c` returning 0 passes against an empty log.",
+   "verdict": "LANDED",
+   "evidence": "'UNCHANGED FROM v7.1' verified rather than accepted: PD-08 names the four sites with line numbers; R8 work item 2 restates them; R8's third failing test is written out as a table-driven TestNoLogSiteEverWritesSomethingThatLooksLikeAShareToken over {access log, recover, rate limiter, auth failure}, and it puts the POSITIVE CONTROL FIRST with t.Fatalf ('`grep -c` returning 0 passes against an empty log'). R8's file list carries middleware.go, ratelimit.go, auth_handlers.go and the new logpath.go. Mutation: 'route only AccessLog through LoggedPath (three of the four log legs redden)'."
+  },
+  {
+   "finding_id": "SEC-BLO-2",
+   "claim": "UNCHANGED FROM v7.1: the headers are applied FROM THE ROUTE TABLE, `Route` gains `NoStore` and `Limit`, and the assertion is on PRESENCE rather than sameness — v7.1's only header-adjacent leg compared two answers and would pass with both headers absent from both.",
+   "verdict": "LANDED",
+   "evidence": "PD-09 makes NoStore and Limit fields on Route; R3 work item 8 applies them from the table and asserts on POST /v1/media/mint; R8 work item 4 asserts the same on /l/{token}; R8's other-legs list says 'PRESENT on the 200 — presence, not sameness, because v7.0's only header-adjacent leg compared two answers and would pass with both absent'. That is the anti-vacuity correction the claim describes, and it is in the plan."
+  },
+  {
+   "finding_id": "SEC-BLO-3",
+   "claim": "UNCHANGED FROM v7.1: `^image/(jpeg|png|heic)$` written out in the step text, enforced in Go for the 422 and as an IN-list in 0003, and `response-content-disposition: attachment` restored on every presigned GET with a leg. AT v7.2 THE DEFENCE FINALLY REACHES THE OBJECT rather than only the row: DEC-8",
+   "verdict": "LANDED",
+   "evidence": "PD-10 and R3 work item 6 both write `^image/(jpeg|png|heic)$` out literally, enforced in Go for the 422 and as an IN-list in 0003; R3 work item 7 restores `response-content-disposition: attachment` on every presigned GET with V4-SF3's nosniff reasoning carried in a comment. The v7.2 addition is real: R2 work item 11 (DEC-87) signs Content-Type into the PUT from the same validated value, with the measured 403/200 pair."
+  },
+  {
+   "finding_id": "SEC-MAJ-4",
+   "claim": "LANDED AND THEN CORRECTED IN THE SAME REVISION, which is worth grading carefully. v7.1 signed the length as the lens asked — and the storage lens then measured that SigV4 signs an exact header VALUE, so a signed `Content-Length` can never express a ceiling and a worker signing `MEDIA_MAX_BYTES` ship",
+   "verdict": "GUARD-CANNOT-FAIL",
+   "evidence": "The prose correction landed (OE-18 deletes PD-11's ceiling sentence; PD-20 replaces it; R2 work item 3 carries both sentences). But the claim's own evidence list names 'R2's second failing test', and that leg is the unmodified TestABodyLongerThanTheSignedLength: no header replay, assertion `resp.StatusCode < 400`. Measured by the storage lens on MinIO RELEASE.2025-09-07T16-13-09Z: an unreplayed signed header answers 400 AccessDenied for honest and lying bytes alike. So the cited guard passes with `Content-Length` removed from the signature entirely — it cannot fail in the way SEC-MAJ-4 exists to prevent.",
+   "what_is_missing": "The cited leg is vacuous; either rewrite it as PD-19 requires or stop citing it as the guard."
+  },
+  {
+   "finding_id": "SEC-MAJ-5",
+   "claim": "UNCHANGED FROM v7.1: select the row regardless of `revoked_at` and decide afterwards, so the lookup is the only branch, and the leg COUNTS STORE CALLS on both paths in the shape `internal/auth/service_test.go` already uses rather than timing them.",
+   "verdict": "LANDED",
+   "evidence": "PD-12 and R8 work item 6 both state 'select the row regardless of `revoked_at` and decide afterwards, so the lookup is the only branch'. R8's other-legs list: 'revoked and unknown do the same number of store calls, COUNTED in the shape internal/auth/service_test.go already uses rather than timed'. The mutation 'return early on a revoked token (the call-count leg reddens and the byte-identical leg does not)' is the pair."
+  },
+  {
+   "finding_id": "SEC-MAJ-6",
+   "claim": "FIXED IN CODE RATHER THAN PLANNED, at `d5be39c`, because it was reachable NOW: `Mount` applied limiting and authentication as either/or, so every authenticated route had no limit at all. It now composes as `authed(perTraveller(handler))` with `TRAVELLER_RATE_LIMIT_PER_MIN` keyed on the traveller id.",
+   "verdict": "LANDED",
+   "evidence": "Verified in shipped code, not in the plan: `git log --oneline -1 d5be39c` -> 'fix(httpapi,httpx,config): every authenticated route had no rate limit at all'; internal/httpapi/auth_handlers.go:130 reads `handler = authed(perTraveller(handler))`; internal/config/config.go:78 reads TravellerRateLimitPerMin; config_test.go:20 records 'EIGHT SINCE THE LIMITER FIX'. R5 work item 4b records it as a fix that landed between revisions."
+  },
+  {
+   "finding_id": "SEC-MAJ-7",
+   "claim": "UNCHANGED FROM v7.1: the public read gets its own limiter and its own number, `Route` gains `Limit`, and the honest sentence about X-Forwarded-For is in R8's own text rather than only in the risks. OE-10 is re-examined in R3 and stands.",
+   "verdict": "LANDED",
+   "evidence": "PD-09's second half and R8 work item 5 give the public read its own limiter and its own number, quoting routes.go:17-18's own prediction, and carry the honest X-Forwarded-For sentence in the step text. OE-10's re-examination is in R3 work item 11 and it stands with a stated reason."
+  },
+  {
+   "finding_id": "SEC-MAJ-8",
+   "claim": "LANDED AT v7.1 AND THE UNDERLYING FAILURE RECURRED, which is the thing to grade: the namespace split held (no plan decision claims a DEC- id) and the recomputed stamp held (the gate was RED on it at d781d29, exactly as designed), but nineteen rulings still went unread between revisions, because a st",
+   "verdict": "CONTAINS-ITS-OWN-DEFECT",
+   "evidence": "The v7.2 additions are real and I mutation-proved them (count/first/last and the CLAUDE.md stamp all go red). The entry's own certification does not survive. It states 'the recomputed stamp held (the gate was RED on it at d781d29, exactly as designed)', and the gate's docstring states 'IT READS THE RULINGS FILE ... that is the whole of the v7.1 addition' and 'The stamp check WORKED: it was red at d781d29'. EXECUTED: `git show d781d29:scripts/check-plan.py` is 81 lines with 14 check() calls and NO rulings block, no stamp recomputation, no PD-namespace check. Run against `git show d781d29:docs/plan-v7.json` it prints `0 failure(s); 48 ids; 23 routes; 8 steps; 10 deletions`, exit 0 — the same four counts PLAN-V7.2-CHANGES.md quotes, beneath two FAIL lines that script cannot emit. `git log -- scripts/check-plan.py` shows two commits, 7b47bee and 5c34406: nothing landed between them. base.measured M-GATE-MUTATIONS cites 'the transcript ... in the v7.1 revision record'; no such file exists in docs/.",
+   "what_is_missing": "An entry about stale certification certifies a run that is not reproducible at its stated commit."
+  },
+  {
+   "finding_id": "SEC-MIN-9",
+   "claim": "Carried as a pre-publication item, which is what the lens recommended: loopback-bound today, so before anything is published either put /healthz behind the proxy's ACL or give it its own high-ceiling limiter — and do not fold it into the auth bucket.",
+   "verdict": "LANDED",
+   "evidence": "where = next_slice.what_else_is_in_it — the /healthz limiter item"
+  },
+  {
+   "finding_id": "SEC-MIN-10",
+   "claim": "`.dockerignore` gains PATTERNS in R2 — the step that introduces this project's first secrets — with the list the lens gave and the observation that the existing lines were written to the shape of the file that leaked rather than to the class.",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 7: `.dockerignore` gains PATTERNS. It currently names two exact paths — `deploy/.env` and `.env` — and no patterns, so `COPY . .` carries any `.env.local`, `*.pem`, `*.key`, `id_rsa` or `secrets/` into the build stage and the build c"
+  },
+  {
+   "finding_id": "SEC-MIN-11",
+   "claim": "Carried as three pre-publication items on the checklist CLAUDE.md calls 'guarded by nothing but a human with a device', with the lens's own ordering (the container hardening is least urgent because stage 2 is already scratch, numeric non-root, no shell).",
+   "verdict": "LANDED",
+   "evidence": "where = next_slice.what_else_is_in_it — the three deployment items"
+  },
+  {
+   "finding_id": "SEC-MIN-12",
+   "claim": "Carried, with the lens's note that the argument is settled elsewhere and must not be re-litigated. AT v7.2 IT GAINS THE MEASUREMENT THAT MAKES IT A TRAP RATHER THAN A GAP (STO-MIN-11): MinIO sets `nosniff` on presigned GETs of its own accord, so a leg asserting it would pass locally and silently sto",
+   "verdict": "PARTIAL",
+   "evidence": "Carried to next_slice.what_else_is_in_it[9] with the STO-MIN-11 measurement folded in ('MinIO sets nosniff on presigned GETs of its own accord'), which is a real addition. But the entry names no condition under which it becomes due — it is an item on an unscheduled list, not a deferral with a trigger.",
+   "what_is_missing": "No trigger; the entry is 'when next_slice happens'."
+  },
+  {
+   "finding_id": "SEC-MIN-13",
+   "claim": "Carried with its reasoning intact: floors only, no ceiling, so the gate counts slots rather than bytes and a hand-edited `m=4194304` row would allocate 4 GiB inside one slot. Due exactly when DEC-21's tuning lands, which is when somebody edits those numbers by hand.",
+   "verdict": "LANDED",
+   "evidence": "where = next_slice.what_else_is_in_it — the Argon2 upper-bounds item"
+  },
+  {
+   "finding_id": "STO-BLO-1",
+   "claim": "THE LEG THE WHOLE STEP EXISTS FOR IS REWRITTEN. It now replays every signed header, asserts the S3 error CODE parsed out of the XML (`XAmzContentChecksumMismatch`) rather than `StatusCode < 400`, and carries a POSITIVE CONTROL in the same function — honest bytes plus the same headers -> 200, the obj",
+   "verdict": "CONTAINS-ITS-OWN-DEFECT",
+   "evidence": "Half the fix landed and the half the finding NAMES did not. The lens target is 'TestABodyThatDoesNotMatchThePresignedDigestIsRefusedByTheBucket, AND ITS TWIN TestABodyLongerThanTheSignedLength', and PD-19 says 'EVERY presign leg in R2 does three things it did not'. The checksum leg is genuinely rewritten (header replay loop, `if code := s3ErrorCode(t, resp); code != \"XAmzContentChecksumMismatch\"`, positive control). The twin is byte-identical to v7.1 — verified by diffing plan-v7.json at 5c34406 against d781d29 — and still reads `req, _ := http.NewRequestWithContext(...)` with NO header loop and `if resp.StatusCode < 400 { t.Fatalf(...) }`. Under DEC-87 and DEC-88 that URL now signs content-type and If-None-Match too, so the unreplayed request answers 400 AccessDenied whatever the body length: the leg is green with the length signature deleted.",
+   "what_is_missing": "TestABodyLongerThanTheSignedLength must replay uploadHeaders, assert the S3 error code, and carry a positive control."
+  },
+  {
+   "finding_id": "STO-BLO-2",
+   "claim": "DEC-88's `uploadHeaders` joins the begin response as a flat map with the values ALREADY ENCODED SERVER-SIDE, so the client replays verbatim and never re-derives a base64 digest from a hex id. THE LEG THAT KEEPS THEM HONEST asserts the map's key set EQUALS the URL's `X-Amz-SignedHeaders` minus `host`",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 1 specifies uploadHeaders as a flat map with values already encoded server-side, and R3's leg (a) is the key-set equality leg: 'parse `X-Amz-SignedHeaders` out of the returned `uploadUrl`, drop `host`, and assert it EQUALS the key set of `uploadHeaders` — not a subset, both directions ... Mutation: sign a fourth header and do not add it to the map.' The route table row for POST /v1/media was updated to carry uploadHeaders, so the response shape is one thing in both places."
+  },
+  {
+   "finding_id": "STO-BLO-3",
+   "claim": "See SEC-MAJ-4, which is the same control from the other side. The prose is replaced rather than the control: `MEDIA_MAX_BYTES` is an API-side refusal to MINT and the signature pins the EXACT declared byteSize. THE SUBTLER COST IS NAMED because it reaches the phone: a size violation surfaces as `Sign",
+   "verdict": "LANDED",
+   "evidence": "OE-18: {\"id\": \"OE-18\", \"what\": \"PD-11's sentence that `MEDIA_MAX_BYTES` is what goes into the signature, and R2 work item 3's 'THE LENGTH IS SIGNED THE SAME WAY' as a statement about a CEILING.\", \"why\": \"SigV4 SIGNS AN EXACT HEADER VALUE || PD-20: {\"id\": \"PD-20\", \"status\": \"NEW at v7.2 — from the storage lens's third blocker; it replaces a sentence deleted as OE-18\", \"title\": \"MEDIA_MAX_BYTES is a refusal to MINT; the signature pins the DECLARED size. Both sentences, neithe || PD-11: {\"id\": \"PD-11\", \"status\": \"NEW at v7.1 — from the security lens's first major; AMENDED at v7.2, and the amendment is a deletion (OE-18)\", \"title\": \"The LENGTH is signed exactly as the checksum is — and what that pins is the DECLAR"
+  },
+  {
+   "finding_id": "STO-BLO-4",
+   "claim": "See OPS-MAJ-7 — two lenses found it independently. `EnsureBucket` at boot in cmd/api, `depends_on: minio: service_healthy`, the shipped tag pinned, and the definition of done asserting a round-trip PUT+GET rather than three healthy processes. THE MEASURED CONTRADICTION BETWEEN THE TWO LENSES IS RESO",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 9 carries EnsureBucket at boot with the measured zero-buckets evidence, `depends_on: minio: condition: service_healthy`, the shipped tag pinned, and 'THE DEFINITION OF DONE ASSERTS THE BUCKET RATHER THAN THE PROCESS'. R2's bucket leg and its mutation ('delete the call from main.go — the round-trip leg reddens and `up --wait` still reports three healthy services') are both present, and R2's acceptance check greps `mc ls local/` for the bucket. The two-lens contradiction is resolved in R2 work item 10 with both measurements quoted."
+  },
+  {
+   "finding_id": "STO-MAJ-5",
+   "claim": "DEC-87: Content-Type is SIGNED into the PUT, from the same validated value the 422 and the 0003 CHECK see — one function, so the three cannot diverge. That is what turns DEC-51's 'three layers' from a claim into a fact: both existing layers constrain the DATABASE ROW, and the uploader was free to se",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 11: **CONTENT-TYPE IS SIGNED INTO THE PUT** (DEC-87, STO-MAJ-5). DEC-51's allowlist was described as a defence in three layers and is actually two: the Go 422 and the 0003 CHECK both constrain the DATABASE ROW, while the uploader sets"
+  },
+  {
+   "finding_id": "STO-MAJ-6",
+   "claim": "BOTH HALVES, AND THEY ARE NOT THE SAME THING. (1) `keys.go` holds ONE function returning the key AND the base64 header from one hex digest, with a mutation that computes them from two variables. (2) DEC-88 signs `If-None-Match: *`, so the bucket makes a content address WRITE-ONCE — first PUT 200, an",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 12: **`If-None-Match: *` IS SIGNED TOO, SO A CONTENT ADDRESS IS WRITE-ONCE AT THE BUCKET** (DEC-88, STO-MAJ-6). The checksum binds the header to the BODY; nothing bound it to the KEY. Executed: a PUT to key `<traveller>/<digestA>` car"
+  },
+  {
+   "finding_id": "STO-MAJ-7",
+   "claim": "Closed by the same boot call as STO-BLO-4, and the SECOND reason for doing it there is written down: minio-go resolves the bucket region with a real network round trip on the first presign per bucket, so `EnsureBucket` warms the cache and makes R3's 'presigning is a local HMAC' true from the first r",
+   "verdict": "LANDED",
+   "evidence": "R2 work item 10: **IT ALSO MAKES R3's 'presigning is a local HMAC' TRUE FROM THE FIRST REQUEST** (STO-MAJ-7), and this is the second reason for doing it at boot rather than in compose. minio-go resolves the bucket region with a REAL NETWORK ROUND "
+  },
+  {
+   "finding_id": "STO-MAJ-8",
+   "claim": "OE-12 STANDS — `Remove` is not added, and the lens agrees — and the two classes are WRITTEN DOWN WITH THE ARITHMETIC, which is what was missing. One: a SUCCESSFUL upload never committed, which is the only orphan class from uploads because every partial or dishonest upload leaves nothing in the bucke",
+   "verdict": "LANDED",
+   "evidence": "DEF-08: {\"id\": \"DEF-08\", \"title\": \"Reclaiming the two orphan classes, and the zero-code option for one of them\", \"deferred_to\": \"next_slice, with `-sweep-media` and `media.Store.Remove` (OE-12)\", \"what_is_open\": \"MEASURED: every partial o"
+  },
+  {
+   "finding_id": "STO-MAJ-9",
+   "claim": "The server half is one sentence in R8 and it is now there: the envelope's URLs are valid for `S3_PRESIGN_TTL_PUBLIC` FROM GENERATION — a hard wall, not a rolling window, because `POST /v1/media/mint` is authenticated and an unauthenticated reader cannot re-mint — so the renderer re-GETs `/l/{token}`",
+   "verdict": "LANDED",
+   "evidence": "R8 work item 10: **THE FIFTEEN-MINUTE WINDOW HAS NO REFRESH PATH AND NO LEGIBLE FAILURE, AND ONE SENTENCE FIXES THE FIRST** (DEC-84, STO-MAJ-9). The envelope embeds URLs and carries `Cache-Control: no-store`; `POST /v1/media/mint` is authenticated"
+  },
+  {
+   "finding_id": "STO-MIN-10",
+   "claim": "Closed by the same rewrite as STO-BLO-1: the leg asserts the error CODE, so the hex-instead-of-base64 mistake reddens with `InvalidArgument` distinctly rather than passing under `StatusCode < 400`. It has its own mutation in R2's list for exactly that reason.",
+   "verdict": "LANDED",
+   "evidence": "PD-19: {\"id\": \"PD-19\", \"status\": \"NEW at v7.2 — from the storage lens's first blocker and its first minor, which are one leg\", \"title\": \"R2's presign legs replay the signed header, assert the S3 error CODE, and carry a positive control\","
+  },
+  {
+   "finding_id": "STO-MIN-11",
+   "claim": "Recorded as a leg that MUST NOT BE WRITTEN, with the measurement, rather than as an absence. MinIO sets `X-Content-Type-Options: nosniff` on presigned GETs of its own accord, so a test asserting the mitigation would pass locally by measuring MinIO's default and silently stop being true in production",
+   "verdict": "LANDED",
+   "evidence": "where = R2's test_strategy — the leg that must NOT be written"
+  },
+  {
+   "finding_id": "STO-MIN-12",
+   "claim": "One sentence in each place it matters. The two numbers: a presigned URL is 394 characters, so twelve in one envelope is roughly 4.7 kB of JSON on top of the read. And what the URL IS: a pure bearer capability with unlimited replay, where unsigned request headers such as `Range` are accepted — which ",
+   "verdict": "LANDED",
+   "evidence": "R3 work item 14: **WHAT THE PUBLIC ENVELOPE'S URLs ARE** (STO-MIN-12), one sentence, written here because R3 is where minting is built and R8 is where it is embedded: a presigned URL is 394 characters, so twelve in one envelope is roughly 4.7 kB o || R8 work item 11: **AND WHAT THE EMBEDDED URL IS** (STO-MIN-12): a pure bearer capability, 394 characters, with unlimited replay and unsigned request headers such as `Range` accepted. Twelve of them is roughly 4.7 kB of JSON on top of the read. Tha"
+  },
+  {
+   "finding_id": "STO-MIN-13",
+   "claim": "Named in deferred_decisions with a trigger, and the honest sentence put in out_of_scope where a reader looking for what is NOT covered will find it: a database restore without a bucket restore is a SILENTLY broken log — 308 media references all resolve, because the FKs are satisfied by rows that com",
+   "verdict": "LANDED",
+   "evidence": "DEF-07: {\"id\": \"DEF-07\", \"title\": \"A media backup, and the ordering it has against the database backup\", \"deferred_to\": \"next_slice, with the sweep\", \"what_is_open\": \"DEC-92 puts a `pg_dump` target in R4 and says nothing about the bucket."
+  }
+ ],
+ "counts": {
+  "LANDED": 81,
+  "PARTIAL": 5,
+  "FICTION": 3,
+  "CONTAINS-ITS-OWN-DEFECT": 3,
+  "GUARD-CANNOT-FAIL": 1
+ },
+ "blocker_count_verified": {
+  "claimed": 21,
+  "recounted": 21,
+  "how": "Counted the seven docs/lens-*.json files directly: client-fidelity 5, database 2, operations 3, performance 1, safety 3, security 3, storage 4 = 21. The lens files carry no id field, so I re-derived the id scheme positionally per lens in severity order and confirmed it matches: 93 findings, 93 claimed_fixes, one-to-one, severity equal on every pair, and every claimed_fix.finding string equal to its lens finding's target string (0 mismatches). blocker_landing.by_finding has exactly the same 21 keys as the blockers in claimed_fixes, with no value mismatches; counts recompute to {R1:7, R2:3, R3:3, R4:2, R6:2, R8:3, base:1} and total 21, both matching the recorded fields. Every id in by_finding is a real finding and none is dropped.",
+  "verdict": "REAL"
+ },
+ "eighteen_sentences_verified": {
+  "claimed": 18,
+  "recounted": 18,
+  "how": "On branch wipe/mock-data (git rev-parse --abbrev-ref HEAD -> wipe/mock-data), the lens's three commands return 16, 2 and 1 = 19 sites. settings_screen.dart:423 ('Your settings could not be saved, so $what is unchanged.') is correctly EXCLUDED and is correctly NAMED as excluded in PD-16 class (iii) and in M-EIGHTEEN-SENTENCES. That leaves 18. Every one of the eighteen line numbers is exact on wipe/mock-data: trip_screen 263; edit_sheets 383/453/514/603; to_file_screen 101/102; add_city_screen 136 and 164; share_sheet_screen 240; refile_photo_sheet 197; edit_traveller_sheet 190; profile_screen 241; delete_sheets 165/366/608; new_trip_screen 164 (seventeen in class (i), counted); delete_sheets 649 (class (ii)). PD-16's class (i) list is seventeen entries, checked.",
+  "verdict": "REAL, with two caveats — see NF-3 (the fourth command's stated output is 11 screens and it returns 10) and NF-4 (the same decision adds a nineteenth site, delete_sheets.dart:195, without moving the headline)."
+ },
+ "gate_checks": [
+  {
+   "check": "M1 — the rulings stamp carries a recomputed count / first / last",
+   "mutation_run": "copied the repo's docs/ + CLAUDE.md + scripts/ to a scratch dir; set base.inputs[rulings].count=32 and .last='DEC-83', hash left correct; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1, two distinct messages: 'the rulings stamp says count=32; the file holds 51' and 'the rulings stamp says DEC-43..DEC-83; the file runs DEC-43..DEC-102'. E2 (first='DEC-44') also red, so both endpoints are live, not just last."
+  },
+  {
+   "check": "M2 — CLAUDE.md's stamp is recomputed",
+   "mutation_run": "set base.inputs[CLAUDE.md].size=193119; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'the CLAUDE.md stamp says 193119 bytes; the file is 207684'. E1 (sha256 -> 64 zeros) also red: 'says 000000000000…; the file is 335a39cae66a…'. Both halves of the second stamp are live."
+  },
+  {
+   "check": "M3 — every lens finding has a claimed_fix, counted against all seven reports",
+   "mutation_run": "deleted the OPS-BLO-2 entry from claimed_fixes; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1, five messages including '1 lens findings have no claimed_fix: [OPS-BLO-2]', '92 claimed_fixes against 93 lens findings' and 'blocker OPS-BLO-2 lands in None'. The id set is derived positionally from the reports, so it cannot go stale."
+  },
+  {
+   "check": "M4 — a blocker may not land in next_slice",
+   "mutation_run": "set STO-BLO-4.landed_in='next_slice'; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'blocker STO-BLO-4 lands in next_slice'. E3 (blocker set to DECLINED with a 120-char reason and a DECLINED verdict_expected) also red — a blocker cannot be declined quietly either."
+  },
+  {
+   "check": "M5 — a DECLINED claimed_fix must carry a challengeable reason",
+   "mutation_run": "removed why_declined from SAF-MAJ-7; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'claimed_fix SAF-MAJ-7 is DECLINED with no challengeable reason'."
+  },
+  {
+   "check": "M6 — no acceptance check runs `make seed` before `make slice`",
+   "mutation_run": "replaced 'make check && make slice && make seed' with 'make seed && make check && make slice' in every step acceptance_check; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1, eight messages — both the one-line check and the whole-field ordering check fire, for R5, R6, R7 and R8. NOTE: only FOUR steps carry that line, not the five the plan claims (see new finding NF-4). R4 is reordered but on separate lines."
+  },
+  {
+   "check": "M7 — internal/logbook/emit.go appears in some step's file list",
+   "mutation_run": "stripped every emit.go entry from all step file lists; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'no step's file list names internal/logbook/emit.go'."
+  },
+  {
+   "check": "M8 — the migration count is derived from the file lists",
+   "mutation_run": "set sequencing.migration_count.stated=3; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'says 3; the step file lists name [0002, 0003, 0004] plus the shipped 0001, which is 4'."
+  },
+  {
+   "check": "M9 — the MIGRATION COUNT prose claims exactly one <WORD> up-files",
+   "mutation_run": "set sequencing.migration_count.word='THREE'; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1, BOTH directions: 'does not claim THREE up-files' and 'claims FOUR up-files as well as THREE'. This is the check that failed its own proof on the first draft (word-in-note against a note reciting its own history); the rewritten predicate is genuinely falsifiable."
+  },
+  {
+   "check": "M10 — the rulings stamp's command carries the count it produced",
+   "mutation_run": "stripped '51' from base.inputs[rulings].command; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'the rulings stamp's command does not carry the count it produced'."
+  },
+  {
+   "check": "M11 — blocker_landing.counts is recomputed from claimed_fixes",
+   "mutation_run": "set sequencing.blocker_landing.counts['R8']=4; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: 'says {...R8: 4...}; claimed_fixes derives {...R8: 3...}'. by_finding equality is separately checked and fires under M3 and M4."
+  },
+  {
+   "check": "E4 (extra, not one of the eleven) — §6.7 test_strategy must carry a test body",
+   "mutation_run": "replaced R1's test_strategy with the string 'a description of a test'; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1: \"R1's test_strategy has neither a test body nor 'none — <reason>'\"."
+  },
+  {
+   "check": "E5 (extra) — the route arithmetic",
+   "mutation_run": "flipped one LIVE row in route_table_at_the_end_of_R8 to '— R1.'; python3 scripts/check-plan.py",
+   "went_red": true,
+   "notes": "exit 1, two messages: LIVE count and '19 routes are attributed to a step, want 18'."
+  },
+  {
+   "check": "BASELINE",
+   "mutation_run": "python3 scripts/check-plan.py on the unmutated scratch copy, and on the repo itself",
+   "went_red": false,
+   "notes": "'0 failure(s); 64 ids; 23 routes; 8 steps; 14 deletions', exit 0. All sixteen mutations above were applied to copies; the repository's docs/plan-v7.json was never edited."
+  }
+ ],
+ "stamps_verified": {
+  "rulings": {
+   "recorded": "80096 bytes / 6552054a5bb676615b4241e905b04386e7001eecc55d26cb60029923dc9c1b07 / count 51 / DEC-43..DEC-102",
+   "measured": "wc -c -> 80096; shasum -a 256 -> 6552054a5bb676615b4241e905b04386e7001eecc55d26cb60029923dc9c1b07; len(rulings) -> 51, first DEC-43, last DEC-102",
+   "match": true,
+   "gate_recomputes": "YES, genuinely — size, sha256, count, first, last, and the presence of the count in the stamp's own `command`. Mutations M1, M10 and E2 each go red with distinct messages."
+  },
+  "claude_md": {
+   "recorded": "207684 bytes / 335a39cae66ad27e0a8d2e7a4f821963576603c4f9b3d319d088bfcb0b4e4d54 (as recorded: 335a39cae66ad27e0a8d2e...)",
+   "measured": "wc -c -> 207684; shasum -a 256 -> 335a39cae66ad27e... (first 16 hex 335a39cae66ad27e, matching the recorded value)",
+   "match": true,
+   "gate_recomputes": "YES — size and sha256 both. Mutations M2 (size) and E1 (sha) each go red."
+  },
+  "all_other_inputs": {
+   "recorded": "the other fifteen base.inputs entries",
+   "measured": "I re-ran wc -c and shasum -a 256 on all seventeen stamped paths (go_backend.md, agent-graph-spec-V4.md, EVIDENCE.md, go-backend-plan-v6.json, slice-plan.json, dba-review.json, client_sample_log.json, migrations/0001_init.up.sql and all seven lens reports)",
+   "match": true,
+   "note": "All seventeen match byte for byte and hash for hash. The gate only recomputes two of them; the other fifteen I verified by hand."
+  }
+ },
+ "new_findings": [
+  {
+   "id": "NF-1",
+   "severity": "major",
+   "target": "scripts/check-plan.py docstring; docs/PLAN-V7.2-CHANGES.md lines 6-18; plan-v7.json base.inputs[CLAUDE.md].status; base.measured M-GATE-MUTATIONS; claimed_fix SEC-MAJ-8",
+   "finding": "The revision record's headline 'before' transcript is not reproducible at the commit it names, and the gate's own docstring asserts a v7.1 state of the file that never existed in the repository. Four documents rest on it.",
+   "evidence": "EXECUTED. `git show d781d29:scripts/check-plan.py | wc -l` -> 81, with 14 check() calls and no rulings block whatsoever: no stamp recomputation, no PD-namespace check, no citation check, no exemption register. Run against `git show d781d29:docs/plan-v7.json` in a scratch dir alongside d781d29's rulings file, it prints `0 failure(s); 48 ids; 23 routes; 8 steps; 10 deletions` and exits 0. PLAN-V7.2-CHANGES.md quotes those same four counts under two FAIL lines ('the rulings stamp says 41823 bytes; the file is 80096' and the hash line) and 'exit 1' — lines the committed script cannot emit. `git log --oneline -- scripts/check-plan.py` returns exactly two commits, 7b47bee and 5c34406 (v7.2); nothing landed between them, and `git diff d781d29 HEAD -- scripts/check-plan.py` is 293 insertions and 0 deletions. base.measured M-GATE-MUTATIONS cites 'the transcript ... in the v7.1 revision record'; `ls docs/` holds no such file.",
+   "breaks": "the evidence chain. §6.5's own rule is that a mutation count is evidence only if it was run at a stated commit. Four of the eleven new checks are described as replacing four v7.1 checks that are not in the repository at v7.1, and SEC-MAJ-8 grades itself partly on a red that cannot be reproduced.",
+   "fix": "Either produce the v7.1 script and its transcript, or restate the history: the whole rulings block, the two stamps, the claimed_fixes block and the four checks attributed to v7.1 all landed in one commit, 5c34406. The eleven v7.2 checks themselves are real — I ran all eleven and all eleven go red."
+  },
+  {
+   "id": "NF-2",
+   "severity": "minor",
+   "target": "plan-v7.json sequencing.notes[13]; mechanical_invariants.checks[13]; scripts/check-plan.py's DEC-92 comment; PLAN-V7.2-CHANGES.md",
+   "finding": "'FIVE acceptance checks' / 'Five of the eight steps read `make seed && make check && make slice`' is FOUR, in four places at once.",
+   "evidence": "EXECUTED against the v7.1 plan at d781d29: the string `make seed && make check && make slice` occurs exactly 4 times in the whole document, all four in steps[4..7].acceptance_check — R5, R6, R7, R8. R4's v7.1 acceptance check ran `make seed` twice on separate lines before `make check` and `make slice`, so it was reordered too but never 'read' that string. In v7.2, `make check && make slice && make seed` appears in exactly four steps' acceptance checks. The note also says 'R4, R5, R6, R7 and R8 now read `make check && make slice && make seed`' — R4 does not; its slice and seed lines are separate.",
+   "breaks": "nothing operationally — the ordering itself is correct and gate-enforced — but it is the count-carried-rather-than-run class the same note invokes ('a convention this document has already got wrong five times in one release')."
+  },
+  {
+   "id": "NF-3",
+   "severity": "minor",
+   "target": "plan-v7.json base.measured M-EIGHTEEN-SENTENCES (the fourth command)",
+   "finding": "A stamped command's stated output is wrong, inside the measurement that exists to correct a count.",
+   "evidence": "The entry quotes `grep -rn 'could not be saved' lib/src/screens/ | grep -v '///' | cut -d: -f1 | sort -u | wc -l   # -> 11 screens`. RUN BY ME on branch wipe/mock-data: it returns 10. The eleven-screen figure is correct for the UNION of all three greps (new_trip_screen.dart joins from command two); it is not what the quoted command produces. Excluding settings_screen.dart, the eighteen sentences span ten screens.",
+   "fix": "Either annotate the fourth command with 10 and add the union command that produces 11, or drop the annotation."
+  },
+  {
+   "id": "NF-4",
+   "severity": "minor",
+   "target": "plan-v7.json decisions PD-16 (title, consequence class (ii), and its closing sentence)",
+   "finding": "PD-16 is titled 'Eighteen client sentences' and its own consequence adds a nineteenth site without moving the number.",
+   "evidence": "Class (ii) reads 'ONE THAT PROMISES REVOCATION, delete_sheets 649' and the field then closes with 'AND A FOURTH SENTENCE JOINS THE REVOCATION CLASS ON THE SAME MECHANISM (SAF-MIN-10): D1's Nothing is recoverable — there is no bin'. I located that sentence: `lib/src/screens/delete_sheets.dart:195`, and it matches none of PD-16's three greps, so it is not among the nineteen sites the derivation counted. SAF-MIN-10's own claimed_fix says so in terms — 'the revocation class is two rather than one'. So the work is 17 + 2 = nineteen sentences while every headline in the plan says eighteen. 'A FOURTH SENTENCE' is also a number that fits nothing: it is the second in class (ii).",
+   "fix": "State the target as eighteen-plus-one, or recount to nineteen and say which command finds the nineteenth."
+  },
+  {
+   "id": "NF-5",
+   "severity": "minor",
+   "target": "plan-v7.json decisions PD-15.evidence and definition_of_done[9] (inherited from lens-client-fidelity.json)",
+   "finding": "`place.g.dart:33-35` is the wrong line range on both branches.",
+   "evidence": "On wipe/mock-data AND on main, `lib/src/logbook/place.g.dart` decodes visits at lines 30-32 (`visits: (json['visits'] as List<dynamic>)` / `.map(...)` / `.toList(),`); lines 33-35 are `plan:`, `coverAsset:` and `);`. The companion citation `photo.g.dart:46-48` IS correct — Walk's codec lives in photo.g.dart and `points:` is at line 47.",
+   "breaks": "nothing structural; a worker following the citation lands three lines past the code. Worth correcting because the plan's own standard is that a line number is a measurement."
+  },
+  {
+   "id": "NF-6",
+   "severity": "minor",
+   "target": "plan-v7.json steps R3 work item 9 vs R7 work item 9 / PD-21 / base.measured M-MIGRATIONS-4",
+   "finding": "`CHECK (jsonb_array_length(points) > 0)` is assigned to migration 0003, and the step that writes 0003 does not carry it.",
+   "evidence": "R7 item 9 and PD-21 both say 'Migration 0003 carries the lower bound'. M-MIGRATIONS-4 lists it among 0003's contents. R3 work item 9 — the only place 0003's additions are enumerated — names exactly three ('Migration 0003 also carries three things the database lens found while it was open: media_objects_uploaded_after_created_ck …; four IS NULL OR <> '' CHECKs …; and COMMENT ON COLUMN photos.place_id / photos.visit_id') and the points bound is not among them. R7's file list contains no migration file. A worker executing R3 from R3's text does not write the constraint; a worker executing R7 has no file to write it in.",
+   "fix": "Add it to R3 work item 9, or give R7 a migration."
+  },
+  {
+   "id": "NF-7",
+   "severity": "minor",
+   "target": "plan-v7.json steps R3 work item 12 and R3's file list",
+   "finding": "DEC-99's twice-run guard is written against 'a FIXTURE migration in `testdata` that does carry the directive', and no file list names that fixture.",
+   "evidence": "R3's file list names migrate.go and migrate_test.go but no testdata SQL file. The guard's whole anti-vacuity mechanism ('the leg asserts the subject set is NON-EMPTY before running it') depends on that fixture existing.",
+   "fix": "Name the testdata migration pair in R3's file list."
+  },
+  {
+   "id": "NF-8",
+   "severity": "minor",
+   "target": "plan-v7.json steps R1 test_strategy (the mutation list) ",
+   "finding": "R1 states a universal its own list does not satisfy: 'MUTATIONS, and each names the OTHER leg that must stay green'. Eight of the nine do; the ninth does not.",
+   "evidence": "The ninth mutation reads 'Remove `lock_timeout` — leg nine hangs, so it is written to answer from a goroutine behind a `select` with a deadline.' It names a failure mode, not a leg that must stay green. The other eight each name one explicitly."
+  },
+  {
+   "id": "NF-9",
+   "severity": "minor",
+   "target": "plan-v7.json steps R2 work item 3 vs R1's file list",
+   "finding": "An off-by-one variable count between two steps.",
+   "evidence": "R1's file list says 'internal/config/config.go (EDIT — REQUEST_TIMEOUT, the ninth variable)'. R2 work item 3 then says '`MEDIA_MAX_BYTES` joins internal/config with the other eight variables'. After R1 there are nine. R5 item 4b independently records that the d5be39c limiter fix took config to eight, which I verified in internal/config/config_test.go:20 ('EIGHT SINCE THE LIMITER FIX')."
+  }
+ ],
+ "questions_for_human": [
+  "NF-1 is the one a human must settle. Was the v7.1 rulings block ever in the working tree at d781d29? If it was, the transcript should be reproduced from that file; if it was not, `scripts/check-plan.py`'s docstring ('that is the whole of the v7.1 addition'; 'The stamp check WORKED: it was red at d781d29'), base.inputs[CLAUDE.md].status ('the gate only recomputes the rulings stamp'), base.measured M-GATE-MUTATIONS and claimed_fix SEC-MAJ-8 all need correcting to say that everything landed in one commit. Nothing about the eleven new checks depends on the answer — I ran all eleven and all eleven redden.",
+  "STO-BLO-1 and SEC-MAJ-4 both rest on R2's TestABodyLongerThanTheSignedLength, which is byte-identical to v7.1 and cannot distinguish a signed-length refusal from an unreplayed-header refusal. Is R2's definition of done met with one of its two presign legs still vacuous? PD-19 says 'every presign leg', so this is a scope decision, not a rewording.",
+  "PD-16: is the client-copy target eighteen sentences or nineteen? SAF-MIN-10 adds delete_sheets.dart:195 to class (ii) and the headline stays eighteen. A designer handed 'eighteen with their line numbers' will not find the nineteenth.",
+  "Three claimed_fixes are fiction and two of them are cheap to make real (OPS-MIN-11 is one sentence in R1 item 7; PERF-MIN-10 is three numbers in DEF-06). CF-MIN-14 needs a decision rather than a sentence: does CLIENT-PREREQUISITES carry the 'PUT /v1/trips/{id} is an unconditional upsert, so log.holdsId is belt-and-braces' note, and is the WHERE NOT EXISTS split a DEC-33 conversation or a non-item?",
+  "The plan's own open list still stands and nothing here closes it: RULE-03 (does GATE-L12's clearance survive OE-7 plus DEC-86's change to the approved register diagram?), RULE-05 (the proxy hop), RULE-09 (heic), RULE-11 (a thirteenth error code), and PD-21's 500 as a provisional number."
+ ]
+}
