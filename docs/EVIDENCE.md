@@ -941,16 +941,16 @@ TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
 was three commits stale before anybody noticed:
 
 ```bash
-TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 727 at c3699fd
-                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 564, no database
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 730 at cc6b1ca
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 566, no database
 TEST_S3_ENDPOINT=...   go test -tags integration ./internal/media/ -count=1 -v \
                          | grep -c -- '--- PASS'                           # 39 = 27 unit + 12 integration
 ```
 
-The **163-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
+The **164-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
 the DB tier **skips and says so** without it. It was 133 at `90f6a68` and R3
-measured 154; R4's ten seed legs are all in the gap, because every one of them
-loads ten tables into a real database.
+measured 154; R4's **eleven** seed legs are all in the gap, because every one of
+them loads ten tables into a real database.
 
 `make slice` **destroys the named volume** — `docker compose down -v` is its
 first step, because a 201 against a database that already held the row proves
@@ -960,7 +960,7 @@ nothing. Since R2 it destroys **two**: `<project>_pgdata` and
 **AND SINCE R4 IT REFUSES TO DO IT TO THE LIVE PROJECT** (DEC-92). Before R4
 that volume held nothing anybody would miss; R4 is the step that puts a record
 in it. Run it somewhere else, which is one variable — measured green at
-`c3699fd`, **113 assertions, exit 0**, with `travellog_pgdata` untouched
+`cc6b1ca`, **118 assertions, exit 0**, with `travellog_pgdata` untouched
 throughout:
 
 ```bash

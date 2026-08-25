@@ -4848,8 +4848,8 @@ itself.
 
 ```bash
 # the legs, and what the database variable buys
-                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 564
-TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'    # 727
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 566
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'    # 730
 
 # the seed, and the refusal — the second run must be non-zero and change nothing
 COMPOSE_PROJECT_NAME=travellog-r4 POSTGRES_PORT=5464 MINIO_PORT=9005 \
