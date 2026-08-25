@@ -670,8 +670,9 @@ anybody set anything — a guard reading the variable would pass a bare
 
 ### THE RESTORE REHEARSAL, RUN ONCE, AT `c3699fd`
 
-A backup nobody has restored is not a backup. This one has been restored, and
-the proof is not a row count.
+A backup nobody has restored is not a backup. DEC-92 asks for one restore
+rehearsal with its output recorded here; this is it, it was run rather than
+described, and the proof is not a row count.
 
 ```
 $ make backup
@@ -869,9 +870,9 @@ out of it.
   anywhere: 284 photographs, six trip covers, nine city covers and nine place
   covers — 308 references — all addressing two objects that are not there. `DEF-07` owns the media
   backup and `docs/BEFORE-A-PUBLIC-DEPLOY.md` carries the trigger.
-- **`make backup`'s ROTATION, beyond one run.** The recipe keeps 7 and the
-  rehearsal produced one file, so the `tail -n +8` branch has been read and not
-  executed. A human with eight days.
+- **`make backup`'s ROTATION, beyond one run.** The restore rehearsal above
+  produced exactly one dump, so the recipe's `tail -n +8` branch has been read
+  and not executed. A human with eight days.
 - **THE SEED'S `-skip-media` FLAG.** It writes the `media_objects` rows without
   the bytes, which is a log whose covers all 404 at mint. Nothing asserts what
   it does, and nothing in `make seed` passes it. It exists so a database-only
