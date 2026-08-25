@@ -305,11 +305,11 @@ func walkStep(d *Dataset) insertStep {
 func shareLinkStep(d *Dataset) insertStep {
 	step := insertStep{
 		table:   "share_links",
-		columns: []string{"traveller_id", "trip_id", "token", "created_at", "revoked_at"},
+		columns: []string{"traveller_id", "trip_id", "token_hash", "created_at", "revoked_at"},
 		casts:   []string{"::uuid", "", "", "", ""},
 	}
 	for _, s := range d.ShareLinks {
-		step.rows = append(step.rows, []any{s.TravellerID, s.TripID, s.Token, s.CreatedAt, s.RevokedAt})
+		step.rows = append(step.rows, []any{s.TravellerID, s.TripID, s.TokenHash, s.CreatedAt, s.RevokedAt})
 	}
 	return step
 }

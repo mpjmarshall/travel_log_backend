@@ -924,8 +924,8 @@ func TestTheSharedFlagCarriesNoToken(t *testing.T) {
 func aLiveShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
-		`INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1::uuid, $2, $3)`,
-		travellerID, tripID, token); err != nil {
+		`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1::uuid, $2, $3)`,
+		travellerID, tripID, logbook.HashShareToken(token)); err != nil {
 		t.Fatalf("inserting a share link for %s: %v", tripID, err)
 	}
 }
@@ -933,9 +933,9 @@ func aLiveShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string)
 func aRevokedShareLink(t *testing.T, db *sql.DB, travellerID, tripID, token string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
-		`INSERT INTO share_links (traveller_id, trip_id, token, revoked_at)
+		`INSERT INTO share_links (traveller_id, trip_id, token_hash, revoked_at)
 		 VALUES ($1::uuid, $2, $3, now())`,
-		travellerID, tripID, token); err != nil {
+		travellerID, tripID, logbook.HashShareToken(token)); err != nil {
 		t.Fatalf("inserting a revoked share link for %s: %v", tripID, err)
 	}
 }
