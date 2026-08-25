@@ -539,6 +539,271 @@ reference that resolves and points at nothing, with no error anywhere.
 
 ---
 
+## R4 — the seed, the round trip, and the first backup this project has had
+
+Every mutation below was run at `c3699fd` with a clean tree, restored by file
+copy, and re-run. The database tier was live throughout:
+`TEST_DATABASE_URL=postgres://travellog:travellog@127.0.0.1:5464/travellog?sslmode=disable`,
+a postgres 17.11 under `COMPOSE_PROJECT_NAME=travellog-r4` — never the live
+stack's.
+
+### The round trip through PostgreSQL
+
+| # | mutation | reddens | stays green |
+|---|---|---|---|
+| M1 | `readVisitsSQL` loses `ORDER BY place_id, ordinal, id` -> `ORDER BY place_id` | `TestTheClientsOwnLogSurvivesPostgreSQL` **and** `TestVisitsComeBackInTheOrderTheClientWroteThem` | every leg in `internal/logbook` |
+| M2 | `readTripCitiesSQL` loses `ORDER BY trip_id, ordinal` -> `ORDER BY trip_id, city_id` | the round trip, `TestATripsCitiesComeBackInTravelOrder`, and `internal/postgres`'s own `TestAnAssembledReadCarriesTheOrderedCityIDs` | the visit-order leg |
+| M3 | `FromDocument` assigns visit ordinals in reverse | the round trip **and** the visit-order leg | the trip-cities leg |
+| M4 | `cmd/api/main.go` gains `_ "travellog/internal/seed"` | `TestNothingUnderCmdAPIReachesInternalSeed` | everything else |
+| M5 | `internal/logbook/rewrite.go`'s import of `encoding/json` (the first draft, before the named list) | `TestOnlyNamedFilesImportTheJSONPackage` | everything else |
+
+**M1 AND M3 REDDEN THE SAME PAIR, AND THAT IS THE POINT RATHER THAN A
+DUPLICATE.** The plan warns that two legs reddening from one mutation is one
+assertion wearing two names unless they say different things. These say
+different things and each mutation proves it: M1 breaks the READ and M3 breaks
+the WRITE, and the ordinal leg names the visit — `place bukchon: visit 0 came
+back as v-bukchon-1, the client wrote v-bukchon-0` — while the round trip names
+the field, `logbook.places[0].visits[0].at`. Neither could have told you which
+half was wrong on its own.
+
+**M2's THIRD RED IS THE INTERESTING ONE.** `TestAnAssembledReadCarriesTheOrderedCityIDs`
+was written at VS7 against a two-city trip the test itself inserted. It still
+reddens, so it was not vacuous — but it could only ever have been about the one
+trip a write route can make, which is what the DoD names as the gap the seed
+closes.
+
+### The two things in the plan's own leg sketch that cannot pass against correct work
+
+**IT DIFFS THE TWO DOCUMENTS POSITIONALLY.** The store orders every top-level
+list by its own id on purpose, and the captured document is in the order the
+client's encoder wrote it — travel order for cities and trips. Measured, by
+running the diff both ways in one leg:
+
+```
+positional differences: 2013
+aligned differences:       0
+```
+
+The first reported line is `logbook.cities[0].id: client "kyoto", server
+"busan"`. Not one of the 2,013 is a defect. The lists are aligned by id before
+the diff and ORDER is asserted by three separate legs instead — which is what
+leaves the diff able to say something.
+
+**IT ASSERTS "VISITS COME BACK NEWEST FIRST" AS A RULE.** Two of the captured
+document's seventeen places break that rule:
+
+```bash
+python3 - <<'EOF'
+import json
+L=json.load(open('internal/logbook/testdata/client_sample_log.json'))['logbook']
+for p in L['places']:
+    ats=[v['at'] for v in p['visits']]
+    if ats != sorted(ats, reverse=True): print(p['id'], ats)
+EOF
+# bukchon  ['2027-10-02T10:15:00.000Z', '2027-12-12T08:40:00.000Z']
+# nishiki  ['2027-09-18…', '2026-09-18…' x4, '2027-05-13…']
+```
+
+The definition of done says the right thing and the sketch does not: *"asserted
+against the fixture's own ordering, not against a rule written here"*. What is
+load-bearing is that the order the client wrote is the order that comes back.
+The leg carries two positive controls — at least two places with more than one
+visit, and at least one that does lead with its newest — so it cannot pass by
+having nothing to be about.
+
+### THE ONE INPUT THE ROUND TRIP CANNOT CHECK, AND WHAT DOES CHECK IT
+
+The plan's fourth mutation is "point one locator at the other's digest", with
+the predicted red being 189 photographs named in the diff. **It does not
+redden the round trip, and it cannot.** `RewriteAssets` is applied ONCE and its
+output is both the reference and the input to the load, so a wrong mapping
+agrees with itself on both sides. Run at `c3699fd`:
+
+```
+M4' the test's fixtureMapping points hero-mountain at card-ireland's digest
+    -> TestTheClientsOwnLogSurvivesPostgreSQL          PASS
+    -> TestFromDocumentRefusesAnAssetWithNoObject      FAIL
+```
+
+So the mapping is guarded somewhere else, and in two places rather than one:
+
+- `TestRewriteAssetsLeavesNoBundlePathInTheClientsOwnLog` counts the rows per
+  digest — 205 addressing card-ireland (189 photographs + 3 trip covers + 7
+  city covers + 6 place covers) and 103 addressing hero-mountain — so a
+  collapsed mapping gives one digest 308 and reddens.
+- **`cmd/seed` computes the digest from the file's bytes and never writes one
+  down.** The address IS the content, so a wrong mapping is bytes whose sha256
+  is not the key they were signed for, and DEC-88's signed checksum refuses the
+  PUT. It is the same argument `media.Address` rests on, one layer out.
+
+### DEC-92 — the backup, and the arc that can no longer destroy the live volume
+
+| # | mutation | reddens |
+|---|---|---|
+| M6 | run `scripts/slice-arc.sh arc` under `COMPOSE_PROJECT_NAME=travellog` | the record phase's R4: `the arc's exit code under the live project = 1`, and `travellog_pgdata across the refusal = present` |
+| M7 | run it under any other project | R5: `travellog-slice-guardprobe_pgdata is this arc's own volume` — so the guard is not "refuse always" |
+
+**THE GUARD IS RUN, NOT GREPPED, AND THE DIFFERENCE IS MEASURABLE.** A `grep -n
+'SLICE_DESTROY_VOLUME' scripts/slice-arc.sh Makefile` — which is the plan's own
+acceptance line — passes against a variable nothing consults. R4 invokes the
+real arc phase and then asserts the volume is still there, which is the half a
+grep cannot make. It is safe to invoke because the refusal is the statement
+*before* `down -v` rather than after it.
+
+**THE PROJECT NAME IS READ FROM COMPOSE, NOT FROM THE VARIABLE.** Compose
+resolves a project name from `COMPOSE_PROJECT_NAME`, from a `name:` key, or from
+the directory, and only compose knows which won. `deploy/docker-compose.yml`
+carries `name: travellog`, so the live project is the default whether or not
+anybody set anything — a guard reading the variable would pass a bare
+`make slice` straight through.
+
+### THE RESTORE REHEARSAL, RUN ONCE, AT `c3699fd`
+
+A backup nobody has restored is not a backup. This one has been restored, and
+the proof is not a row count.
+
+```
+$ make backup
+wrote backups/travellog-20260825T071753Z.dump (44441 bytes)
+kept: 1 of 7
+
+$ docker exec … psql -U travellog -d postgres -c "CREATE DATABASE rehearsal;"
+$ docker exec -i … pg_restore -U travellog -d rehearsal --exit-on-error --verbose < backups/travellog-20260825T071753Z.dump
+… pg_restore: creating FK CONSTRAINT "public.walks walks_trip_fk"
+restore exit=0
+```
+
+**PROOF ONE — every table's CONTENT, not its count.** `md5(string_agg(x::text,
+'|' ORDER BY x::text))` per table, run against both databases:
+
+```
+                      source                              restored
+cities             12  a39a12d461771ad2545e22f481196098   (identical)
+media_objects       2  c02cf41492fdf16b3c3454db8c3d9995   (identical)
+photos            284  a7c273b31011fb326804ce9a73218e67   (identical)
+places             17  a240bc997c58ec3efd668a57edfcdd26   (identical)
+schema_migrations   3  ec02848f1a7786e8aae1e07842778cad   (identical)
+sessions            1  a8f51ac52d4ed497443948f8cfc2b446   (identical)
+share_links         1  142dd6400b242d7a61a0c617a1649a74   (identical)
+travellers          1  5a41edbf96030ffa894aac42cab71a9b   (identical)
+trip_cities        18  d14f4e1708a5c533ec4d2e339ae16415   (identical)
+trips               7  d9533c75a7621e4db79cad1dca43ea61   (identical)
+visits             49  d5cbcab797ec1bb2bb64390d86db3016   (identical)
+walks               2  c3f36fffd568241c51f43f7846913ad2   (identical)
+```
+
+**AND THE FIRST DRAFT OF THAT COMPARISON PASSED VACUOUSLY**, which is worth more
+than the result. It built the digests with `RAISE NOTICE` inside a `DO` block,
+whose output the capture missed entirely — so `diff` compared two empty files
+and printed *"IDENTICAL: every table's content digest matches"*. The comparison
+now refuses to report anything unless it covers exactly twelve tables. Rule 9,
+in the shape it actually arrives in.
+
+**PROOF TWO — the restored copy is a READABLE LOG through the real code.** A
+throwaway program opening each database through `postgres.LogbookStore` and
+`logbook.Emit`, which is the same path `GET /v1/logbook` takes:
+
+```
+source    traveller=43b6dfca… version=1 bytes=95577 sha256=16771d3dc70b08a8… trips=7 photos=284
+restored  traveller=43b6dfca… version=1 bytes=95577 sha256=16771d3dc70b08a8… trips=7 photos=284
+```
+
+95,577 is also what the running server answered for the same log, so the
+restored copy emits the same bytes the live one serves.
+
+**THE NEGATIVE CONTROL, in the same run**, because a comparison that cannot fail
+is not a comparison. One caption changed in the restored copy:
+
+```
+UPDATE photos SET caption='not what was dumped' WHERE id='ph-0';
+restored  bytes=95549 sha256=c6daa0cd4a3757a9…      (source: 95577 / 16771d3d…)
+photos digest 3209e0b39d802808ecb2eba694c20e95      (source: a7c273b31011fb32…)
+```
+
+### DEC-70's HONEST LIMIT, MEASURED AT 284 ROWS
+
+DEC-70 withdrew DEC-63's proof method and offered two replacements: (a) a
+catalog leg, and (b) `SET enable_seqscan=off`. **OE-13 is right that (b) is
+vacuous and R4 does not use it.** What R4 measured instead is which indexes the
+planner actually chooses during a full trip cascade, which is a real
+reproducible number:
+
+```bash
+psql "$DSN" -c "SELECT pg_stat_reset();"
+psql "$DSN" -c "BEGIN; DELETE FROM trips WHERE traveller_id='<tid>' AND id='autumn-crossing'; ROLLBACK;"
+psql "$DSN" -c "SELECT relname, indexrelname, idx_scan FROM pg_stat_user_indexes
+                WHERE schemaname='public' AND idx_scan > 0 ORDER BY 1;"
+```
+
+Reproduced twice, identical both times:
+
+```
+photos.photos_asset_idx        = 6
+share_links.share_links_trip_idx = 1
+trip_cities.trip_cities_ordinal_uq = 1
+trips.trips_pkey               = 1
+visits.visits_trip_idx         = 1
+walks.walks_trip_idx           = 1
+
+photos_trip_idx  = 0      <- the index DEC-63 mandates for THIS cascade
+photos_place_idx = 0
+photos_visit_idx = 0
+photos_city_idx  = 0
+```
+
+**THE THREE MANDATED INDEXES ON `photos` WERE CHOSEN ZERO TIMES, AND THE ONE
+THE PLANNER DID REACH FOR IS `photos_asset_idx` — SIX TIMES.** That index has
+nothing to do with a trip; it leads on `traveller_id`, which at one traveller
+and 284 rows is enough. This is OE-13's argument made concrete: any index
+leading on `traveller_id` serves, so an assertion of the form "an index was
+used" cannot tell the right index from the wrong one. **The catalog leg is the
+sole load-bearing proof**, and none of these zeroes is a reason to delete an
+index — they are the correct answer at this size and the wrong one the day the
+log grows.
+
+**AND DEC-70's OWN SENTENCE IS FALSE, though its conclusion holds.** It says RI
+checks *"NEVER appear in EXPLAIN, not even under ANALYZE"*. Executed:
+
+```
+$ EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) DELETE FROM trips WHERE traveller_id='…' AND id='autumn-crossing';
+ Delete on trips (actual time=0.431..0.431 rows=0 loops=1)
+   ->  Index Scan using trips_pkey on trips (actual time=0.076..0.077 rows=1 loops=1)
+ Trigger for constraint trip_cities_trip_fk on trips:  time=0.745 calls=1
+ Trigger for constraint visits_trip_fk on trips:       time=0.589 calls=1
+ Trigger for constraint photos_trip_fk on trips:       time=1.747 calls=1
+ Trigger for constraint walks_trip_fk on trips:        time=0.783 calls=1
+ Trigger for constraint share_links_trip_fk on trips:  time=0.627 calls=1
+ Trigger for constraint photos_visit_fk on visits:     time=0.609 calls=5
+ Execution Time: 5.664 ms
+```
+
+Six trigger lines, five of them the trip's own cascades and one the SET NULL
+that fires when its visits go. Which cascades fired and what each cost is
+visible; the conclusion DEC-70 drew from its false premise — that you cannot
+assert the PLAN changed, because the plan inside the trigger is not shown —
+still stands.
+
+### The numbers this step measured, each with the command beside it
+
+| what | value | command |
+|---|---|---|
+| the emitted log, through the running server | **95,577 bytes** in 0.023 s | `curl -sS -o /dev/null -w '%{size_download}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8085/v1/logbook` |
+| the same, gzipped | **6,810 bytes** | the same with `-H 'Accept-Encoding: gzip'` |
+| the ETag on a seeded traveller's first read | `W/"2-1"` | `curl -sSI …` |
+| the ten-table load | **32 ms** | `make seed` prints it |
+| the whole schema on disk at fixture scale | **835,584 bytes** (816 kB) | `SELECT sum(pg_total_relation_size(c.oid)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r'` |
+| the custom-format dump | **44,441 bytes** | `make backup` |
+| the largest INSERT the load builds | **3,976 parameters** (284 photographs x 14 columns) | arithmetic, in `internal/seed/generate.go` |
+
+**THE SIZE PREMISE, THIRD TIME OF ASKING.** plan-v7 says 99,271 bytes and R1
+measured 95,586 through this build. R4 measures **95,577** through the running
+server — **9 bytes fewer than R1**, and the nine are accounted for exactly:
+`shareLinkId` is `null` here where R1's emit test carried the client's
+`"kyoto-9f2a"` (8 bytes), and `shared` is `true` where R1's was `false`
+(1 byte). DEC-85 is what makes the difference, and it is the whole of it.
+
+---
+
 ## What is still guarded by nothing
 
 Carried forward so the list does not shorten by silence, with what VS8 moved
@@ -586,7 +851,25 @@ out of it.
 - **`-race` is not in `make check`.** Run
   `go test -race -count=5 ./internal/httpx/` by hand when touching the limiter.
 - **The image on `linux/amd64`.** Everything has run on arm64.
-- **`internal/seed` has no test files.**
+- **THE BACKUP IS NOT OFF-BOX, NOT SCHEDULED, AND DOES NOT INCLUDE THE BUCKET.**
+  `make backup` writes into `backups/` on the same machine as the volume it is
+  protecting, and nothing runs it. A database restore without a bucket restore
+  is a log every reference of which resolves, pointing at nothing, with no error
+  anywhere: 284 photographs, six trip covers, nine city covers and nine place
+  covers — 308 references — all addressing two objects that are not there. `DEF-07` owns the media
+  backup and `docs/BEFORE-A-PUBLIC-DEPLOY.md` carries the trigger.
+- **`make backup`'s ROTATION, beyond one run.** The recipe keeps 7 and the
+  rehearsal produced one file, so the `tail -n +8` branch has been read and not
+  executed. A human with eight days.
+- **THE SEED'S `-skip-media` FLAG.** It writes the `media_objects` rows without
+  the bytes, which is a log whose covers all 404 at mint. Nothing asserts what
+  it does, and nothing in `make seed` passes it. It exists so a database-only
+  load is possible on a box with no bucket, and saying so is the whole of its
+  guard.
+- **`make seed` ITSELF, in `go test`.** The ten legs in `internal/seed` are
+  about `FromDocument` and `Load`; the COMMAND — its two refusals, its printed
+  report, its generated passphrase, its upload — is guarded by having been run
+  by hand, twice, with the output in this file. The arc does not run it either.
 - **The `/dev/tty` half of the image tier's skip notice, against a real
   terminal.** A human with a shell.
 
@@ -610,18 +893,32 @@ TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
 was three commits stale before anybody noticed:
 
 ```bash
-TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 625 at 90f6a68
-                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 492, no database
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 727 at c3699fd
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 564, no database
 TEST_S3_ENDPOINT=...   go test -tags integration ./internal/media/ -count=1 -v \
                          | grep -c -- '--- PASS'                           # 39 = 27 unit + 12 integration
 ```
 
-The 133-leg gap between the first two is what `TEST_DATABASE_URL` buys, and
-the DB tier **skips and says so** without it.
+The **163-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
+the DB tier **skips and says so** without it. It was 133 at `90f6a68` and R3
+measured 154; R4's ten seed legs are all in the gap, because every one of them
+loads ten tables into a real database.
 
 `make slice` **destroys the named volume** — `docker compose down -v` is its
 first step, because a 201 against a database that already held the row proves
 nothing. Since R2 it destroys **two**: `<project>_pgdata` and
-`<project>_miniodata`. It also runs under whatever `COMPOSE_PROJECT_NAME` is
-set, because A14's volume name is now derived rather than written — so it can
-be run beside a live stack instead of against it.
+`<project>_miniodata`.
+
+**AND SINCE R4 IT REFUSES TO DO IT TO THE LIVE PROJECT** (DEC-92). Before R4
+that volume held nothing anybody would miss; R4 is the step that puts a record
+in it. Run it somewhere else, which is one variable — measured green at
+`c3699fd`, **113 assertions, exit 0**, with `travellog_pgdata` untouched
+throughout:
+
+```bash
+COMPOSE_PROJECT_NAME=travellog-r4arc API_PORT=8086 POSTGRES_PORT=5465 \
+  MINIO_PORT=9006 S3_PUBLIC_BASE_URL=http://127.0.0.1:9006 make slice
+```
+
+Or say you mean it: `SLICE_DESTROY_VOLUME=1 make slice`. **Back up first** —
+`make backup` is the target, and it is one command.

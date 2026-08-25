@@ -126,18 +126,48 @@ the bucket's size is a number anybody looks at.
 
 ## 5. A database restore without a bucket restore is a silently broken log
 
-The database backup is DEC-92's, and it is **not built yet** — there is no
-`make backup` in the Makefile at R2. When it lands it is a custom-format
-`pg_dump`, and the thing to know before it does: **`media_objects` rows travel
-with a dump and the objects do not.** Restore the database alone and all 308
-media references in the fixture resolve perfectly — `cities_cover_fk` and its
-siblings are satisfied by rows that came back — pointing at bytes that are
-gone. There is no error anywhere: it is 308 broken images and a foreign-key
-graph that looks healthy.
+**UPDATED AT R4: the database half now exists and has been restored once.**
+`make backup` is a custom-format `pg_dump -Fc` taken inside the container, keep
+7, and one restore rehearsal is recorded in `docs/EVIDENCE.md` with its output —
+twelve content digests matching and a negative control that moved them. **The
+bucket half is still DEF-07 and is still not built.**
 
-**The bucket needs its own backup**, and it does not have one. It is named here
-with the other three absences (creation — which R2 closed — lifecycle,
-encryption at rest) because only the first was needed now.
+**`media_objects` ROWS TRAVEL WITH A DUMP AND THE OBJECTS DO NOT.** Restore the
+database alone and every media reference in the seeded log resolves perfectly —
+`cities_cover_fk` and its siblings are satisfied by rows that came back —
+pointing at bytes that are gone. There is no error anywhere: it is a foreign-key
+graph that looks healthy and every photograph broken. Counted from the captured
+fixture: **284 photographs, 6 trip covers, 9 city covers and 9 place covers —
+308 references**, all addressing **two** objects.
+
+```bash
+python3 - <<'EOF'
+import json
+L = json.load(open('internal/logbook/testdata/client_sample_log.json'))['logbook']
+print(len(L['photos']),
+      sum(1 for t in L['trips'] if t.get('coverAsset')),
+      sum(1 for c in L['cities'] if c.get('coverAsset')),
+      sum(1 for p in L['places'] if p.get('coverAsset')))
+EOF
+# 284 6 9 9   -> 308 references, two objects
+```
+
+**THE ORDER IS FIXED, AND IT IS FIXED THE OTHER WAY ROUND FROM WHAT IS OBVIOUS
+(DEC-92): BACK UP THE BUCKET FIRST AND THE DATABASE SECOND.** A dump newer than
+the bucket copy references objects that were never copied — a silently broken
+log. A bucket copy newer than the dump leaves objects nothing references, which
+is unreferenced garbage and costs disk. The sentence is in the `make backup`
+recipe as well as here, because that is where whoever adds the second half will
+be reading.
+
+**Three things `make backup` is NOT**, and each is a real gap rather than a
+hedge: it is **not off-box** — it writes into `backups/` on the same machine as
+the volume it protects; it is **not scheduled** — nothing runs it; and it does
+**not include the bucket**. `docs/EVIDENCE.md` carries all three under "what is
+still guarded by nothing".
+
+**The bucket's other three absences** (creation — which R2 closed — lifecycle,
+encryption at rest) are unchanged.
 
 ---
 
