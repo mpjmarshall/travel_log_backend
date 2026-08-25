@@ -31,8 +31,11 @@
 package httpx
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 )
@@ -147,9 +150,171 @@ func CodeFor(err error) Code {
 		return CodePayloadTooLarge
 	case errors.Is(err, ErrInvalidBody):
 		return CodeInvalidBody
+	case DependencyIsDown(err):
+		return CodeTimeout
 	}
 	return CodeInternal
 }
+
+// DependencyIsDown is DEC-96's classification: a request that could not reach
+// the database has not encountered a handler bug.
+//
+// WHY IT MATTERS MORE THAN IT LOOKS. With Postgres killed, every route answered
+// `500 {"code":"internal"}` — and a 500 tells a client the server has a bug and
+// the request is poison, do not retry, when the truth is "the dependency is
+// down, try again shortly". It is also unanswerable afterwards: a 500 count
+// then conflates handler bugs with outages, which is the one question an
+// operator asks at 3am.
+//
+// IT ADDS NO WORD TO THE VOCABULARY. `timeout` is already 503 and already
+// means "try again"; what was missing was the classification and the header.
+//
+// EVERY SHAPE IT RECOGNISES IS IN THE STANDARD LIBRARY, and that is a
+// constraint rather than a preference. spec L20 has pgx as a blank import
+// driver only, and internal/postgres' own comment records that reading SQLSTATE
+// off the driver is not available here — so a classification that needed
+// pgconn could not live anywhere. DEC-96's three shapes happen to be exactly
+// the three stdlib can see, MEASURED against a real pool pointed at a dead
+// port: `*pgconn.ConnectError` satisfies `errors.As(err, &net.Error)`, because
+// it wraps the `*net.OpError` from the dial.
+//
+// WHAT IT DELIBERATELY DOES NOT COVER: a `statement_timeout` cancellation,
+// which comes back as `*pgconn.PgError` SQLSTATE 57014 and does NOT unwrap to
+// a net error — measured in the same probe. That request is bounded by
+// httpx.Timeout instead, which answers 503 through a different mechanism and
+// picks up the same Retry-After from RetryAfter's writer. Two paths, one
+// answer, and neither needs pgconn.
+func DependencyIsDown(err error) bool {
+	var netErr net.Error
+	switch {
+	case errors.As(err, &netErr):
+		return true
+	case errors.Is(err, sql.ErrConnDone):
+		return true
+	case errors.Is(err, context.DeadlineExceeded):
+		return true
+	}
+	return serverGaveUp(err)
+}
+
+// sqlStater is a driver error that carries a SQLSTATE. It is a STRUCTURAL
+// interface and not an import, which is the whole reason this works here.
+//
+// spec L20 has pgx as a blank import driver only, and internal/postgres' own
+// comment records the consequence: "reading a violation back off the driver
+// would mean importing pgconn to read SQLSTATE 23503, which cmd/api's import
+// sweep forbids". `*pgconn.PgError` has a `SQLState() string` method, so an
+// interface declared here matches it without naming it — the same idiom
+// DEC-62's `Coder` uses in the other direction. Measured against a real
+// server: a statement cut off by statement_timeout satisfies
+// `errors.As(err, &sqlStater)` and answers "57014".
+type sqlStater interface{ SQLState() string }
+
+// serverGaveUp is the second half of DEC-96's classification, and it is the
+// half the ruling's own list does not name.
+//
+// DEC-96 lists "pgconn connect errors, sql.ErrConnDone, a pool-acquire
+// deadline" — all three of which the standard library can see. MEASURED while
+// writing the leg the ruling asks for: with a lock held on `trips`, the
+// blocked read is cut off by `statement_timeout` and comes back as SQLSTATE
+// 57014, which is NOT a net error and NOT a context deadline, so it landed in
+// `default` and answered 500. The ruling's own leg — "one leg holds a lock and
+// asserts the request gets a BOUNDED 503 rather than silence" — could not pass
+// without this.
+//
+// FOUR CLASSES, AND WHAT IS LEFT OUT IS THE POINT:
+//
+//	08  connection_exception       — the connection failed mid-statement
+//	53  insufficient_resources     — out of connections, memory or disk
+//	57  operator_intervention      — 57014 is statement_timeout and a client
+//	                                 cancellation; 57P01/02/03 are shutdown
+//	55P03 lock_not_available       — lock_timeout, the third bound's own error
+//
+// NOT 40001 (serialization_failure) and NOT 40P01 (deadlock_detected). Both
+// are retryable in principle and NEITHER is a dependency being unavailable:
+// they are this application's own concurrency, and answering 503 to them would
+// tell the client to retry work the server should be retrying or preventing.
+// This build has no retry loop and takes one advisory lock per traveller
+// precisely so it does not meet them; if one ever appears in a log it is a
+// defect to fix rather than an outage to wait out.
+//
+// AND NOT ANY OTHER CLASS. 22012 (division by zero), 23503 (foreign key) and
+// every constraint violation stay `internal`, because they are the server
+// having a bug and a client must not retry them.
+func serverGaveUp(err error) bool {
+	var stater sqlStater
+	if !errors.As(err, &stater) {
+		return false
+	}
+	state := stater.SQLState()
+	if len(state) < 2 {
+		return false
+	}
+	switch state[:2] {
+	case "08", "53", "57":
+		return true
+	}
+	return state == "55P03"
+}
+
+// retryAfterSeconds is what a 503 tells the client to wait.
+//
+// FIVE, AND IT IS A GUESS RATHER THAN A MEASUREMENT — said so here because
+// every other number in this repository is derived. What it is derived
+// FROM is the shape of the two outages it covers: a restarting Postgres
+// container is healthy again in single-digit seconds (compose's healthcheck
+// interval is 3s with 20 retries), and a statement cut off by a lock queue
+// clears when the migration ahead of it commits. Five is long enough that a
+// phone retrying does not add to the queue and short enough that a user who
+// pressed a button does not conclude the app is broken.
+const retryAfterSeconds = "5"
+
+// RetryAfter puts `Retry-After` on every 503 that leaves this server.
+//
+// IT IS A MIDDLEWARE AND NOT A LINE IN WriteError, and that is the decision.
+// TWO DIFFERENT MECHANISMS PRODUCE A 503 HERE and only one of them goes
+// through this package's writers: `http.TimeoutHandler` writes its own status
+// and body from inside net/http and takes no part in the error path at all.
+// A header set at the call sites would be set at one of the two — which is
+// exactly the class of miss DEC-96 is correcting, since the timeout branch is
+// the 503 a client is MOST likely to meet.
+//
+// It decides at WriteHeader time, for the same reason jsonByDefault does: the
+// status is not known before then, and it is too late after.
+func RetryAfter() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(&retryAfterWriter{ResponseWriter: w}, r)
+		})
+	}
+}
+
+type retryAfterWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *retryAfterWriter) WriteHeader(status int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		// A handler that set its own Retry-After knows something this does
+		// not — a rate limiter with a real window, say — so it is not
+		// overwritten.
+		if status == http.StatusServiceUnavailable && w.Header().Get("Retry-After") == "" {
+			w.Header().Set("Retry-After", retryAfterSeconds)
+		}
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *retryAfterWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *retryAfterWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // errorPayload is the whole of an error body. `field` is DEC-12's ONE
 // permitted additive key and it is omitempty, because optional means absent —

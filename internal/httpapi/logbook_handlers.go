@@ -196,6 +196,14 @@ func writeLogbookFailure(w http.ResponseWriter, r *http.Request, log *slog.Logge
 	case errors.Is(err, logbook.ErrUnsupportedFormat):
 		w.Header().Set(formatHeader, emittableFormats())
 		httpx.WriteError(w, r, httpx.CodeUnsupportedFormat)
+	case httpx.DependencyIsDown(err):
+		// DEC-96. A request that could not reach the database has not
+		// encountered a handler bug, and 500 tells the client the opposite:
+		// do not retry, the request is poison. `timeout` is 503 and
+		// httpx.RetryAfter puts the header on. It is still logged — an
+		// outage is worth a line — but it is not a fault.
+		logFailure(r, log, err)
+		httpx.WriteError(w, r, httpx.CodeTimeout)
 	default:
 		logFailure(r, log, err)
 		httpx.WriteError(w, r, httpx.CodeInternal)

@@ -79,6 +79,32 @@ EXPOSE 8080
 # next: /healthz's own database ping 2s < probe's request 3s < this timeout 4s
 # < the 5s interval.
 #
+# AND THERE IS A FOURTH THAT DOES NOT NEST WITH THEM (DEC-96, OPS-MAJ-4). The
+# server does not listen until migrations finish, `migrateTimeout` allows 120s,
+# and the health budget was 3s + 12x5s = 63s. MEASURED: `health=unhealthy` at
+# t=61s while a CORRECT migration was still waiting for its lock and went on to
+# apply at t=98s. So `make up --wait` fails a deploy that is working, and the
+# natural operator response — Ctrl-C, `docker compose down` — interrupts a
+# migration mid-flight, which is the one thing this project's forward-only
+# runner cannot recover from by itself.
+#
+# `--start-period=150s` costs NOTHING, and that is the whole argument: a check
+# that PASSES during the start period marks the container healthy at once, so
+# the number is a ceiling on how long a slow boot is tolerated and never a
+# delay. deploy/docker-compose.yml already says exactly that about Postgres.
+# 150s is migrateTimeout (120s) plus the ping budget plus room, so the health
+# check gives up strictly AFTER the thing it is waiting for has given up —
+# which is the property the other three budgets have with each other.
+#
+# THE ALTERNATIVE IS NAMED AND NOT TAKEN: split the migration out of boot. It
+# costs nothing to build — `make migrate` already exists and `cmd/api
+# -migrate-only` already works — and a deploy would run migrations as a
+# separate gated step and boot a server that only ever listens. It is declined
+# because it changes the DEPLOY PROCEDURE rather than one line, and because
+# `up --wait` reporting a healthy stack after one command is the property this
+# project has been protecting since the arc was written. If that stops being
+# true, this comment is where the reversal goes.
+#
 # THE PROBE TAKES NO PORT ARGUMENT, AND THAT IS DELIBERATE (VS2). It used to
 # rely on a `-addr` flag defaulting to :8080 while the server's port was a
 # separate knob — run the image with any other port and the container served
@@ -86,7 +112,7 @@ EXPOSE 8080
 # into a failed deploy. VS2 deleted the flag: the probe loads the same config
 # the server does, so there is one source for the port and nothing left to
 # pass. Do not reintroduce an address argument here.
-HEALTHCHECK --interval=5s --timeout=4s --start-period=3s --retries=12 \
+HEALTHCHECK --interval=5s --timeout=4s --start-period=150s --retries=12 \
     CMD ["/api", "-healthcheck"]
 
 ENTRYPOINT ["/api"]

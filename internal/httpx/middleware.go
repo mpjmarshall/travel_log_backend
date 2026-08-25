@@ -57,14 +57,23 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 	return h
 }
 
-// Base is the four VS3 fixes, in order. Auth appends to it:
+// Base is the four VS3 fixes plus DEC-96's Retry-After, in order. Auth appends
+// to it:
 //
 //	httpx.Chain(mux, append(httpx.Base(log, d), auth.Require(store))...)
+//
+// RETRY-AFTER SITS ABOVE TIMEOUT AND THAT POSITION IS THE WHOLE OF IT.
+// http.TimeoutHandler writes its own 503 from inside net/http, so a header set
+// anywhere BELOW it never reaches the 503 a client is most likely to meet.
+// Above it, one wrapper covers that response and every handler-written 503 as
+// well — which is why the header is set here rather than at the call sites
+// that produce the status.
 func Base(log *slog.Logger, timeout time.Duration) []Middleware {
 	return []Middleware{
 		Recover(log),
 		RequestID(),
 		AccessLog(log),
+		RetryAfter(),
 		Timeout(timeout),
 	}
 }

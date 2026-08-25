@@ -207,6 +207,13 @@ func RequireTraveller(service *auth.Service, log *slog.Logger) httpx.Middleware 
 			case errors.Is(err, auth.ErrNoSession):
 				httpx.WriteError(w, r, httpx.CodeUnauthenticated)
 				return
+			case httpx.DependencyIsDown(err):
+				// DEC-96, and this is the site that matters most: EVERY
+				// authenticated request passes through here, so an outage
+				// that answered 500 here answered 500 for the whole API.
+				logFailure(r, log, err)
+				httpx.WriteError(w, r, httpx.CodeTimeout)
+				return
 			case err != nil:
 				logFailure(r, log, err)
 				httpx.WriteError(w, r, httpx.CodeInternal)
@@ -242,6 +249,11 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)
 	case errors.Is(err, auth.ErrBusy):
 		httpx.WriteError(w, r, httpx.CodeRateLimited)
+	case httpx.DependencyIsDown(err):
+		// DEC-96. Sign-in against a database that is down is not a bad
+		// passphrase and is not a server bug.
+		logFailure(r, log, err)
+		httpx.WriteError(w, r, httpx.CodeTimeout)
 	default:
 		logFailure(r, log, err)
 		httpx.WriteError(w, r, httpx.CodeInternal)

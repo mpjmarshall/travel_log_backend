@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"travellog/internal/config"
 )
@@ -32,6 +33,7 @@ var allVars = []string{
 	"AUTH_RATE_LIMIT_PER_MIN",
 	"TRAVELLER_RATE_LIMIT_PER_MIN",
 	"ARGON2_MAX_CONCURRENT",
+	"REQUEST_TIMEOUT",
 }
 
 // complete is a whole environment Load must accept. Its values are the ones
@@ -47,6 +49,7 @@ func complete() map[string]string {
 		"AUTH_RATE_LIMIT_PER_MIN":      "10",
 		"TRAVELLER_RATE_LIMIT_PER_MIN": "600",
 		"ARGON2_MAX_CONCURRENT":        "2",
+		"REQUEST_TIMEOUT":              "15s",
 	}
 }
 
@@ -179,6 +182,7 @@ func TestLoadReadsEveryValueFromACompleteEnvironment(t *testing.T) {
 		AuthRateLimitPerMin:      10,
 		TravellerRateLimitPerMin: 600,
 		Argon2MaxConcurrent:      2,
+		RequestTimeout:           15 * time.Second,
 	}
 	if cfg != want {
 		t.Errorf("Load() = %+v,\nwant %+v", cfg, want)
@@ -235,6 +239,12 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 		{"rate limit is zero", "AUTH_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every login, which is an outage spelled as a setting"},
 		{"traveller rate limit is zero", "TRAVELLER_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every authenticated request, which is the app switched off"},
 		{"argon2 concurrency is zero", "ARGON2_MAX_CONCURRENT", "0", "a zero-capacity semaphore blocks the first login forever"},
+		{"request timeout has no unit", "REQUEST_TIMEOUT", "15", "a bare number is ambiguous and ParseDuration refuses it, which is the point of a duration"},
+		{"request timeout is not a duration", "REQUEST_TIMEOUT", "fifteen", "ParseDuration"},
+		{"request timeout is zero", "REQUEST_TIMEOUT", "0s", "http.TimeoutHandler reads a non-positive duration as 'time out immediately', so every request answers 503"},
+		{"request timeout is negative", "REQUEST_TIMEOUT", "-1s", "same as zero to http.TimeoutHandler"},
+		{"request timeout is below the floor", "REQUEST_TIMEOUT", "500ms", "one Argon2id hash at 64 MiB does not finish inside it, so every sign-in answers 503"},
+		{"request timeout is above the ceiling", "REQUEST_TIMEOUT", "120s", "a handler allowed to outlive the connection's own write deadline"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setEnv(t, with(tc.key, tc.value))

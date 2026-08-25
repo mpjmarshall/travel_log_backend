@@ -141,7 +141,11 @@ func main() {
 //     postgres being healthy, so a failure here is a real misconfiguration and
 //     the process should not come up pretending otherwise.
 func run(cfg config.Config, addr string, log *slog.Logger) error {
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	dsn, err := postgres.WithSessionOptions(cfg.DatabaseURL, cfg.RequestTimeout)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("opening the database: %w", err)
 	}
@@ -152,8 +156,16 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 
 	pingCtx, cancel := context.WithTimeout(context.Background(), startupPingTimeout)
 	defer cancel()
+	// THE ELAPSED TIME, NOT ONLY THE BUDGET (OPS-MIN-11). This used to answer
+	// "the database did not answer within 10s" for a DNS failure that took
+	// 250ms, so a fast failure read as a slow one and the first thing an
+	// operator does is go looking for a network stall that is not there. The
+	// budget stays as a second field, because "247ms" alone does not say
+	// whether it gave up or was refused.
+	started := time.Now()
 	if err := db.PingContext(pingCtx); err != nil {
-		return fmt.Errorf("the database did not answer within %s: %w", startupPingTimeout, err)
+		return fmt.Errorf("the database did not answer (waited %s of a %s budget): %w",
+			time.Since(started).Round(time.Millisecond), startupPingTimeout, err)
 	}
 	log.Info("database ready",
 		slog.Int("maxOpenConns", cfg.DBMaxOpenConns),
@@ -170,7 +182,7 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	return serve(addr, serverChain(newMux(db, log, mount), log), log)
+	return serve(addr, serverChain(newMux(db, log, mount), log, cfg.RequestTimeout), log)
 }
 
 // pinger is the half of *sql.DB that /healthz needs.
@@ -203,7 +215,18 @@ func migrateUp(ctx context.Context, db *sql.DB, log *slog.Logger) error {
 // migrateOnlyRun is `-migrate-only`: open, pool, ping, migrate, stop. It starts
 // no listener, so `make migrate` cannot leave a server behind.
 func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	// THE SAME SESSION SETTINGS AS run(), AND THE statement_timeout IS WHY THIS
+	// IS NOT A COPY-PASTE HAZARD: a migration statement that runs longer than a
+	// request budget is normal, and it is bounded by migrateTimeout and by
+	// migrateLockTimeout instead. The Migrator sets its own lock_timeout on its
+	// own pinned connection; what this shares with run() is the search_path
+	// pin, which is the setting a migration must not disagree with the
+	// application about.
+	dsn, err := postgres.WithSessionOptions(cfg.DatabaseURL, migrateTimeout)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("opening the database: %w", err)
 	}
@@ -286,19 +309,26 @@ func limiters(cfg config.Config) (credential, traveller *httpx.Limiter) {
 		httpx.NewLimiter(cfg.TravellerRateLimitPerMin, nil)
 }
 
-// serverChain is httpx.Base MINUS Timeout, and the subtraction is stated
-// rather than silent.
+// serverChain is httpx.Base plus two, and every position in it is a decision.
 //
-// httpx.Base is Recover, RequestID, AccessLog, Timeout — and Timeout takes a
-// duration this build cannot read: there is no REQUEST_TIMEOUT in
-// internal/config, and inventing one here would be a configuration value
-// nobody chose, silently in force, which is the thing config.Load exists to
-// refuse. It belongs to the step that adds the variable.
+// TIMEOUT IS FINALLY IN IT. This comment used to explain the SUBTRACTION —
+// "Timeout takes a duration this build cannot read: there is no REQUEST_TIMEOUT
+// in internal/config, and inventing one here would be a configuration value
+// nobody chose" — and that was correct and stayed true for four steps, during
+// which `httpx.Timeout` had ZERO production call sites. DEC-96 adds the
+// variable, so the reason is discharged rather than restated: the duration
+// comes from config and the middleware is wired.
 //
-// The other three are wired now because the auth routes are the first thing
-// here a client can reach with a body: without Recover a panicking handler
-// closes the connection with no response at all, and without RequestID the
-// detail httpx sends to the log has nothing to tie it to.
+// Recover, RequestID and AccessLog were already here because the auth routes
+// are the first thing a client can reach with a body: without Recover a
+// panicking handler closes the connection with no response at all, and without
+// RequestID the detail httpx sends to the log has nothing to tie it to.
+//
+// RETRY-AFTER GOES ABOVE TIMEOUT, AND THAT IS THE ONLY PLACE IT WORKS.
+// `http.TimeoutHandler` writes its own 503 from inside net/http, so a
+// Retry-After set anywhere BELOW it never touches the 503 a client is most
+// likely to meet. Above it, one wrapper covers both that 503 and every
+// handler-written one.
 //
 // MuxErrors IS INNERMOST AND IS NOT PART OF Base. It has to sit directly
 // around the mux, because the 404 and the 405 it exists to rewrite are written
@@ -313,11 +343,13 @@ func limiters(cfg config.Config) (credential, traveller *httpx.Limiter) {
 // uncompressed size and quietly undo it. Above MuxErrors, so the envelope
 // bodies MuxErrors writes go through the compressor's own small-body floor
 // rather than around it.
-func serverChain(mux *http.ServeMux, log *slog.Logger) http.Handler {
+func serverChain(mux *http.ServeMux, log *slog.Logger, requestTimeout time.Duration) http.Handler {
 	return httpx.Chain(mux,
 		httpx.Recover(log),
 		httpx.RequestID(),
 		httpx.AccessLog(log),
+		httpx.RetryAfter(),
+		httpx.Timeout(requestTimeout),
 		httpx.Compress(),
 		httpx.MuxErrors(),
 	)

@@ -11,8 +11,11 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -783,5 +786,71 @@ func TestAnEmptyCityListIsHeardWhileAnAbsentOneIsNot(t *testing.T) {
 	}
 	if len(*w.CityIDs) != 0 {
 		t.Errorf("cityIds = %v, want an empty list", *w.CityIDs)
+	}
+}
+
+// === DEC-96: an outage is a 503 with Retry-After, not a 500 ===
+
+// MEASURED by the operations lens with Postgres killed: every route answered
+// `500 {"code":"internal"}` with no Retry-After. A 500 tells a client the
+// server has a bug and the request is poison; the truth is "the dependency is
+// down, try again shortly", and the difference decides whether a phone retries
+// or gives up. It is also unanswerable afterwards, because a 500 count then
+// conflates handler bugs with outages.
+//
+// THE LEG COVERS BOTH HALVES OF THE API. The store failure reaches the read and
+// the write through writeLogbookFailure, and it reaches the auth middleware
+// through a separate switch — three `default: CodeInternal` branches, and a fix
+// applied to one of them is the shape of miss this table exists to prevent.
+func TestAnUnreachableDatabaseIs503WithRetryAfterAndNot500(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"a driver connect failure", fmt.Errorf("postgres: reading trips: %w",
+			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")})},
+		{"a connection database/sql has already closed", fmt.Errorf("postgres: %w", sql.ErrConnDone)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, options{})
+			token := bearer(t, h)
+			h.logbook.failWith = tc.err
+
+			for _, call := range []struct {
+				what string
+				got  answer
+			}{
+				{"GET /v1/logbook", h.get(t, "/v1/logbook", token, nil)},
+				{"PUT /v1/trips/kyoto", h.put(t, "/v1/trips/kyoto", aTrip, token)},
+			} {
+				if call.got.status != http.StatusServiceUnavailable {
+					t.Errorf("%s = %d, want 503 — a request that cannot reach the "+
+						"database has not encountered a handler bug, and 500 tells "+
+						"a client not to retry", call.what, call.got.status)
+				}
+				if got := call.got.header.Get("Retry-After"); got != "5" {
+					t.Errorf("%s carries Retry-After %q, want \"5\" — 'try again "+
+						"shortly' is the whole difference between this and a "+
+						"poison request", call.what, got)
+				}
+			}
+		})
+	}
+}
+
+// AND THE CONTROL. A genuine handler fault is still a 500 with no Retry-After,
+// or the classification above is a classifier that calls everything an outage.
+func TestAGenuineFaultIsStill500WithNoRetryAfter(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+	h.logbook.failWith = errors.New("sql: Scan error on column index 3")
+
+	got := h.get(t, "/v1/logbook", token, nil)
+	if got.status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", got.status)
+	}
+	if retry := got.header.Get("Retry-After"); retry != "" {
+		t.Errorf("Retry-After = %q on a handler fault — retrying a poison request "+
+			"fails identically for ever", retry)
 	}
 }

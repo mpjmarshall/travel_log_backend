@@ -383,10 +383,40 @@ func TestAFastHandlerPassesThroughTheTimeoutUntouched(t *testing.T) {
 
 // === The chain as it actually ships ===
 
-func TestBaseIsTheFourMiddlewaresInTheOrderVS3Fixes(t *testing.T) {
+// FIVE SINCE DEC-96. It was four, and the count is asserted rather than
+// derived on purpose: a middleware silently added to the shipped chain is a
+// behaviour nothing else in this package would notice.
+func TestBaseIsTheFiveMiddlewaresInTheOrderTheChainNeeds(t *testing.T) {
 	log, _ := testLogger()
-	if got := len(httpx.Base(log, time.Minute)); got != 4 {
-		t.Fatalf("Base has %d middlewares, want 4 — recover, request id, access log, timeout", got)
+	if got := len(httpx.Base(log, time.Minute)); got != 5 {
+		t.Fatalf("Base has %d middlewares, want 5 — recover, request id, access log, "+
+			"retry-after, timeout", got)
+	}
+}
+
+// AND THE POSITION, PROVEN BY WHAT IT PRODUCES. Retry-After must be ABOVE
+// Timeout: http.TimeoutHandler writes its own 503 from inside net/http, so a
+// wrapper below it never sees that status at all. A leg reading the slice
+// order would pass against a chain folded the other way; this one hangs a
+// handler and reads the header off the answer.
+func TestTheTimeoutsOwn503CarriesRetryAfter(t *testing.T) {
+	log, _ := testLogger()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	rec := httptest.NewRecorder()
+	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}), httpx.Base(log, 10*time.Millisecond)...).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q on the timeout's own 503, want \"5\" — this is "+
+			"the 503 a client meets most often, and it is the one a header set "+
+			"below TimeoutHandler cannot reach", got)
 	}
 }
 
