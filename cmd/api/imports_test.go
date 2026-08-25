@@ -112,6 +112,7 @@ func pgxImports(t *testing.T) []pgxImport {
 var pgxImporters = map[string]string{
 	"cmd/api/main.go":                    "the binary: registers the driver for database/sql, and calls nothing in it",
 	"internal/postgres/testdb/testdb.go": "the test seam: opens the pool the store legs run against",
+	"cmd/seed/main.go":                   "the developer command: registers the driver for its own pool, and calls nothing in it",
 }
 
 // TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes THE CLAIM A GREP
@@ -146,4 +147,89 @@ func TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver(t *testing.T) {
 			t.Errorf("%s is listed as a pgx importer (%s) and does not import it", file, why)
 		}
 	}
+}
+
+// cmd/api MUST NOT IMPORT internal/seed, and this is the mechanism rather than
+// the sentence.
+//
+// The rule is in the definition of done and in internal/seed's own package
+// comment — "it is a developer command and must never run in production or at
+// boot" — and until R4 there was no command at all, so nothing could have
+// broken it and nothing checked. `make seed` is a second main package now, and
+// the failure this guards against is not a wrong pixel: it is a fixture loader
+// linked into the binary that serves somebody's log.
+//
+// IT WALKS THE IMPORT GRAPH TRANSITIVELY rather than reading cmd/api's own
+// import block, because the way this rule actually breaks is a helper in
+// internal/postgres reaching for a seed constant.
+func TestNothingUnderCmdAPIReachesInternalSeed(t *testing.T) {
+	root := moduleRootFromHere(t)
+	pkgs := map[string][]string{}
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "vendor") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		parsed, perr := parser.ParseFile(token.NewFileSet(), path, nil,
+			parser.ImportsOnly|parser.SkipObjectResolution)
+		if perr != nil {
+			return perr
+		}
+		rel, rerr := filepath.Rel(root, filepath.Dir(path))
+		if rerr != nil {
+			return rerr
+		}
+		pkg := "travellog/" + filepath.ToSlash(rel)
+		for _, spec := range parsed.Imports {
+			importPath, uerr := strconv.Unquote(spec.Path.Value)
+			if uerr != nil {
+				return uerr
+			}
+			if strings.HasPrefix(importPath, "travellog/") {
+				pkgs[pkg] = append(pkgs[pkg], importPath)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+
+	// A POSITIVE CONTROL IN THE SAME RUN. A graph walk that found nothing at
+	// all would pass this test just as well as a clean one, and cmd/seed IS
+	// supposed to reach internal/seed.
+	if !reaches(pkgs, "travellog/cmd/seed", "travellog/internal/seed", map[string]bool{}) {
+		t.Errorf("cmd/seed does not reach internal/seed — the walk found nothing, " +
+			"so the assertion below is proving nothing either")
+	}
+
+	if reaches(pkgs, "travellog/cmd/api", "travellog/internal/seed", map[string]bool{}) {
+		t.Errorf("cmd/api reaches internal/seed. It is a developer command that loads " +
+			"a captured logbook; nothing that serves a real one may link it.")
+	}
+}
+
+func reaches(graph map[string][]string, from, to string, seen map[string]bool) bool {
+	if from == to {
+		return true
+	}
+	if seen[from] {
+		return false
+	}
+	seen[from] = true
+	for _, next := range graph[from] {
+		if reaches(graph, next, to, seen) {
+			return true
+		}
+	}
+	return false
 }

@@ -43,6 +43,21 @@ var transactionAllowlist = map[string]string{
 	"internal/postgres/tx.go":      "WithTravellerTx and WithTravellerLock — the two helpers themselves",
 	"internal/postgres/read_tx.go": "WithReadSnapshot — the repeatable-read snapshot the reader runs in",
 	"internal/postgres/migrate.go": "the migration runner, which predates the helpers and is not traveller-scoped",
+
+	// R4. `make seed` INSERTS the traveller row inside this transaction, so
+	// there is no traveller to key an advisory lock on until it commits —
+	// which is the same reason register was predicted to need an exemption.
+	// Three further facts, and each is why neither helper fits rather than a
+	// preference: it writes TEN tables and the helpers wrap one write; it sets
+	// logbook_version to 1 in the travellers INSERT rather than bumping a
+	// counter that does not exist yet; and it REFUSES to run at all when any
+	// traveller row exists (DEC-97), so the concurrency the lock exists to
+	// order is a state this function cannot be in. It is a developer command
+	// and nothing in cmd/api imports it — cmd/api/routes_test.go asserts that
+	// separately.
+	"internal/seed/load.go": "the seed's ten-table load: it CREATES the traveller the " +
+		"advisory lock would be keyed on, writes ten tables in one transaction, and " +
+		"refuses to run when any traveller row exists (DEC-97)",
 }
 
 // DEC-50's ONE EXCEPTION IS NOT AN ALLOWLIST ENTRY, AND VS6 IS WHERE THAT WAS

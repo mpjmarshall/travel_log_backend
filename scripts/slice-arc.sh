@@ -21,6 +21,21 @@
 #              after it is the ONLY proof `pgdata` works. Swap these two and
 #              the restart leg passes while proving the opposite.
 #
+# AND FROM R4 THE ARC REFUSES THE DEFAULT PROJECT (DEC-92). A0 destroys the
+# named volume of whatever project this runs under, and until R4 that volume
+# held nothing anybody would miss. R4 is the step that puts a record in it —
+# the plan's own premise is "PostgreSQL is the record and the phone is a
+# cache" — and five of the eight steps' acceptance checks read
+# `make seed && make check && make slice`, which teaches a developer that
+# seeding and then wiping is normal. The phases `testdb` and `healthcheck`
+# have run under their own COMPOSE_PROJECT_NAME since VS8, so the MAIN phase
+# using the live project was the inconsistency and not the pattern.
+#
+# Run it somewhere else, which is one variable — see the usage line below —
+# or say SLICE_DESTROY_VOLUME=1 to mean it. A variable rather than a prompt,
+# because the arc has to run unattended; required rather than defaulted,
+# because what it prevents is somebody else's photographs.
+#
 # Phases run cheapest-first so a stale record fails in a second rather than
 # after a two-minute build:
 #
@@ -31,6 +46,9 @@
 #   healthcheck  docker's verdict never disagrees with a real TCP probe
 #
 # usage: scripts/slice-arc.sh [phase ...]     (default: all five, in order)
+#
+#   COMPOSE_PROJECT_NAME=travellog-slice API_PORT=8085 POSTGRES_PORT=5464 \
+#     MINIO_PORT=9005 S3_PUBLIC_BASE_URL=http://127.0.0.1:9005 make slice
 
 set -Eeuo pipefail
 
@@ -263,6 +281,74 @@ phase_record() {
 	grep -q 'scripts/slice-arc.sh' "$REPO/Makefile" || fail "the Makefile no longer names scripts/slice-arc.sh"
 	[ -x "$REPO/scripts/slice-arc.sh" ] || fail "scripts/slice-arc.sh is not executable"
 	ok "make slice is wired to this script and fails when it fails"
+
+	########################################################################
+	# R4: THE GUARD THAT STOPS THIS SCRIPT DESTROYING THE LIVE VOLUME.
+	#
+	# IT IS RUN RATHER THAN READ, and that is the whole point: a grep for
+	# SLICE_DESTROY_VOLUME passes against a variable nothing consults, which is
+	# exactly the class of check this project has had go green against correct
+	# and incorrect code alike. This INVOKES the arc phase under the live
+	# project name and asserts it exits non-zero — and it is safe to invoke,
+	# because the refusal is the statement before `down -v` rather than after
+	# it. The volume's continued existence is asserted afterwards, which is the
+	# half a grep can never make.
+	########################################################################
+	step "R4: the arc refuses the live project, and the live volume survives being asked"
+	local live_volume before after code
+	live_volume="travellog_pgdata"
+	before="$(docker volume inspect "$live_volume" >/dev/null 2>&1 && echo present || echo absent)"
+
+	set +e
+	COMPOSE_PROJECT_NAME=travellog SLICE_DESTROY_VOLUME= \
+		"$REPO/scripts/slice-arc.sh" arc >"$WORK/refusal" 2>&1
+	code=$?
+	set -e
+	# THE EXIT CODE ALONE IS A VACUOUS ASSERTION AND MUST NOT BE THE WHOLE LEG.
+	# Measured: with `refuse_the_live_project` mutated to `return 0` and docker
+	# stubbed so nothing could be destroyed, THIS LINE STILL PASSED — the arc
+	# ran on past the refusal and died at the first health check, which is also
+	# exit 1. The two `assert_contains` below are what actually reddened. So the
+	# guard is proved by WHAT THE REFUSAL SAYS, not by the fact that something
+	# failed, and anybody tempted to simplify this leg down to its exit code
+	# would be deleting the whole of its evidence.
+	assert_eq 1 "$code" "the arc's exit code under the live project"
+	assert_contains "$(cat "$WORK/refusal")" "SLICE_DESTROY_VOLUME=1" "the refusal names the way to mean it"
+	assert_contains "$(cat "$WORK/refusal")" "make backup first" "the refusal names the backup"
+
+	after="$(docker volume inspect "$live_volume" >/dev/null 2>&1 && echo present || echo absent)"
+	assert_eq "$before" "$after" "$live_volume across the refusal"
+
+	# AND THE OTHER DIRECTION, WHICH IS WHAT STOPS THE GUARD BEING "REFUSE
+	# ALWAYS". A guard that refused every project would pass R4 exactly as well
+	# as a correct one, and this arc would then be unrunnable anywhere.
+	#
+	# It starts the REAL phase under a probe project and stops it as soon as the
+	# guard has spoken, because what comes next is a two-minute image build and
+	# this phase is the cheap one. The probe project has never existed, so its
+	# `down -v` destroys nothing.
+	step "R5: a project that is not the live one is not refused"
+	local probe=travellog-slice-guardprobe waited
+	set +e
+	COMPOSE_PROJECT_NAME="$probe" POSTGRES_PORT=15999 API_PORT=15998 MINIO_PORT=15997 \
+		"$REPO/scripts/slice-arc.sh" arc >"$WORK/permitted" 2>&1 &
+	local probe_pid=$!
+	set -e
+	CLEANUP+=("kill $probe_pid")
+	CLEANUP+=("COMPOSE_PROJECT_NAME=$probe POSTGRES_PORT=15999 API_PORT=15998 MINIO_PORT=15997 ${COMPOSE[*]} down -v")
+	waited=0
+	while [ "$waited" -lt 60 ]; do
+		if grep -q "this arc's own volume\|the project is the live one" "$WORK/permitted" 2>/dev/null; then
+			break
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	kill "$probe_pid" 2>/dev/null || true
+	wait "$probe_pid" 2>/dev/null || true
+
+	assert_contains "$(cat "$WORK/permitted")" "${probe}_pgdata is this arc's own volume" \
+		"the guard's verdict on a project that is not the live one"
 }
 
 ########################################################################
@@ -412,6 +498,7 @@ phase_arc() {
 	local code base token auth_header shouty traveller_id url
 
 	step "A0: docker compose down -v — the volume goes, so what follows is real"
+	refuse_the_live_project
 	"${COMPOSE[@]}" down -v
 	ok "cold: no pgdata"
 
@@ -763,6 +850,38 @@ phase_arc() {
 	assert_eq 200 "$code" "GET the re-minted URL — miniodata survived too"
 	assert_eq "$ARC_PHOTO" "$(cat "$WORK/fetched")" "the bytes, after a full teardown"
 	ok "the log outlived the stack"
+
+	########################################################################
+	# A23: `make seed` REFUSES A DATABASE THAT HAS A TRAVELLER (DEC-97).
+	#
+	# THE ONLY PLACE THE COMMAND ITSELF IS EXERCISED. internal/seed's legs are
+	# about FromDocument and Load; this is the binary, its flags, its refusal
+	# and its exit code, against a real database in a real stack.
+	#
+	# AND IT IS WHY THE PLAN'S OWN ACCEPTANCE ORDER CANNOT BE RUN IN ONE
+	# PROJECT. DEC-92 reorders the five acceptance checks to
+	# `make check && make slice && make seed` so the documented procedure stops
+	# teaching "seed, then wipe" — but the arc ENDS with a registered traveller,
+	# so a seed against the same project refuses, correctly, every time. The
+	# order is right and the two commands belong to two stacks: slice under its
+	# own COMPOSE_PROJECT_NAME, seed against the one holding the log.
+	#
+	# The row count is asserted rather than the exit code alone, because a
+	# refusal with a mutation behind it is the failure this is about.
+	########################################################################
+	step "A23: make seed refuses this database, and changes nothing"
+	local trips_before trips_after seed_code
+	trips_before="$(in_psql "select count(*) from trips" | tr -d "[:space:]")"
+	set +e
+	( cd "$REPO" && make seed ) >"$WORK/seed" 2>&1
+	seed_code=$?
+	set -e
+	assert_eq 2 "$seed_code" "make seed's exit code against a database with a traveller"
+	assert_contains "$(cat "$WORK/seed")" "already has a traveller" "the refusal"
+	assert_contains "$(cat "$WORK/seed")" "$ARC_EMAIL" "the refusal names the traveller it found"
+	assert_contains "$(cat "$WORK/seed")" "127.0.0.1" "the refusal names the database it was pointed at"
+	trips_after="$(in_psql "select count(*) from trips" | tr -d "[:space:]")"
+	assert_eq "$trips_before" "$trips_after" "trips across the refusal"
 }
 
 ########################################################################
@@ -950,6 +1069,52 @@ phase_healthcheck() {
 }
 
 ########################################################################
+# DEC-92: THE ARC MAY NOT DESTROY THE LIVE VOLUME BY ACCIDENT.
+#
+# The project name is read from COMPOSE ITSELF rather than from the environment
+# variable, for the reason the restart leg's volume name is derived rather than
+# written: compose resolves a project name from COMPOSE_PROJECT_NAME, from a
+# `name:` key in the file, or from the directory, and only compose knows which
+# one won. `deploy/docker-compose.yml` carries `name: travellog`, so the default
+# is the live project whether or not anybody set a variable.
+#
+# THE ESCAPE IS A VARIABLE AND NOT A PROMPT, because this runs unattended; it is
+# REQUIRED rather than defaulted, because what is on the other side of the
+# refusal is a record with no second copy — `make backup` is the second copy,
+# and it is one target away.
+########################################################################
+
+LIVE_PROJECT="travellog"
+
+refuse_the_live_project() {
+	local project
+	project="$("${COMPOSE[@]}" config --format json | jq -r '.name')"
+	[ -n "$project" ] && [ "$project" != null ] || fail "compose did not answer for its own project name"
+
+	if [ "$project" != "$LIVE_PROJECT" ]; then
+		ok "running under project $project, so ${project}_pgdata is this arc's own volume"
+		return 0
+	fi
+	if [ "${SLICE_DESTROY_VOLUME:-0}" = "1" ]; then
+		printf '\033[33m     SLICE_DESTROY_VOLUME=1: destroying %s_pgdata, the LIVE volume\033[0m\n' "$project"
+		return 0
+	fi
+
+	printf '\n\033[31m    FAIL this arc destroys a named volume, and the project is the live one\033[0m\n' >&2
+	printf '\n' >&2
+	printf '    A0 runs "docker compose down -v" against project %s, whose volume\n' "$project" >&2
+	printf '    %s_pgdata is the one make up, make migrate and make seed write to.\n' "$project" >&2
+	printf '    Since R4 that volume holds a record rather than scratch (DEC-92).\n' >&2
+	printf '\n' >&2
+	printf '    Run it somewhere else, which is one variable:\n' >&2
+	printf '\n' >&2
+	printf '      COMPOSE_PROJECT_NAME=travellog-slice API_PORT=8085 POSTGRES_PORT=5464 \\\n' >&2
+	printf '        MINIO_PORT=9005 S3_PUBLIC_BASE_URL=http://127.0.0.1:9005 make slice\n' >&2
+	printf '\n' >&2
+	printf '    Or say you mean it:  SLICE_DESTROY_VOLUME=1 make slice\n' >&2
+	printf '    Either way, make backup first.\n' >&2
+	exit 1
+}
 
 main() {
 	local phases=("$@")

@@ -11,7 +11,8 @@
 //
 // So the guards below walk the AST:
 //
-//  1. exactly one non-test file IMPORTS encoding/json, and it is json.go
+//  1. every non-test file that IMPORTS encoding/json is on a NAMED list with
+//     the reason it may — see jsonImporters
 //  2. inside json.go, exactly two FUNCTIONS use it: WriteJSON and DecodeJSON
 //  3. every Code handed to WriteError anywhere in lib code is a named constant
 //     from the block — not a string literal, not a conversion
@@ -95,7 +96,33 @@ func walkLibSource(t *testing.T, fn func(rel string, fset *token.FileSet, file *
 	}
 }
 
-func TestOnlyJSONGoImportsTheJSONPackage(t *testing.T) {
+// jsonImporters is the named list, and it is EQUALITY rather than a count.
+//
+// CORRECTED AT R4, AND THE CORRECTION IS THE SAME ONE THIS REPOSITORY HAS
+// ALREADY MADE TWICE. internal/config's environment sweep was a count until
+// VS4 and cmd/api's pgx sweep was a count until VS4; both went red against
+// correct work, and both became a named list with a reason per entry, because
+// a count is satisfied by the wrong file and a list is not.
+//
+// It went red here the moment `make seed` needed to read the CAPTURED CLIENT
+// FIXTURE off disk (DEC-75). DecodeJSON cannot do it — it takes an
+// http.ResponseWriter and a *http.Request, because MaxBytesReader needs both —
+// and spec L19 says "exclusively use encoding/json for payload encoding and
+// decoding", which is a mandate to use that package rather than a confinement
+// to one file. The confinement is this project's own mechanism, and reading a
+// file a developer command was pointed at is not payload.
+//
+// A THIRD ENTRY HAS TO BE ADDED HERE AND ARGUE FOR ITSELF, which is the
+// property the count was standing in for.
+var jsonImporters = map[string]string{
+	"internal/httpx/json.go": "spec L19's payload encoder and decoder: WriteJSON and DecodeJSON, " +
+		"and the two-function half below is what keeps it to those two",
+	"internal/logbook/rewrite.go": "DecodeEnvelope: `make seed` reads the captured client fixture " +
+		"off disk (DEC-75), which is a file rather than a payload and has no ResponseWriter to " +
+		"hand MaxBytesReader",
+}
+
+func TestOnlyNamedFilesImportTheJSONPackage(t *testing.T) {
 	var importers []string
 	walkLibSource(t, func(rel string, _ *token.FileSet, file *ast.File) {
 		for _, spec := range file.Imports {
@@ -110,9 +137,22 @@ func TestOnlyJSONGoImportsTheJSONPackage(t *testing.T) {
 	})
 	sort.Strings(importers)
 
-	want := []string{"internal/httpx/json.go"}
-	if len(importers) != len(want) || (len(importers) == 1 && importers[0] != want[0]) {
-		t.Errorf("files importing the JSON package = %v, want %v", importers, want)
+	seen := map[string]bool{}
+	for _, rel := range importers {
+		if _, ok := jsonImporters[rel]; !ok {
+			t.Errorf("%s imports encoding/json and is not on the list — add it "+
+				"with the reason, or route the call through internal/httpx", rel)
+			continue
+		}
+		if seen[rel] {
+			t.Errorf("encoding/json is imported twice in %s", rel)
+		}
+		seen[rel] = true
+	}
+	for rel, why := range jsonImporters {
+		if !seen[rel] {
+			t.Errorf("%s is listed as a JSON importer (%s) and does not import it", rel, why)
+		}
 	}
 }
 
