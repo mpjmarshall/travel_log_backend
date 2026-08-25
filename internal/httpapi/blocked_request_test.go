@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"travellog/internal/auth"
+	"travellog/internal/config"
 	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
+	"travellog/internal/media"
 	"travellog/internal/postgres"
 	"travellog/internal/postgres/testdb"
 	"travellog/migrations"
@@ -199,6 +201,14 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),
+		// THE MEDIA GROUP IS PRESENT SO Mount COMES UP; NO LEG HERE TOUCHES
+		// IT. This file is about DEC-96's bounded answer to a request blocked
+		// on a lock, and the media routes are wired against the real
+		// PostgreSQL store beside the logbook one so that a leg added here
+		// later gets the same database rather than a fake.
+		Media:         postgres.MediaStore{DB: db},
+		Objects:       media.NewMemory(),
+		MediaMaxBytes: config.MinMediaMaxBytes,
 	})
 	server := httptest.NewServer(httpx.Chain(mux, httpx.Base(log, requestTimeout)...))
 	t.Cleanup(server.Close)

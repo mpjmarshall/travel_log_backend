@@ -446,7 +446,24 @@ const insertTripCitySQL = `INSERT INTO trip_cities (traveller_id, trip_id, city_
 
 const cityExistsSQL = `SELECT 1 FROM cities WHERE traveller_id = $1::uuid AND id = $2`
 
-const mediaObjectExistsSQL = `SELECT 1 FROM media_objects WHERE traveller_id = $1::uuid AND id = $2`
+// mediaObjectCommittedSQL is `uploaded_at IS NOT NULL`, AND THE PREDICATE IS
+// THE WHOLE OF IT.
+//
+// IT USED TO BE A BARE EXISTENCE CHECK, and DEC-58's "enforced twice" is
+// precise rather than loose about what that bought. The four foreign keys
+// guarantee the ROW EXISTS and say nothing about `uploaded_at`, because an FK
+// cannot see a column it does not reference. So the schema refuses a reference
+// to an object nobody ever began; this refuses a reference to one that was
+// begun and never uploaded — bytes that are not in the bucket, behind a row
+// that says they are coming. Two different lies, two different guards, and
+// only one of them is the database's.
+//
+// WHAT IT COSTS TO GET WRONG IS A PHOTOGRAPH THAT NEVER LOADS. The reference
+// resolves, the emitted log carries the locator, the phone mints a read
+// capability for it, and the bucket answers NoSuchKey — on a screen with no
+// error state, because DEC-51's read path has none.
+const mediaObjectCommittedSQL = `SELECT 1 FROM media_objects
+	WHERE traveller_id = $1::uuid AND id = $2 AND uploaded_at IS NOT NULL`
 
 const readOneTripSQL = `SELECT t.id, t.name, t.started_on, t.ended_on, t.summary, t.cover_asset,
 		t.share_photos, t.share_notes, t.share_coordinates, ` + sharedSQL + `
@@ -613,10 +630,11 @@ func requireCover(ctx context.Context, tx *sql.Tx, travellerID string, asset *st
 	if asset == nil {
 		return nil
 	}
-	if err := requireRow(ctx, tx, mediaObjectExistsSQL, travellerID, *asset); err != nil {
+	if err := requireRow(ctx, tx, mediaObjectCommittedSQL, travellerID, *asset); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return logbook.InvalidFieldError{Field: "coverAsset",
-				Why: "that object has not been uploaded"}
+				Why: "that object has not been uploaded — begin it, PUT the bytes, " +
+					"and commit it before anything references it"}
 		}
 		return fmt.Errorf("postgres: looking up the cover %s: %w", *asset, err)
 	}

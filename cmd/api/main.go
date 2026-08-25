@@ -188,11 +188,13 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 
 	// THE BUCKET, ON THE SAME ARGUMENT AS THE PING ABOVE (DEC-98).
 	//
-	// The store it answers is DISCARDED, and that is honest rather than
-	// sloppy: R3 is the step that mounts the routes that presign, and this is
-	// the step that makes the bucket exist. Discarding it costs nothing
-	// precisely because the region is pinned — there is no location cache to
-	// warm, so R3's store will be as cold and as offline as this one.
+	// R2 DISCARDED THE STORE THIS ANSWERS AND R3 KEEPS IT. R2's own comment
+	// said the discard was honest rather than sloppy, and gave the reason it
+	// cost nothing: the region is pinned, so there is no location cache to
+	// warm and a second store would be as cold and as offline as this one.
+	// That reasoning still holds — what changed is that there are now three
+	// routes that presign, so a second construction would be a second place
+	// for the nine S3_* values to be read.
 	//
 	// What it buys is the two things a healthcheck cannot see. Nothing else
 	// creates the bucket: the official image auto-creates nothing and
@@ -210,11 +212,12 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	// site, and that is stated rather than assumed.
 	bucketCtx, bucketCancel := context.WithTimeout(context.Background(), bucketTimeout)
 	defer bucketCancel()
-	if _, err := mediaStore(bucketCtx, cfg, log); err != nil {
+	objects, err := mediaStore(bucketCtx, cfg, log)
+	if err != nil {
 		return err
 	}
 
-	mount, err := apiRoutes(cfg, db, log)
+	mount, err := apiRoutes(cfg, db, log, objects)
 	if err != nil {
 		return err
 	}
@@ -314,7 +317,7 @@ func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.S
 // THE ARGON2 PARAMETERS ARE DEC-08's UNTUNED 64 MiB / t=1 / p=4 (DEC-21). What
 // bounds the memory is not the parameters, it is the two guards around them:
 // AUTH_RATE_LIMIT_PER_MIN counts callers per address and the gate counts calls.
-func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.ServeMux), error) {
+func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.Store) (func(*http.ServeMux), error) {
 	gate, err := auth.NewGate(cfg.Argon2MaxConcurrent)
 	if err != nil {
 		return nil, fmt.Errorf("ARGON2_MAX_CONCURRENT: %w", err)
@@ -332,6 +335,18 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.Serv
 			Log:            log,
 			AuthLimit:      credential,
 			TravellerLimit: traveller,
+			// THE MEDIA GROUP (R3). Two ports and one number, and Mount panics
+			// on any of the three being absent — for the reason it panics on a
+			// nil limiter: an optional field left unset reads as working
+			// software right up until somebody uploads a photograph.
+			//
+			// `objects` IS THE STORE `run` ALREADY BUILT AND ALREADY PROVED.
+			// It is the only thing in the boot path that a wrong
+			// S3_SECRET_KEY fails, because presigning is offline arithmetic
+			// and a wrong secret signs just as happily as a right one.
+			Media:         postgres.MediaStore{DB: db},
+			Objects:       objects,
+			MediaMaxBytes: cfg.MediaMaxBytes,
 		})
 	}, nil
 }

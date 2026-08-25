@@ -24,9 +24,16 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	if len(routes) != 4 {
-		t.Errorf("the table holds %d routes; VS7's surface is four — two credential "+
-			"routes, one conditional read, one whole-state write", len(routes))
+	// SEVEN AT R3, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
+	// `len(Routes(...))` would make this line unfalsifiable — it would say
+	// "the table holds as many routes as the table holds". What it is for is
+	// that a route ARRIVING or LEAVING is a decision somebody made, and it
+	// should cost one line in a test rather than nothing at all. It was four
+	// at VS7; R3 adds begin, commit and mint.
+	if len(routes) != 7 {
+		t.Errorf("the table holds %d routes; R3's surface is seven — two credential "+
+			"routes, one conditional read, one whole-state write, and the three "+
+			"media routes", len(routes))
 	}
 
 	for _, route := range routes {
@@ -115,15 +122,128 @@ func TestEveryAuthenticatedRouteRefusesAMissingCredential(t *testing.T) {
 	}
 }
 
-// `Mutating` is declared by DEC-28 and read by nothing yet. This is what stops
-// it becoming decoration: a row whose flag disagrees with its verb is a row
-// somebody has stopped maintaining.
-func TestMutatingAgreesWithTheMethod(t *testing.T) {
+// `TestMutatingAgreesWithTheMethod` WAS HERE AND IS DELETED WITH ITS FIELD
+// (OE-10), and the deletion is recorded rather than silent because R3 was the
+// step told to re-examine it.
+//
+// It asserted that a field equals a function of another field, over a field
+// nothing read — so the only mutation it could catch was somebody mistyping a
+// boolean in a row nobody consults. The trigger the deletion named has now
+// FIRED: `POST /v1/media/mint` is the POST that writes nothing, so
+// `Mutating == (Method != GET)` genuinely stops holding at this step. It still
+// does not bring the field back, because a field is real when something reads
+// it and not when it would be accurate. routes.go carries the long form.
+//
+// WHAT REPLACES IT IS A LEG ABOUT A FIELD THAT IS READ. `Limit` decides which
+// ceiling Mount applies, so a wrong value changes behaviour — which is exactly
+// what `Mutating` could not do.
+func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 	for _, route := range Routes(newHarness(t, options{}).deps) {
-		safe := route.Method == http.MethodGet || route.Method == http.MethodHead
-		if route.Mutating == safe {
-			t.Errorf("%s %s is declared Mutating=%v", route.Method, route.Pattern, route.Mutating)
-		}
+		t.Run(route.Method+" "+route.Pattern, func(t *testing.T) {
+			// TWO SEPARATE BUDGETS, AND THE LEG SETS THE ONE THE ROW NAMES TO
+			// ONE AND THE OTHER TO PLENTY. That is what makes it about WHICH
+			// limiter rather than about limiting: a route wired to the wrong
+			// bucket meets a ceiling of a thousand and never 429s at all.
+			opt := options{ratePerMin: 1000, travellerPerMin: 1000}
+			switch route.Limit {
+			case LimitTraveller:
+				opt.travellerPerMin = 1
+			default:
+				opt.ratePerMin = 1
+			}
+			h := newHarness(t, opt)
+
+			bearerHeader := ""
+			if route.Auth {
+				// `bearer` spends two tokens from the CREDENTIAL bucket, which
+				// is why the credential ceiling is 1000 on this branch — a
+				// traveller-limited route must not be refused because
+				// signing in was.
+				bearerHeader = bearer(t, h)
+			}
+
+			spend := func() int {
+				path := strings.ReplaceAll(route.Pattern, "{id}", strings.Repeat("a", 64))
+				return h.do(t, route.Method, path, bodyFor(route), bearerHeader).status
+			}
+			if got := spend(); got == http.StatusTooManyRequests {
+				t.Fatalf("the FIRST request = 429, so this route is counting against "+
+					"a bucket something else had already emptied; its row says %s",
+					route.Limit)
+			}
+			if got := spend(); got != http.StatusTooManyRequests {
+				t.Errorf("the second request at a ceiling of 1 = %d, want 429 — the "+
+					"%s ceiling this row names is not the one being applied", got, route.Limit)
+			}
+		})
+	}
+}
+
+// bodyFor is a request body each route will get past its own decoder. The
+// legs above are about ceilings and headers, so what matters is that the
+// request REACHES the handler rather than what the handler answers.
+func bodyFor(route Route) string {
+	if strings.HasPrefix(route.Pattern, "/v1/media") {
+		digest := strings.Repeat("a", 64)
+		return `{"sha256":"` + digest + `","byteSize":10,"contentType":"image/png","ids":["` + digest + `"]}`
+	}
+	return aTrip
+}
+
+// DEC-51's HEADERS ARE ON EXACTLY THE ROWS THAT DECLARE THEM, AND THE
+// ASSERTION IS ON PRESENCE (PD-09).
+//
+// The security lens's finding about v7.0's only header-adjacent leg is the
+// reason that last clause is written down: it compared two answers to each
+// other, and would have passed with the headers absent from BOTH. So this
+// asserts the literal values on the rows that say NoStore, and asserts their
+// ABSENCE on the rows that do not — because a policy applied everywhere is a
+// policy that says nothing about anything.
+func TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem(t *testing.T) {
+	h := newHarness(t, options{})
+	token := bearer(t, h)
+
+	var declared, plain int
+	for _, route := range Routes(h.deps) {
+		t.Run(route.Method+" "+route.Pattern, func(t *testing.T) {
+			path := strings.ReplaceAll(route.Pattern, "{id}", strings.Repeat("a", 64))
+			bearerHeader := token
+			if !route.Auth {
+				bearerHeader = ""
+			}
+			got := h.do(t, route.Method, path, bodyFor(route), bearerHeader)
+
+			cache := got.header.Get("Cache-Control")
+			referrer := got.header.Get("Referrer-Policy")
+			if route.NoStore {
+				declared++
+				if cache != "no-store, private" {
+					t.Errorf("Cache-Control = %q, want %q", cache, "no-store, private")
+				}
+				if referrer != "no-referrer" {
+					t.Errorf("Referrer-Policy = %q, want %q", referrer, "no-referrer")
+				}
+				return
+			}
+			plain++
+			if cache != "" || referrer != "" {
+				t.Errorf("Cache-Control = %q and Referrer-Policy = %q on a row that "+
+					"declares no capability — a policy applied everywhere is a policy "+
+					"that says nothing about anything", cache, referrer)
+			}
+		})
+	}
+
+	// THE VACUOUS DIRECTIONS, BOTH OF THEM. A table with no NoStore rows
+	// passes the loop above having asserted nothing about the headers, and a
+	// table where EVERY row declares them passes having asserted nothing about
+	// the discrimination.
+	if declared == 0 {
+		t.Error("no route in the table declares NoStore, so this leg checked nothing")
+	}
+	if plain == 0 {
+		t.Error("every route in the table declares NoStore, so the absence half " +
+			"checked nothing")
 	}
 }
 
@@ -141,14 +261,32 @@ func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
 		{"no credential rate limiter", Deps{
 			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
 			TravellerLimit: full.TravellerLimit,
+			Media:          full.Media, Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
 		}},
 		{"no traveller rate limiter", Deps{
 			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
 			AuthLimit: full.AuthLimit,
+			Media:     full.Media, Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
 		}},
 		{"no logbook store", Deps{
 			Auth: full.Auth, Log: full.Log,
 			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
+			Media: full.Media, Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
+		}},
+		{"no media store", Deps{
+			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
+			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
+			Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
+		}},
+		{"no object store", Deps{
+			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
+			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
+			Media: full.Media, MediaMaxBytes: full.MediaMaxBytes,
+		}},
+		{"no MEDIA_MAX_BYTES", Deps{
+			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
+			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
+			Media: full.Media, Objects: full.Objects,
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

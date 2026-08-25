@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,4 +309,34 @@ func hexOfBase64(b64 string) string {
 		return ""
 	}
 	return hex.EncodeToString(raw)
+}
+
+// ExpiresIn reads `X-Amz-Expires` back off a presigned URL, as a duration.
+//
+// IT EXISTS SO THE BEGIN RESPONSE'S `expiresAt` HAS ONE SOURCE. A handler
+// computing it from a configured lifetime would be two variables holding one
+// fact — the mistake `Key.Object` and `Upload.SHA256` are deliberately allowed
+// to express so that a leg can redden it — and the failure here is silent: the
+// client is told a window that is not the window the SIGNATURE carries, and
+// the upload dies with SignatureDoesNotMatch some minutes later with nothing
+// on either side saying why.
+//
+// It is also what DEC-84's audience leg asserts against, in both
+// implementations, which is why Memory's fake URLs carry the parameter too.
+func ExpiresIn(presigned string) (time.Duration, error) {
+	u, err := url.Parse(presigned)
+	if err != nil {
+		return 0, fmt.Errorf("media: parsing the presigned URL: %w", err)
+	}
+	raw := u.Query().Get("X-Amz-Expires")
+	if raw == "" {
+		return 0, errors.New("media: the URL carries no X-Amz-Expires, so there is " +
+			"nothing to tell the client about how long it has")
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return 0, fmt.Errorf("media: X-Amz-Expires is %q, which is not a positive "+
+			"number of seconds", raw)
+	}
+	return time.Duration(seconds) * time.Second, nil
 }

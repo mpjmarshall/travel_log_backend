@@ -25,6 +25,7 @@ import (
 
 	"travellog/internal/auth"
 	"travellog/internal/httpx"
+	"travellog/internal/media"
 )
 
 // === the fixture ===
@@ -62,7 +63,14 @@ func (f *fakeStore) CreateTraveller(_ context.Context, email, hash string) (auth
 		return auth.Traveller{}, auth.ErrEmailTaken
 	}
 	f.next++
-	tr := auth.Traveller{ID: fmt.Sprintf("traveller-%d", f.next), Email: email}
+	// A UUID AND NOT `traveller-1`, AND IT IS NOT COSMETIC. `travellers.id` is
+	// a `uuid` column and internal/media refuses anything else outright —
+	// `media.Address` checks the shape because the traveller is a PATH SEGMENT
+	// in the bucket, so a value that could carry a `/`, a `.` or a `%` would
+	// let one traveller's key reach outside their own prefix. The old value
+	// made every media route answer 500 from inside the signer, which is how
+	// this was found.
+	tr := auth.Traveller{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", f.next), Email: email}
 	f.travellers[key] = stored{Traveller: tr, hash: hash}
 	return tr, nil
 }
@@ -130,6 +138,8 @@ type harness struct {
 	server  *httptest.Server
 	store   *fakeStore
 	logbook *fakeLogbook
+	media   *fakeMedia
+	objects *media.Memory
 	deps    Deps
 	logs    *bytes.Buffer
 	client  *http.Client
@@ -217,12 +227,30 @@ func newHarness(t *testing.T, opt options) *harness {
 	}
 
 	books := &fakeLogbook{}
+	// THE MEDIA TWIN IS THE REAL ONE (media.Memory), NOT A STUB THAT SAYS YES.
+	// It enforces the digest, the exact length, the content type, the
+	// write-once and a bucket that has to exist — because a twin that accepts
+	// what MinIO refuses turns a handler leg into evidence about nothing. The
+	// bucket is created here so the ordinary path works; the leg that cares
+	// about a bucket that does not exist makes its own.
+	objects := media.NewMemory()
+	if err := objects.EnsureBucket(context.Background()); err != nil {
+		t.Fatalf("EnsureBucket: %v", err)
+	}
+	rows := newFakeMedia()
 	deps := Deps{
 		Auth:           service,
 		Logbook:        books,
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(opt.ratePerMin, nil),
 		TravellerLimit: httpx.NewLimiter(opt.travellerPerMin, nil),
+		Media:          rows,
+		Objects:        objects,
+		MediaMaxBytes:  testMediaMaxBytes,
+		Now: func() time.Time {
+			at, _ := time.Parse(time.RFC3339, fixedNow)
+			return at
+		},
 	}
 	mux := http.NewServeMux()
 	Mount(mux, deps)
@@ -249,6 +277,7 @@ func newHarness(t *testing.T, opt options) *harness {
 	t.Cleanup(server.Close)
 	return &harness{
 		server: server, store: store, logbook: books, deps: deps,
+		media: rows, objects: objects,
 		logs: logs, client: server.Client(), addrs: addrs,
 	}
 }

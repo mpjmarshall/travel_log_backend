@@ -356,3 +356,19 @@ func ValidateMediaMint(m MediaMint) error {
 	}
 	return nil
 }
+
+// ValidateMediaID is the guard on an id arriving through ROUTE ARGUMENTS
+// rather than through a body.
+//
+// IT IS A SEPARATE FUNCTION FROM THE STRUCT VALIDATORS BECAUSE ITS INPUT IS A
+// DIFFERENT KIND OF UNTRUSTED. A body has been through DecodeJSON and a struct
+// validator; a path segment is whatever was in the URL — a stale route, a bad
+// push, a deep link — and it reaches the store with no validator between it and
+// a query unless something like this is on the handler's first line.
+func ValidateMediaID(id string) error {
+	if !assetPattern.MatchString(id) {
+		return InvalidFieldError{Field: "id",
+			Why: "a media object id is 64 lowercase hex characters"}
+	}
+	return nil
+}

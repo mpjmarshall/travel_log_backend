@@ -318,3 +318,45 @@ func (w *jsonByDefault) WriteHeader(status int) {
 }
 
 func (w *jsonByDefault) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// CapabilityHeaders is DEC-51's response policy for a body that carries a
+// bearer capability: `Cache-Control: no-store, private` and `Referrer-Policy:
+// no-referrer`.
+//
+// WHAT IT IS PROTECTING, AND WHY IT IS NOT HYGIENE. A presigned URL is a PURE
+// BEARER CAPABILITY — unlimited replay, unsigned request headers such as
+// `Range` accepted, and no way to revoke it before it expires. Two places it
+// leaks from and each header closes one:
+//
+//   - AN INTERMEDIARY CACHE. Measured on the live server: NO response set
+//     Cache-Control at all. That is survivable while every route carries an
+//     Authorization header, because RFC 9111 §3.5 forbids a shared cache from
+//     storing such a response — and R8's `GET /l/{token}` carries none, so a
+//     200 with an ETag is heuristically cacheable by anything in front of it,
+//     and a cached envelope keeps serving live capabilities after "Stop
+//     sharing" for as long as it survives. `private` is belt and braces for a
+//     browser's own store; `no-store` is the half that binds.
+//   - THE NEXT SITE'S LOGS. A share page fetches these URLs and then links
+//     somewhere; without `no-referrer` the capability travels in a `Referer`
+//     header to whatever origin the page reaches next, and sits in that
+//     server's access log.
+//
+// IT IS APPLIED FROM THE ROUTE TABLE AND NOT FROM A PATH PREFIX (PD-09). A
+// prefix guess in middleware is a rule the next route inherits by silence,
+// which is how `/v1/media/{id}/commit` — which answers a row and no capability
+// — would have got a policy nobody chose, and how R8's `/l/{token}` would have
+// missed one.
+//
+// IT SETS THE HEADERS BEFORE THE HANDLER RUNS, so they are on the 4xx and the
+// 5xx as well as on the 200. A refusal carries no capability, but a policy that
+// applies only on success is a policy whose absence is invisible until the one
+// response that needed it.
+func CapabilityHeaders() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store, private")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			next.ServeHTTP(w, r)
+		})
+	}
+}
