@@ -1,0 +1,61 @@
+# The MinIO the integration legs run against — a SECOND stack, not the shipped
+# one, and every difference from deploy/docker-compose.yml is deliberate.
+#
+# WHY A SEPARATE FILE RATHER THAN `up minio` ON THE SHIPPED ONE. The legs in
+# internal/media create objects, overwrite nothing (DEC-88 makes a content
+# address write-once) and expect a bucket they may have just created. Running
+# them against the stack that holds the log means a test suite writing into the
+# deployment's own bucket, and `make test-db` already established the shape of
+# the answer: its own project name, its own port, its own named volume, so it
+# can run BESIDE `make up` and can be destroyed without touching it.
+#
+# THE TAG IS PINNED FOR THE SAME REASON THE SHIPPED ONE IS, and the reason is
+# NOT reproducibility in the abstract. `:latest` here would mean the legs that
+# say "MinIO answers 400 XAmzContentChecksumMismatch" are assertions about
+# whatever was published this morning — and the whole value of running them
+# against a real server is that the server is a fixed, named thing somebody
+# else can re-run. This is the tag every measurement in CLAUDE.md's R2 section
+# was taken on.
+#
+# usage:  make test-s3     (prints the export line the legs read)
+#         TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/
+
+name: travellog-test-s3
+
+services:
+  minio:
+    # PINNED. See the header, and see the shipped compose file's postgres
+    # comment for what an unpinned tag does to a named volume.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${TEST_S3_ACCESS_KEY:-travellog}
+      MINIO_ROOT_PASSWORD: ${TEST_S3_SECRET_KEY:-travellogsecret}
+      # `mc` is in the image and `curl` is not, so the healthcheck below is an
+      # mc command and mc needs an alias. MC_HOST_<alias> is how mc takes one
+      # from the environment without a config file to write.
+      MC_HOST_local: http://${TEST_S3_ACCESS_KEY:-travellog}:${TEST_S3_SECRET_KEY:-travellogsecret}@127.0.0.1:9000
+    volumes:
+      - testdata:/data
+    ports:
+      # Loopback-bound, and on 9412 rather than 9000 so it cannot collide with
+      # the shipped stack's MinIO or with anything else on this machine. The
+      # console is deliberately not published: no leg reads it.
+      - "127.0.0.1:${TEST_S3_PORT:-9412}:9000"
+    healthcheck:
+      # `mc ready local` and not a GET of /minio/health/live, because there is
+      # no curl in this image and the shipped stack has the same problem —
+      # see deploy/docker-compose.yml, where the same probe is used and the
+      # difference between live and ready is written out.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+
+volumes:
+  # A named volume so `down` keeps the objects and `down -v` destroys them,
+  # which is the same distinction scripts/slice-arc.sh's two `down`s draw. The
+  # legs do not depend on it surviving; it is here so a `down` between runs
+  # does not silently become the thing that makes them pass.
+  testdata:
