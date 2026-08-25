@@ -643,3 +643,175 @@ attachment` is inside the signature, so it cannot be stripped. That is
 deliberate: it means a mislabelled object is downloaded rather than rendered on
 the storage origin. It does not affect an `Image.network`-style fetch, which
 reads the bytes rather than navigating to them.
+
+---
+
+# Added at R5 — the trip delete, the three share writes, the name, and the two things that can now sign you out
+
+Six routes are live that were not. Everything above still holds; sections 8
+(`Trip.shared`) and 4 (the status-branching rule) are the two you should re-read
+before wiring any of this, because both of them are now load-bearing rather
+than forward-looking.
+
+## R5.1 The six routes, and what each answers
+
+```
+DELETE /v1/trips/{id}          -> 200 + THE WHOLE ENVELOPE + ETag
+PUT    /v1/trips/{id}/share    -> 200 + a whole Trip + ETag
+POST   /v1/trips/{id}/share    -> 201 + a whole Trip + ETag
+DELETE /v1/trips/{id}/share    -> 200 + a whole Trip + ETag
+PATCH  /v1/me                  -> 200 + {"name": "…"} + ETag
+DELETE /v1/auth/session        -> 204, no body, no ETag
+```
+
+## R5.2 `DELETE /v1/trips/{id}` answers the WHOLE LOG, not a 204
+
+**Do not splice this one.** Every other write answers a bare entity you patch
+into your cached document; this one answers
+`{"version": 2, "logbook": {…}}` — the same envelope `GET /v1/logbook`
+gives — and **you replace your cache with it**.
+
+The reason is that a cascade cannot be spliced. Deleting a trip removes rows
+from five tables and clears a column on rows in a sixth:
+
+| D3's own line | what the server does |
+|---|---|
+| "N photos and their notes" | every `Photo` with that `tripId` goes |
+| "N recorded walks" | every `Walk` with that `tripId` goes |
+| "N pins in …" — **kept** | `places` keeps every entry, minus that trip's visits |
+| "The shared link stops working" | the link is on the trip, and the trip goes |
+| (not itemised) | the trip's `cityIds` go with the trip; the cities do not |
+| (not itemised) | **another trip's photograph that named a visit on this trip comes back with `visitId: null` and everything else unchanged** |
+
+**A place left with no visits at all survives**, and that is deliberate: it is a
+wishlist place, and "kept" is what the sheet promised. Measured against your own
+`client_sample_log.json` seeded into PostgreSQL, deleting `autumn-crossing`:
+photos 284 → 188, walks 2 → 1, visits 49 → 44, trip_cities 18 → 13,
+share_links 1 → 0, **places 17 → 17**, **cities 12 → 12**, and `gamcheon` comes
+back in the answer as `{"id":"gamcheon","cityId":"busan","name":"Gamcheon","visits":[]}`.
+
+**Send it again and it answers 200 again, with the SAME ETag.** A delete of a
+trip the server does not hold is a success — your `deleteTrip` already treats an
+unknown id that way — and it moves no version, so a retry does not throw your
+whole cache away. **Read section 4 again before you rely on that**: a `404` on
+this route means the SERVER DOES NOT HAVE IT, not that the trip is gone.
+
+**There is no confirmation field.** D3 makes the user type the trip's name; the
+API asks for a bearer token and nothing else. That is decided, not overlooked —
+the gate the sheet has is a gate on the human, and a body field would be a gate
+on the client, i.e. on the software that already drew the sheet. **Keep the
+sheet's gate.** It is the only one there is.
+
+## R5.3 The three share writes, and the one that carries a token
+
+**`PUT /v1/trips/{id}/share` writes only the flags you send.** Send one:
+
+```json
+{"shareCoordinates": true}
+```
+
+and `sharePhotos` and `shareNotes` are left exactly as they were. This matches
+`setShareOptions`, which takes three `bool?` and is called with one set. An
+empty body `{}` is legal and writes nothing.
+
+**`POST /v1/trips/{id}/share` takes the token YOU mint.**
+
+```json
+{"token": "mnpqrstuvwxy"}
+```
+
+- **The server never mints it.** Tokens are hashed at rest (section 8), so the
+  server can never hand you a plaintext on any later read. `newShareLinkId()`
+  is the only thing in the system that produces one, and **you hold the only
+  copy**.
+- **The answer is the ONE response in the whole API that carries
+  `shareLinkId`.** It is echoed, not recovered: it is the token you just sent.
+  **Store it before you do anything else with the response.**
+- **Twelve characters minimum**, `[a-z0-9]`, at most 64. Your generator makes
+  twelve of a 31-character alphabet, which is 59.5 bits. A shorter one is
+  `422 invalid_field` on `token` — a share token is a bearer capability and a
+  short one is guessable.
+- It **revokes whatever link was live** in the same transaction, which is what
+  `newShareLink`'s own doc says it does. There is never more than one live link
+  per trip; the database enforces that, not the handler.
+
+**`DELETE /v1/trips/{id}/share` stops sharing AND resets the three switches** to
+`true / true / false` — your own `Trip.defaultSharePhotos`,
+`defaultShareNotes`, `defaultShareCoordinates`. This is not tidiness: leaving
+`shareCoordinates` on after a link is killed means the **next** link hands out
+exact pins without anybody having turned that on. `stopSharing` already does
+this locally; the server does the same thing, so the two agree.
+
+**All three are SETTERS: an unknown trip is `404 not_found`,** including the
+one spelled `DELETE`. That is your own asymmetry — *"An unknown id is a failure
+here, where it is a success for a delete. A delete asks for something to be
+absent and an absent thing satisfies it; a set asks for a value the log then
+has to hold."* Stopping sharing on a trip that is not there cannot answer a
+Trip.
+
+## R5.4 `PATCH /v1/me` is `setTravellerName`, and an empty name is refused
+
+```json
+{"name": "Matt"}   ->  200 {"name": "Matt"}
+{"name": "   "}    ->  422 {"code":"invalid_field","field":"name"}
+{}                 ->  422 {"code":"invalid_field","field":"name"}
+```
+
+The name is **trimmed server-side** as well as by your sheet, and **an empty
+name is not a way to clear it** — exactly as `setTravellerName` decided: *"a log
+with an owner keeps one, and 'no traveller' is a state a log arrives in and
+never returns to"*. There is no way to clear a traveller's name over this API.
+
+**It moves the ETag**, because the name is the sixth key of the emitted
+document. Splice `{"name": …}` into your cached `traveller` slot.
+
+**`GET /v1/me` does not exist and is not coming.** The name arrives inside
+`GET /v1/logbook`. Asking for it twice is what section 4 of the private read
+exists to refuse.
+
+## R5.5 There is now a way to sign out — and a way to sign out everywhere
+
+```
+DELETE /v1/auth/session              -> 204   this token stops working
+DELETE /v1/auth/session?scope=all    -> 204   every token this traveller holds
+```
+
+**You have no control that calls either.** That is recorded here rather than
+being a reason not to build them: the route is what makes the control possible,
+and a recovery that waits for a screen is a recovery nobody has during the week
+they need it.
+
+**Why `scope=all` matters more than it sounds.** A session lasts thirty days
+and there is no refresh flow. If a token leaves the device, *"this token"* is
+precisely the one the thief will not use — so the only recovery is revoking
+them all. `?scope=all` **includes the token you called it with**: "sign out
+everywhere" that leaves this device signed in has not done what it says. Expect
+the very next request to be a 401 and go to the sign-in screen.
+
+**A scope you have not spelled exactly is `422 invalid_field` on `scope`, not a
+fallback.** `?scope=al` signing one device out while the user believes every
+device is out is the one failure this parameter can have.
+
+**Revoking does not move the ETag.** A session is not in the log, so nothing you
+have cached is stale afterwards.
+
+## R5.6 Registration is CLOSED after the first traveller
+
+`POST /v1/auth/register` answers **409 `conflict`** once any traveller exists —
+whatever address is sent. Two things follow for a sign-up screen:
+
+- **A 409 no longer means "that address is taken".** It means the instance is
+  in use. The two answers are byte-identical on purpose, so there is nothing to
+  branch on: the honest copy is *"this log already has an owner — sign in"*.
+- **A malformed address is still 422 naming the field**, on a closed instance
+  as on an open one. 409 says stop trying; 422 says fix the body.
+
+If the server was seeded with `make seed`, the account already exists and its
+credentials were printed by that command. **Registering is not the way in; it is
+the way in exactly once.**
+
+## R5.7 Nothing in this step changed the log's shape
+
+`logbookFormatVersion` is still 2, the emitted document still has the same six
+keys, and the ETag's emitter half is still 2. What moved is the SURFACE, not the
+format.

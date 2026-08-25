@@ -885,6 +885,131 @@ phase_arc() {
 	ok "the log outlived the stack"
 
 	########################################################################
+	# A24-A29: R5's SIX ROUTES, IN THE RUNNING CONTAINER.
+	#
+	# WHY THEY ARE HERE AND NOT ONLY IN `go test`. VS6 and VS7 both shipped
+	# routes that were green in `go test` and answered 404 in the container,
+	# because the image was never rebuilt — and R5 ships the first DESTRUCTIVE
+	# route in the plan. A cascade that is not mounted is a delete that reports
+	# success and removes nothing, which is exactly the branch DEC-103 exists
+	# to stop the client taking.
+	#
+	# WHAT THE ARC CANNOT SAY, STATED RATHER THAN LEFT AS A GAP. D3's own
+	# promise — "N pins in … KEPT", including the pin whose only visits were on
+	# the deleted trip — needs a PLACE, and nothing in this build can create
+	# one until R6's `PUT /v1/places/{id}`. So the cascade's row counts are
+	# proved at fixture scale in `go test ./internal/seed/` against the
+	# client's own log, and what the arc proves is narrower and is the half
+	# `go test` cannot: the route is mounted, it answers the WHOLE ENVELOPE,
+	# and the trip is gone from it. R6 is where this step grows its pin.
+	########################################################################
+	local second_trip="arc-share" share_token="arcsharetoken"
+
+	step "A24: PUT /v1/trips/$second_trip — a second trip, so A15's is left alone"
+	code="$(req -X PUT "$base/v1/trips/$second_trip" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{name:"Arc share trip"}')")"
+	assert_eq 200 "$code" "PUT /v1/trips/$second_trip"
+	assert_eq false "$(jqbody .shared)" "shared — nothing has minted a link yet (DEC-91)"
+
+	# THE PRIVACY SEQUENCE, END TO END, IN THE CONTAINER: coordinates ON, stop,
+	# new link — and the new link must not carry coordinates. Removing the
+	# reset is a privacy leak rather than a tidiness issue: the next link hands
+	# out exact pins without anybody having turned that on.
+	step "A25: PUT /v1/trips/$second_trip/share — one switch, and only one"
+	code="$(req -X PUT "$base/v1/trips/$second_trip/share" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{shareCoordinates:true}')")"
+	assert_eq 200 "$code" "PUT share"
+	assert_eq true "$(jqbody .shareCoordinates)" "shareCoordinates"
+	# DEC-89 IN THE CONTAINER: the body named one flag, and the other two are
+	# where migration 0002 left them.
+	assert_eq true "$(jqbody .sharePhotos)" "sharePhotos — not named by the body, not touched"
+	assert_eq true "$(jqbody .shareNotes)" "shareNotes — not named by the body, not touched"
+
+	step "A26: DELETE /v1/trips/$second_trip/share — the switches go back to the client's defaults"
+	code="$(req -X DELETE "$base/v1/trips/$second_trip/share" -H "$auth_header")"
+	assert_eq 200 "$code" "DELETE share"
+	assert_eq "true|true|false" \
+		"$(in_psql "select share_photos||'|'||share_notes||'|'||share_coordinates from trips where id='$second_trip'" | tr -d '[:space:]')" \
+		"the three flags, read out of the ROW rather than out of the answer"
+
+	step "A27: POST /v1/trips/$second_trip/share — the new link is disarmed, and the token is a hash on disk"
+	code="$(req -X POST "$base/v1/trips/$second_trip/share" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$share_token" '{token:$t}')")"
+	assert_eq 201 "$code" "POST share"
+	assert_eq false "$(jqbody .shareCoordinates)" \
+		"shareCoordinates on a NEW link after stopping — a killed link must not leave it armed"
+	assert_eq "$share_token" "$(jqbody -r .shareLinkId)" "shareLinkId — the token the client supplied"
+	assert_eq true "$(jqbody .shared)" "shared (DEC-91)"
+	# DEC-85, AGAINST THE ROW RATHER THAN AGAINST THE ANSWER. The whole table is
+	# rendered as text, so a `token` column somebody adds back beside the hash
+	# is caught by the same assertion.
+	assert_eq 0 "$(in_psql "select count(*) from share_links where share_links::text like '%$share_token%'" | tr -d '[:space:]')" \
+		"rows of share_links holding the plaintext token"
+	assert_eq 1 "$(in_psql "select count(*) from information_schema.columns where table_name='share_links' and column_name='token_hash'" | tr -d '[:space:]')" \
+		"share_links.token_hash exists"
+	assert_eq 0 "$(in_psql "select count(*) from information_schema.columns where table_name='share_links' and column_name='token'" | tr -d '[:space:]')" \
+		"share_links.token — GONE, which is the whole of DEC-85's security claim"
+
+	step "A28: PATCH /v1/me — the name lands, and an empty one is refused without clearing it"
+	code="$(req -X PATCH "$base/v1/me" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{name:"Matt"}')")"
+	assert_eq 200 "$code" "PATCH /v1/me"
+	assert_eq Matt "$(jqbody -r .name)" "the name"
+	code="$(req -X PATCH "$base/v1/me" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{name:"   "}')")"
+	assert_eq 422 "$code" "PATCH /v1/me with an empty name"
+	assert_eq name "$(jqbody -r .field)" "  the field it names"
+	assert_eq Matt "$(in_psql "select name from travellers" | tr -d '[:space:]')" \
+		"the stored name after a refused write — an empty name is not a way to clear it"
+
+	step "A29: DELETE /v1/trips/$second_trip — the WHOLE logbook comes back"
+	code="$(req -X DELETE "$base/v1/trips/$second_trip" -H "$auth_header")"
+	assert_eq 200 "$code" "DELETE /v1/trips/$second_trip"
+	# THE ENVELOPE AND NOT A BARE TRIP, AND NOT A 204: the cache cannot splice
+	# a cascade.
+	assert_eq 2 "$(jqbody .version)" "the document's format version — this is an ENVELOPE"
+	assert_eq 1 "$(jqbody '.logbook.trips | length')" "trips left"
+	assert_eq "$ARC_TRIP" "$(jqbody -r '.logbook.trips[0].id')" "  and it is the other one"
+	assert_eq "[]" "$(jqbody -c '.logbook.cities')" "cities — [] and not null, on the write path too"
+	assert_eq 0 "$(in_psql "select count(*) from share_links where trip_id='$second_trip'" | tr -d '[:space:]')" \
+		"share_links rows for the deleted trip — the link dies because the link is on the trip"
+	# THE REPEAT IS A SUCCESS, which is what stops a retried delete taking the
+	# client's failure branch (DEC-103) — and it moves no ETag, which is what
+	# stops it throwing away the phone's whole cached document.
+	local after_delete
+	after_delete="$(header ETag)"
+	code="$(req -X DELETE "$base/v1/trips/$second_trip" -H "$auth_header")"
+	assert_eq 200 "$code" "the SECOND DELETE of the same trip"
+	assert_eq "$after_delete" "$(header ETag)" "  its ETag — nothing changed, so nothing moved"
+
+	step "A30: DELETE /v1/auth/session — the token stops working, and a typo'd scope is refused"
+	# THE TYPO FIRST, because it must change nothing: `?scope=al` signing one
+	# device out while the user believes every device is out is the one failure
+	# mode this parameter has.
+	code="$(req -X DELETE "$base/v1/auth/session?scope=al" -H "$auth_header")"
+	assert_eq 422 "$code" "DELETE /v1/auth/session?scope=al"
+	assert_eq scope "$(jqbody -r .field)" "  the field it names"
+	code="$(req -H "$auth_header" "$base/v1/logbook")"
+	assert_eq 200 "$code" "GET /v1/logbook after the refused revocation"
+
+	code="$(req -X DELETE "$base/v1/auth/session" -H "$auth_header")"
+	assert_eq 204 "$code" "DELETE /v1/auth/session"
+	assert_eq 0 "$(body_bytes)" "bytes in the 204's body"
+	code="$(req -H "$auth_header" "$base/v1/logbook")"
+	assert_eq 401 "$code" "GET /v1/logbook with the revoked token"
+	assert_eq unauthenticated "$(jqbody .code)" "  its code"
+
+	# AND THE ARC GOES ON, so a fresh token is taken. A23 below needs none, but
+	# leaving the run holding a dead credential is how a step added later fails
+	# for a reason that has nothing to do with it.
+	code="$(req -X POST "$base/v1/auth/session" -H "$JSON_CT" \
+		-d "$(body_json --arg e "$ARC_EMAIL" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+	assert_eq 201 "$code" "POST /v1/auth/session, after revoking the last one"
+	token="$(jqbody -r .token)"
+	auth_header="Authorization: Bearer $token"
+	ok "signing in again works — revoking a session is not revoking an account"
+
+	########################################################################
 	# A23: `make seed` REFUSES A DATABASE THAT HAS A TRAVELLER (DEC-97).
 	#
 	# THE ONLY PLACE THE COMMAND ITSELF IS EXERCISED. internal/seed's legs are

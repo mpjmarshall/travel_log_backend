@@ -850,6 +850,201 @@ server — **9 bytes fewer than R1**, and the nine are accounted for exactly:
 
 ---
 
+## R5 — D3's cascade, the share writes, and two mutations that proved nothing
+
+Run at `9c6b83d` and at this working tree, against postgres:17.11 on
+127.0.0.1:5474 and 5475 under `travellog-r5` and `travellog-r5-seed`. The live
+stack on 8080/5434 was not written to.
+
+### Every mutation run in this step, with the leg that had to stay green
+
+| mutation | reddens | stays green |
+|---|---|---|
+| backfill 0004 from `trip_id` instead of `token` | the backfill leg, on the digest | every other 0004 leg |
+| keep the `token` column beside `token_hash` | `TestThePlaintextShareTokenColumnIsGone`, naming both columns | the catalog legs |
+| base64-decode inside `HashShareToken` | the NEGATIVE half of the hashing leg | its positive half |
+| touch `last_used_at` on every request | the granularity leg's FIRST half | its second |
+| never touch it | the granularity leg's SECOND half | its first |
+| `TouchSession` back inside `WithTravellerLock` | the rule leg AND the behavioural one | the version legs |
+| the registration refusal moved after the hash | the Argon2-count leg **alone** | the closure legs |
+| the registration refusal deleted | the closure legs in **two** packages | everything else |
+| the CRUD reflex, children before the parent | 3 legs: pins 17→12, gamcheon by name, filing 64→16 | the dangling check, **both ways** |
+| the share write becomes whole-state | 2 legs: the one-switch leg and the empty-body leg | the reset legs |
+| the share existence check always passes | the unknown-trip leg, on `NewShareLink`'s FK violation | the handler's 404 legs |
+| **`SET col = DEFAULT` instead of the three literals** | **nothing** | **everything** |
+| **the revoke deleted from `NewShareLink`** | **nothing, before a leg was added for it** | **everything** |
+
+### THE TWO THAT PROVED NOTHING, AND WHAT WAS DONE ABOUT EACH
+
+**1. The plan's own share-reset mutation is green.** R5's test strategy names
+`SET col = DEFAULT` and predicts it reddens on `sharePhotos` and `shareNotes`.
+Run:
+
+```
+$ go test ./internal/postgres/ ./internal/httpapi/ -run 'StoppingSharing|StopThen'
+ok  	travellog/internal/postgres	0.844s
+ok  	travellog/internal/httpapi	0.385s
+```
+
+`UPDATE … SET share_photos = DEFAULT` is legal SQL, it reaches the column
+default, and after 0002 that default is `true` — the correct answer. DB-MAJ-4
+predicted exactly this and its replacement is what reddens:
+
+```
+$ # the reset dropped entirely; only share_links is touched
+--- FAIL: TestStoppingSharingResetsTheThreeFlagsToTheClientsDefaults
+    the flags read [false false true] after the stop, want [true true false].
+```
+
+**2. The CRUD reflex is green in one of its two orderings.** Placed AFTER the
+trip delete the subquery matches nothing, because the visits have already
+cascaded:
+
+```
+$ go test ./internal/seed/ -run 'TestD3|AfterTheCascade'
+ok  	travellog/internal/seed	1.390s
+```
+
+Placed where a CRUD implementation writes it — children before the parent —
+it reddens three:
+
+```
+--- FAIL: TestD3KeepsEveryPinAndTakesOnlyTheTripsOwnVisits
+    places 17 -> 12, want 17 -> 17.
+    visits 49 -> 3, want 49 -> 44
+--- FAIL: TestD3KeepsThePinWhoseOnlyVisitsWereOnTheDeletedTrip
+    gamcheon is gone.
+--- FAIL: TestAfterTheCascadeNoPhotographNamesAVisitThatIsGone
+    16 surviving photographs still name a place, want 64.
+```
+
+**The dangling-reference query answers 0 under both orderings**, which is the
+whole reason the filing count sits beside it.
+
+**3. The mint's own revoke was guarded by nothing** until a leg was added for
+it. Deleting it left every leg in `share_store_test.go` green, because
+stop-then-new revokes first. With
+`TestNewLinkOnATripThatIsAlreadySharedKillsTheOldOne` in place:
+
+```
+--- FAIL: TestNewLinkOnATripThatIsAlreadySharedKillsTheOldOne
+    NewShareLink over a live link: postgres: minting a link for kyoto-in-may:
+    ERROR: duplicate key value violates unique constraint "share_links_one_live"
+```
+
+### AND THE PLAN'S NAMED FAILING TEST CANNOT SEE ITS OWN MUTATION
+
+`TestStoppingSharingDisarmsTheSwitchesForTheNextLink` is a handler leg over a
+fake store; the mutation is in the store. With the reset deleted:
+`internal/httpapi` is **ok**, `internal/postgres` is **red**. Both legs are
+kept and the second is the guard.
+
+### D3's cascade, measured row by row against the sheet
+
+Through `LogbookStore.DeleteTrip` on the client's own seeded log, counted
+before and after — and again end to end through the running container at
+127.0.0.1:8096:
+
+| D3's line | before | after |
+|---|---|---|
+| "N photos and their notes" — deleted | photos 284 | **188** |
+| "N recorded walks" — deleted | walks 2 | **1** |
+| "N pins in Busan, Kyoto and Seoul" — **kept** | places 17 | **17** |
+| the trip's own visits | visits 49 | **44** |
+| the itinerary | trip_cities 18 | **13** |
+| "The shared link stops working" | share_links 1 | **0** |
+| the trip | trips 7 | **6** |
+| the cities — never mentioned, never touched | cities 12 | **12** |
+
+```
+$ curl -X DELETE …/v1/trips/autumn-crossing | jq '.logbook.places[]|select(.id=="gamcheon")'
+{"id":"gamcheon","cityId":"busan","name":"Gamcheon","visits":[]}
+```
+
+`gamcheon` is the fixture's ONE place whose every visit was on that trip.
+
+### The 304's round trips, counted rather than timed
+
+`pg_stat_statements` is not preloaded in this compose stack, so the instrument
+is `log_statement='all'` between two marker queries:
+
+```
+SELECT s.id, s.traveller_id, s.token_hash, …
+begin isolation level repeatable read read only
+SELECT logbook_version FROM travellers WHERE id = $1::uuid
+rollback
+-> 4 statements, 0 pg_advisory_xact_lock
+```
+
+With `last_used_at` pushed ten minutes back the same request costs **5** — one
+extra `UPDATE sessions SET last_used_at`, still no transaction and still no
+lock. The performance lens measured **9** and named the five that go; 9 − 5 = 4.
+
+**A `grep 'statement:'` counts 2 of those 4.** pgx uses the extended protocol,
+so the parameterised statements log as `execute <unnamed>:`. An instrument that
+under-reports by half would have made this look better than it is.
+
+### The acceptance check, run verbatim, with exit codes
+
+```
+$ psql … -c "SELECT count(*) FROM photos p LEFT JOIN visits v
+             ON (p.traveller_id,p.visit_id)=(v.traveller_id,v.id)
+             WHERE p.visit_id IS NOT NULL AND v.id IS NULL"
+0
+exit=0
+
+$ psql … -c "\d share_links" | grep -c 'token_hash'
+4
+exit=0
+```
+
+**That one cannot pass as written.** `\d` prints the column, the primary key,
+the unique index and the CHECK, and every one mentions `token_hash` — correctly.
+The narrowed form:
+
+```
+$ psql … -tAc "SELECT count(*) FROM information_schema.columns
+               WHERE table_name='share_links' AND column_name='token_hash'"
+1
+exit=0
+
+$ psql … -c "SELECT count(*) FROM share_links WHERE token_hash IS NULL"
+0
+exit=0
+
+$ curl -o /dev/null -w '%{http_code}' -X POST -d '{"email":"b@c.d","passphrase":"…"}' \
+    http://127.0.0.1:8096/v1/auth/register
+409
+exit=0
+$ # and the SAME address, for comparison
+409   {"code":"conflict"}   — byte-identical to the stranger's
+```
+
+### The arc
+
+`make slice` green from cold under `travellog-r5`, every phase, exit 0. The
+seven new steps:
+
+```
+--- A5b: POST /v1/auth/register, a DIFFERENT address — closed, and indistinguishable
+     ok  the stranger's refusal, byte for byte against the same-address refusal
+--- A24: PUT /v1/trips/arc-share            ok  shared = false (DEC-91)
+--- A25: PUT …/share, one switch            ok  the other two, not touched
+--- A26: DELETE …/share                     ok  true|true|false, read out of the ROW
+--- A27: POST …/share                       ok  shareCoordinates = false on the NEW link
+                                            ok  rows of share_links holding the plaintext = 0
+                                            ok  share_links.token — GONE = 0
+--- A28: PATCH /v1/me                       ok  the stored name after a refused write = Matt
+--- A29: DELETE /v1/trips/arc-share         ok  the SECOND DELETE = 200, same ETag
+--- A30: DELETE /v1/auth/session            ok  the revoked token = 401
+```
+
+**What the arc cannot say, and it is stated rather than left as a gap.** D3's
+"pins are KEPT" row needs a PLACE, and nothing in this build creates one until
+R6's `PUT /v1/places/{id}`. The counts are proved at fixture scale in `go test
+./internal/seed/`; what the arc proves is that the route is mounted and answers
+the whole envelope. R6 is where this step grows its pin.
+
 ## What is still guarded by nothing
 
 Carried forward so the list does not shorten by silence, with what VS8 moved
@@ -941,16 +1136,17 @@ TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
 was three commits stale before anybody noticed:
 
 ```bash
-TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 730 at cc6b1ca
-                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 566, no database
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 814 at R5
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 618, no database
 TEST_S3_ENDPOINT=...   go test -tags integration ./internal/media/ -count=1 -v \
                          | grep -c -- '--- PASS'                           # 39 = 27 unit + 12 integration
 ```
 
-The **164-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
-the DB tier **skips and says so** without it. It was 133 at `90f6a68` and R3
-measured 154; R4's **eleven** seed legs are all in the gap, because every one of
-them loads ten tables into a real database.
+The **196-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
+the DB tier **skips and says so** without it. It was 133 at `90f6a68`, R3
+measured 154, R4 measured 164, and R5 adds 32 more — the D3 cascade legs, the
+share store and the two revocations, every one of which needs a real database
+because a partial unique index and a column default are not things a twin has.
 
 `make slice` **destroys the named volume** — `docker compose down -v` is its
 first step, because a 201 against a database that already held the row proves
