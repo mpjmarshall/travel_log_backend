@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -82,8 +83,14 @@ func seeded(t *testing.T) *sql.DB {
 		VALUES ($1,'p-may','kyoto-in-may','kyoto','fushimi-inari','v-fushimi-may','2027-05-03T07:06:00Z',$2)`, tid, assetA)
 	mustExec(t, db, `INSERT INTO photos (traveller_id, id, trip_id, city_id, place_id, visit_id, taken_at, asset)
 		VALUES ($1,'p-autumn','autumn-crossing','kyoto','fushimi-inari','v-fushimi-may','2027-09-20T07:06:00Z',$2)`, tid, assetB)
+	// THE TRACK IS NOT `[]` SINCE 0003. `walks_points_present_ck` refuses an
+	// empty array, which is DEC-89's pointer contract making `points: []`
+	// expressible and PD-21 closing it — a GPS track is a recording of a day
+	// that has passed. Two points rather than one, so a leg that ever asks
+	// about a polyline has one to draw.
 	mustExec(t, db, `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
-		VALUES ($1,'w-may','kyoto-in-may','kyoto','2027-05-03',3.2,'[]'::jsonb)`, tid)
+		VALUES ($1,'w-may','kyoto-in-may','kyoto','2027-05-03',3.2,
+		        '[{"lat":34.96,"lng":135.77},{"lat":34.97,"lng":135.78}]'::jsonb)`, tid)
 	mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'kyoto-in-may','tok-may')`, tid)
 	_ = ctx
 	return db
@@ -690,12 +697,50 @@ func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 			`INSERT INTO cities (traveller_id,id,name,country_code,country_name,centre_lat,centre_lng) VALUES ($1,'x','X','JP','Japan',1,-4000)`, nil, false},
 		{"a negative byte size", "media_objects_byte_size_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,-5,'image/jpeg')`, []any{noSuch}, false},
-		{"an empty content type", "media_objects_content_type_present_ck",
+		// THE CONSTRAINT IS RENAMED AT 0003 AND THE ROW BELOW IT IS NEW
+		// (DEC-51, PD-10, DEC-104). `_present_ck` stopped '' and nothing else,
+		// and 0001's own comment called it the weakest check in the file and
+		// said `text/html; <script>` was accepted. The name changes with the
+		// claim, and the catalog leg that asserted the old one is this line.
+		{"an empty content type", "media_objects_content_type_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,5,'')`, []any{noSuch}, false},
+		// THE PAYLOAD ITSELF, which is what the allowlist is FOR: an object
+		// stored as text/html is served AS HTML from the bucket origin, at a
+		// URL the public share envelope embeds.
+		{"the XSS payload 0001's own comment said was accepted", "media_objects_content_type_ck",
+			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,5,'text/html; <script>')`, []any{noSuch}, false},
+		// AND heic, WHICH IS OUT (DEC-104). It is a plausible image type and
+		// nothing in this system can produce one — the client's shutter is
+		// inert by decision — so an allowlist entry for it would be a claim
+		// the schema makes that no leg can check.
+		{"image/heic, which DEC-104 took out", "media_objects_content_type_ck",
+			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,5,'image/heic')`, []any{noSuch}, false},
+		// A ROW COMMITTED BEFORE IT WAS CREATED. The sweep's grace window keys
+		// off exactly these two timestamps.
+		{"an object committed before it was created", "media_objects_uploaded_after_created_ck",
+			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type,created_at,uploaded_at)
+			 VALUES ($1,$2,5,'image/png','2027-01-02T00:00:00Z','2027-01-01T00:00:00Z')`, []any{noSuch}, false},
+		{"an empty caption", "photos_caption_present_ck",
+			`INSERT INTO photos (traveller_id,id,trip_id,city_id,taken_at,asset,caption) VALUES ($1,'ph','kyoto-in-may','kyoto','2027-05-03T00:00:00Z',$2,'')`, []any{assetA}, false},
+		{"an empty visit note", "visits_note_present_ck",
+			`INSERT INTO visits (traveller_id,id,place_id,trip_id,ordinal,at,note) VALUES ($1,'v-empty','fushimi-inari','kyoto-in-may',9,'2027-05-04T07:05:00Z','')`, nil, false},
+		{"an empty trip summary", "trips_summary_present_ck",
+			`INSERT INTO trips (traveller_id,id,name,summary) VALUES ($1,'blank','Blank','')`, nil, false},
+		{"an empty plan on a place", "places_plan_present_ck",
+			`INSERT INTO places (traveller_id,id,city_id,name,lat,lng,plan) VALUES ($1,'blank','kyoto','Blank',35.0,135.0,'')`, nil, false},
+		// THE LOWER BOUND `walks_points_array_ck` COULD NOT EXPRESS (PD-21).
+		// An empty array IS an array, so the row below passed both 0001
+		// constraints and destroyed a recording of a day that has passed.
+		{"a walk with an empty track", "walks_points_present_ck",
+			`INSERT INTO walks (traveller_id,id,trip_id,city_id,recorded_on,distance_km,points) VALUES ($1,'w','kyoto-in-may','kyoto','2027-05-03',1,'[]'::jsonb)`, nil, false},
 		{"an object id that is not hex sha256", "media_objects_id_sha256_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,'not-a-digest',5,'image/jpeg')`, nil, false},
+		// THE TRACK IS NON-EMPTY HERE ON PURPOSE. With `'[]'::jsonb` this row
+		// now violates TWO constraints, and PostgreSQL does not promise which
+		// of two failing CHECKs it names — so the leg would pass or fail on
+		// something other than the distance it is about.
 		{"a negative walk distance", "walks_distance_km_ck",
-			`INSERT INTO walks (traveller_id,id,trip_id,city_id,recorded_on,distance_km,points) VALUES ($1,'w','kyoto-in-may','kyoto','2027-05-03',-1,'[]'::jsonb)`, nil, false},
+			`INSERT INTO walks (traveller_id,id,trip_id,city_id,recorded_on,distance_km,points) VALUES ($1,'w','kyoto-in-may','kyoto','2027-05-03',-1,'[{"lat":1,"lng":2}]'::jsonb)`, nil, false},
 		{"a track that is not a list", "walks_points_array_ck",
 			`INSERT INTO walks (traveller_id,id,trip_id,city_id,recorded_on,distance_km,points) VALUES ($1,'w','kyoto-in-may','kyoto','2027-05-03',1,'"not an array"'::jsonb)`, nil, false},
 		{"a photograph with lat and no lng", "photos_coordinates_paired_ck",
@@ -1139,8 +1184,17 @@ func TestMigration0002BackfillsTheTripsThatWereAlreadyThere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applying 0002: %v", err)
 	}
-	if len(applied) != 1 || applied[0] != "0002" {
-		t.Fatalf("the second run applied %v, want [0002]", applied)
+	// THE EXPECTATION IS DERIVED, NOT LISTED. This line read `want [0002]` and
+	// went red the moment 0003 landed — correctly, but for the wrong reason:
+	// the claim is that the second run applies EVERYTHING AFTER 0001, in
+	// order, and a literal turns it into "there are exactly two migrations".
+	// That is the same staleness R2 found three times in the arc.
+	want := everythingAfter(t, "0001")
+	if strings.Join(applied, ",") != strings.Join(want, ",") {
+		t.Fatalf("the second run applied %v, want %v", applied, want)
+	}
+	if applied[0] != "0002" {
+		t.Fatalf("the second run began with %s, want 0002", applied[0])
 	}
 
 	if got := sharingOf(t, db, id, "before"); got != [3]bool{true, true, false} {
@@ -1209,6 +1263,27 @@ func sharingOf(t *testing.T, db *sql.DB, travellerID, tripID string) [3]bool {
 // stand at an intermediate schema. It reads the REAL files rather than
 // restating them: a hand-written copy of 0001 would drift, and this leg's
 // whole point is what the real 0001 leaves behind.
+// everythingAfter is every migration version strictly after `version`, in the
+// order the runner applies them.
+func everythingAfter(t *testing.T, version string) []string {
+	t.Helper()
+	names, err := fs.Glob(migrations.FS, "*.up.sql")
+	if err != nil {
+		t.Fatalf("globbing the migrations: %v", err)
+	}
+	sort.Strings(names)
+	var out []string
+	for _, name := range names {
+		if v := strings.SplitN(name, "_", 2)[0]; v > version {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no migration after %s — this leg needs one to be about anything", version)
+	}
+	return out
+}
+
 func onlyMigration(t *testing.T, version string) fs.FS {
 	t.Helper()
 	out := fstest.MapFS{}
@@ -1222,6 +1297,137 @@ func onlyMigration(t *testing.T, version string) fs.FS {
 			t.Fatalf("reading %s: %v", matches[0], err)
 		}
 		out[matches[0]] = &fstest.MapFile{Data: body}
+	}
+	return out
+}
+
+// ------------------------------------------------------- 0003: THE CATALOG COMMENTS
+
+// DEC-83's rule lives in Go and the SCHEMA SAYS SO, in the catalog, where a
+// DBA's `\d+` will show it (PD-13).
+//
+// THE COMMENT IS THE DELIVERABLE AND THAT IS WHY IT HAS A LEG. It is the only
+// artefact in this repository whose whole job is to stop the next reader
+// spending an afternoon re-discovering that the obvious fix does not work: the
+// composite FK changes what a visit deletion does to place_id, and the cheap
+// `CHECK ((place_id IS NULL) = (visit_id IS NULL))` — the exact shape of
+// photos_coordinates_paired_ck, three columns away in the same table — ABORTS
+// D2's keep branch outright. Both facts were executed. A comment nobody
+// asserts is a comment a later migration drops.
+//
+// IT ASSERTS THE SUBSTANCE AND NOT ONLY THE PRESENCE. A leg checking
+// `IS NOT NULL` passes against `COMMENT ON COLUMN photos.place_id IS 'x'`,
+// which is the vacuous shape this project keeps finding.
+func TestTheTwoGoOnlyIntegrityColumnsCarryTheirRulingInTheCatalog(t *testing.T) {
+	db := migrated(t)
+
+	for _, c := range []struct {
+		column string
+		must   []string
+	}{
+		{"place_id", []string{"DEC-83", "composite FK", "D2's keep branch", "SECOND integrity rule"}},
+		{"visit_id", []string{"DEC-83", "photos.place_id"}},
+	} {
+		t.Run(c.column, func(t *testing.T) {
+			var comment sql.NullString
+			err := db.QueryRowContext(context.Background(),
+				`SELECT col_description(a.attrelid, a.attnum)
+				   FROM pg_attribute a
+				  WHERE a.attrelid = (current_schema() || '.photos')::regclass
+				    AND a.attname = $1`, c.column).Scan(&comment)
+			if err != nil {
+				t.Fatalf("reading the catalog comment on photos.%s: %v", c.column, err)
+			}
+			if !comment.Valid || strings.TrimSpace(comment.String) == "" {
+				t.Fatalf("photos.%s carries no catalog comment — DEC-83's rule is in Go "+
+					"and nothing in the schema says so, which is exactly how the missing "+
+					"FK indexes got there", c.column)
+			}
+			for _, want := range c.must {
+				if !strings.Contains(comment.String, want) {
+					t.Errorf("the comment on photos.%s does not mention %q: %s",
+						c.column, want, comment.String)
+				}
+			}
+		})
+	}
+}
+
+// THE ALLOWLIST IS THE SAME SET IN BOTH PLACES, AND THE LEG READS BOTH RATHER
+// THAN RESTATING EITHER (PD-10, DEC-58's precedent).
+//
+// Enforced twice by decision: in Go for the 422 that names the field, and in
+// the schema as the guarantee, because a Go check can be bypassed by the next
+// route somebody adds and nothing notices. Two enforcement points is two
+// places for the set to be written, so this walks the CHECK's own predicate
+// out of pg_constraint and asks internal/logbook about each value it finds.
+//
+// MUTATION: add 'image/heic' to either side alone and this reddens.
+func TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet(t *testing.T) {
+	db := migrated(t)
+
+	var predicate string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		  WHERE conname = 'media_objects_content_type_ck'
+		    AND connamespace = current_schema()::regnamespace`).Scan(&predicate); err != nil {
+		t.Fatalf("reading media_objects_content_type_ck: %v", err)
+	}
+
+	inSchema := quotedLiterals(predicate)
+	if len(inSchema) == 0 {
+		t.Fatalf("no literals in %q — the constraint is not an enumerated list, "+
+			"so this leg cannot see what it permits", predicate)
+	}
+
+	for _, mediaType := range inSchema {
+		if !logbook.ContentTypeAllowed(mediaType) {
+			t.Errorf("the schema permits %q and internal/logbook refuses it — "+
+				"a 422 the client never sees, and a row the schema accepts", mediaType)
+		}
+	}
+	for _, mediaType := range logbook.AllowedContentTypes() {
+		if !slices.Contains(inSchema, mediaType) {
+			t.Errorf("internal/logbook permits %q and the schema refuses it — "+
+				"a 422 that passes and an INSERT that raises, which reaches the "+
+				"client as a 500 with no field on it", mediaType)
+		}
+	}
+
+	// AND THE ROUND TRIP, because the two lists agreeing proves nothing about
+	// what the database does with them.
+	for _, mediaType := range logbook.AllowedContentTypes() {
+		id := strings.Repeat(fmt.Sprintf("%x", len(mediaType)%16), 64)
+		if _, err := db.ExecContext(context.Background(),
+			`INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,$2,'x')
+			 ON CONFLICT DO NOTHING`, tid, "allow@example.test"); err != nil {
+			t.Fatalf("seeding a traveller: %v", err)
+		}
+		if _, err := db.ExecContext(context.Background(),
+			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,1,$3)`,
+			tid, id, mediaType); err != nil {
+			t.Errorf("the schema refused %q, which internal/logbook permits: %v", mediaType, err)
+		}
+	}
+}
+
+// quotedLiterals is every single-quoted string in a constraint predicate,
+// which for an IN-list is exactly the set it permits.
+func quotedLiterals(predicate string) []string {
+	var out []string
+	for i := 0; i < len(predicate); i++ {
+		if predicate[i] != '\'' {
+			continue
+		}
+		j := i + 1
+		for j < len(predicate) && predicate[j] != '\'' {
+			j++
+		}
+		if j >= len(predicate) {
+			break
+		}
+		out = append(out, predicate[i+1:j])
+		i = j
 	}
 	return out
 }

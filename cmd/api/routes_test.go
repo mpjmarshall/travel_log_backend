@@ -21,6 +21,7 @@ import (
 	"travellog/internal/auth"
 	"travellog/internal/config"
 	"travellog/internal/httpx"
+	"travellog/internal/media"
 )
 
 func wiredConfig() config.Config {
@@ -28,6 +29,11 @@ func wiredConfig() config.Config {
 		AuthRateLimitPerMin:      60,
 		TravellerRateLimitPerMin: 600,
 		Argon2MaxConcurrent:      4,
+		// MEDIA_MAX_BYTES's FLOOR RATHER THAN ITS DEPLOYED VALUE. Mount
+		// refuses a zero, so this has to be set for the mux to come up at all
+		// — and config.MinMediaMaxBytes is a MEASUREMENT (one byte over the
+		// fixture's largest object) rather than a number invented here.
+		MediaMaxBytes: config.MinMediaMaxBytes,
 	}
 }
 
@@ -65,7 +71,7 @@ func TestTheTwoCeilingsComeFromTheirOwnVariables(t *testing.T) {
 
 func wiredMux(t *testing.T, log *slog.Logger) *http.ServeMux {
 	t.Helper()
-	mount, err := apiRoutes(wiredConfig(), nil, log)
+	mount, err := apiRoutes(wiredConfig(), nil, log, media.NewMemory())
 	if err != nil {
 		t.Fatalf("apiRoutes: %v", err)
 	}
@@ -100,7 +106,7 @@ func TestHealthzIsStillOnTheMuxBesideThem(t *testing.T) {
 func TestApiRoutesRefusesAnArgon2CeilingBelowOne(t *testing.T) {
 	cfg := wiredConfig()
 	cfg.Argon2MaxConcurrent = 0
-	if _, err := apiRoutes(cfg, nil, quiet()); err == nil {
+	if _, err := apiRoutes(cfg, nil, quiet(), media.NewMemory()); err == nil {
 		t.Errorf("apiRoutes accepted ARGON2_MAX_CONCURRENT=0.\n" +
 			"    DEC-48: zero is not 'unlimited' — a zero-capacity semaphore blocks the\n" +
 			"    first login for ever. config.Load floors it at 1 and this is the half\n" +

@@ -187,3 +187,188 @@ func checkCityIDs(ids []string) error {
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------- MEDIA (R3)
+
+// allowedContentTypes IS THE ONE RUNTIME LIST, and everything else about the
+// allowlist is derived from it (DEC-51 as narrowed by DEC-104, PD-10).
+//
+// TWO ENFORCEMENT POINTS AND ONE LIST. The Go check exists to produce a
+// `422 invalid_field` naming the field; migration 0003's
+// `media_objects_content_type_ck` is the guarantee, on DEC-58's precedent —
+// a Go check can be bypassed by the next route somebody adds and nothing
+// notices. Both spell the same two values, and
+// TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet walks the CHECK's own
+// predicate out of pg_constraint and compares the sets in BOTH directions, so
+// they cannot drift.
+//
+// AND A THIRD READER THAT IS NOT AN ENFORCEMENT POINT: DEC-87 SIGNS this value
+// into the presigned PUT, sourced from the SAME validated string, because the
+// 422 and the CHECK both constrain the database ROW while the uploader sets
+// Content-Type on the PUT and the bucket keeps it. Measured: a row reading
+// `image/png` can address an object the bucket serves as `text/html`.
+//
+// `heic` IS OUT AND `image/jpeg` STAYS, AND THE ASYMMETRY IS THE WHOLE ANSWER
+// (DEC-104). Nothing in this system can produce a HEIC — the client's shutter
+// is inert by decision, DEC-41 seeds two PNGs, and the fixture's 284
+// photographs resolve to two `image/png` objects. `image/jpeg` earns its place
+// independently of any camera: internal/postgres/schema_test.go seeds shared
+// fixtures with it, so removing it breaks every leg using that helper. One of
+// the three is reachable from the test suite today and one is reachable from
+// nothing at all. The general form is worth more than the character: AN
+// ALLOWLIST ENTRY NOTHING CAN PRODUCE OR TEST IS NOT A FREE OPTION — it is a
+// claim the schema makes that no leg can check. It comes back with the real
+// capture, which is the same dependency conversation the shutter already
+// needs, and adding a media type is additive and does not move the format
+// version.
+var allowedContentTypes = []string{"image/jpeg", "image/png"}
+
+// contentTypePattern is `^image/(jpeg|png)$` — spec L23's compiled regexp,
+// compiled once at package scope and BUILT FROM the list above rather than
+// written beside it.
+//
+// THE LIST AND THE EXPRESSION WOULD BE TWO SPELLINGS OF ONE SET, which is how
+// every count in this project has gone wrong. So there is one literal and the
+// expression is derived; what keeps the derivation honest is a leg asserting
+// this pattern's String() is exactly `^image/(jpeg|png)$`, which is the
+// expression the plan names, in one falsifiable place.
+var contentTypePattern = regexp.MustCompile(contentTypeExpression(allowedContentTypes))
+
+// contentTypeExpression turns the allowlist into the anchored alternation.
+//
+// It factors the shared `image/` prefix out, so the expression a reader sees is
+// the one the decision is written as rather than a machine-generated
+// alternation of whole strings. A type outside that family would make the
+// factoring wrong, which is why it is asserted rather than assumed: the leg
+// that checks String() reddens the moment one is added.
+func contentTypeExpression(allowed []string) string {
+	const family = "image/"
+	subtypes := make([]string, len(allowed))
+	for i, mediaType := range allowed {
+		subtypes[i] = strings.TrimPrefix(mediaType, family)
+	}
+	return "^" + family + "(" + strings.Join(subtypes, "|") + ")$"
+}
+
+// AllowedContentTypes is the allowlist, as a fresh slice each call — a caller
+// holding this package's own backing array could reorder or rewrite it, which
+// is the same reason httpx.Codes() copies.
+func AllowedContentTypes() []string {
+	out := make([]string, len(allowedContentTypes))
+	copy(out, allowedContentTypes)
+	return out
+}
+
+// ContentTypeAllowed is the one question every caller asks.
+func ContentTypeAllowed(mediaType string) bool {
+	return contentTypePattern.MatchString(mediaType)
+}
+
+// MediaBegin is the body of `POST /v1/media`, and every field is a pointer
+// because absent means leave alone (DEC-89).
+//
+// ON A CREATE THERE IS NOTHING TO LEAVE ALONE, so all three are required — but
+// the pointer is what lets the refusal NAME THE RIGHT FIELD. A bare `int64`
+// makes an absent `byteSize` and `"byteSize": 0` the same value, so a client
+// that forgot the key is told its photograph is too small, which is the
+// defect DEC-89 was ruled about wearing a smaller hat.
+type MediaBegin struct {
+	SHA256      *string `json:"sha256"`
+	ByteSize    *int64  `json:"byteSize"`
+	ContentType *string `json:"contentType"`
+}
+
+// ValidateMediaBegin answers the first field that is wrong.
+//
+// THE ORDER IS DELIBERATE AND IT IS THE ORDER OF THE CAPABILITY. Every refusal
+// here happens BEFORE anything is signed, which is what `maxBytes` is: an
+// API-side refusal to MINT, taken before the capability exists (PD-20). It can
+// never be a ceiling at the bucket — SigV4 signs an exact header VALUE, so
+// what the signature pins is `== byteSize` and never `<= maxBytes`. Both
+// sentences are needed and neither is true alone.
+//
+// `maxBytes` is a PARAMETER rather than a constant because it is
+// MEDIA_MAX_BYTES, and this package reads no environment: internal/config is
+// the only importer of os.Getenv (spec L30).
+func ValidateMediaBegin(b MediaBegin, maxBytes int64) error {
+	if b.SHA256 == nil || !assetPattern.MatchString(*b.SHA256) {
+		return InvalidFieldError{Field: "sha256",
+			Why: "a content address is 64 lowercase hex characters"}
+	}
+	if b.ContentType == nil || !ContentTypeAllowed(*b.ContentType) {
+		return InvalidFieldError{Field: "contentType",
+			Why: fmt.Sprintf("this build stores %s and nothing else",
+				strings.Join(allowedContentTypes, " and "))}
+	}
+	if b.ByteSize == nil || *b.ByteSize <= 0 {
+		return InvalidFieldError{Field: "byteSize",
+			Why: "a photograph has a positive size, and SigV4 signs an exact length"}
+	}
+	if *b.ByteSize > maxBytes {
+		return InvalidFieldError{Field: "byteSize",
+			Why: fmt.Sprintf("%d bytes, and this build mints an upload for at most %d",
+				*b.ByteSize, maxBytes)}
+	}
+	return nil
+}
+
+// MediaMint is the body of `POST /v1/media/mint`: a LIST of ids, so a
+// twelve-photograph grid is one round trip rather than twelve (OE-1).
+//
+// THE LIST IS A POINTER FOR DEC-89'S REASON AND ONE MORE. An absent `ids` and
+// `"ids": []` are different requests — one is a client that forgot the key and
+// one is a client asking for nothing — and only the first is worth a 422 that
+// says so.
+type MediaMint struct {
+	IDs *[]string `json:"ids"`
+}
+
+// MaxMintIDs bounds one mint request, and it is THIS BUILD'S POLICY rather
+// than schema — the same sense MaxNameBytes is.
+//
+// THE NUMBER COMES FROM WHAT THE ROUTE IS FOR. M1's photo grid is the largest
+// caller and the client draws a screen of tiles at a time; a presigned URL is
+// 394 characters, so 100 ids is roughly 39 kB of response — comfortably inside
+// the body ceiling, and two orders of magnitude above any grid the client
+// actually paints. What it stops is a list long enough to make one authorised
+// request into a minute of HMAC: presigning is local arithmetic, so the cost is
+// linear and unbounded without a bound here.
+const MaxMintIDs = 100
+
+// ValidateMediaMint answers the first thing that is wrong with a mint request.
+func ValidateMediaMint(m MediaMint) error {
+	if m.IDs == nil {
+		return InvalidFieldError{Field: "ids", Why: "a mint takes a list of media object ids"}
+	}
+	if len(*m.IDs) == 0 {
+		return InvalidFieldError{Field: "ids", Why: "a mint of nothing has no answer to give"}
+	}
+	if len(*m.IDs) > MaxMintIDs {
+		return InvalidFieldError{Field: "ids",
+			Why: fmt.Sprintf("%d ids, and this build mints at most %d in one request",
+				len(*m.IDs), MaxMintIDs)}
+	}
+	for _, id := range *m.IDs {
+		if !assetPattern.MatchString(id) {
+			return InvalidFieldError{Field: "ids",
+				Why: fmt.Sprintf("%q is not a media object id: 64 lowercase hex characters", id)}
+		}
+	}
+	return nil
+}
+
+// ValidateMediaID is the guard on an id arriving through ROUTE ARGUMENTS
+// rather than through a body.
+//
+// IT IS A SEPARATE FUNCTION FROM THE STRUCT VALIDATORS BECAUSE ITS INPUT IS A
+// DIFFERENT KIND OF UNTRUSTED. A body has been through DecodeJSON and a struct
+// validator; a path segment is whatever was in the URL — a stale route, a bad
+// push, a deep link — and it reaches the store with no validator between it and
+// a query unless something like this is on the handler's first line.
+func ValidateMediaID(id string) error {
+	if !assetPattern.MatchString(id) {
+		return InvalidFieldError{Field: "id",
+			Why: "a media object id is 64 lowercase hex characters"}
+	}
+	return nil
+}

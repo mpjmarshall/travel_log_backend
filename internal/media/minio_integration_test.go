@@ -640,6 +640,46 @@ func TestEachAudienceGetsItsOwnLifetime(t *testing.T) {
 	}
 }
 
+// THE UPLOAD URL'S OWN WINDOW IS THE PRIVATE ONE, AND ExpiresIn IS WHAT THE
+// BEGIN RESPONSE READS IT WITH.
+//
+// PresignPut TAKES NO AUDIENCE — an upload capability belongs to the
+// authenticated traveller who asked for it and nothing public ever writes —
+// so the lifetime is a fact about the signer rather than about a parameter,
+// and `POST /v1/media`'s `expiresAt` is derived from the URL rather than from
+// a second copy of the number. Getting that wrong is SILENT: the client is
+// told a window the signature does not carry, and the upload dies with
+// SignatureDoesNotMatch some minutes later.
+func TestTheUploadURLCarriesThePrivateWindowAndExpiresInReadsIt(t *testing.T) {
+	store := freshBucket(t)
+
+	body := []byte("a photograph, for the purposes of this leg")
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+
+	url, _, err := store.PresignPut(t.Context(),
+		media.Key{Traveller: travellerID, Object: digest},
+		media.Upload{SHA256: digest, ByteSize: int64(len(body)), ContentType: "image/png"})
+	if err != nil {
+		t.Fatalf("PresignPut: %v", err)
+	}
+
+	got, err := media.ExpiresIn(url)
+	if err != nil {
+		t.Fatalf("ExpiresIn: %v", err)
+	}
+	if got != ttlPrivate {
+		t.Errorf("the upload URL is signed for %s, want the PRIVATE lifetime %s — "+
+			"the public one is what GET /l/{token} embeds and it is seven and a "+
+			"half times longer", got, ttlPrivate)
+	}
+	// AND IT AGREES WITH WHAT THE URL LITERALLY SAYS, so this leg is about
+	// ExpiresIn as well as about the signer.
+	if want := expires(t, url); want != "120" {
+		t.Errorf("X-Amz-Expires=%s on the URL itself, want 120", want)
+	}
+}
+
 // PRESIGNING AGAINST A BUCKET THAT DOES NOT EXIST SUCCEEDS, and that is the
 // fail-open shape DEC-98 is about.
 //

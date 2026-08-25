@@ -147,3 +147,137 @@ func TestTheWriteTypeCannotCarryTheSharingFields(t *testing.T) {
 		t.Errorf("the seven fields it DOES own did not survive: %+v", got)
 	}
 }
+
+// ---------------------------------------------------------------- MEDIA (R3)
+
+func TestTheAllowlistTakesTwoTypesAndRefusesTheRest(t *testing.T) {
+	for _, ok := range logbook.AllowedContentTypes() {
+		if !logbook.ContentTypeAllowed(ok) {
+			t.Errorf("the allowlist refuses %q, which is in its own list", ok)
+		}
+	}
+
+	// EACH REFUSAL IS A DIFFERENT WAY OF BEING WRONG, and the first two are
+	// the ones that matter: `image/heic` is the plausible image DEC-104 took
+	// out, and `text/html; <script>` is the payload 0001's own comment
+	// recorded as accepted.
+	for _, no := range []string{
+		"image/heic",
+		"text/html; <script>",
+		"text/html",
+		"image/svg+xml",
+		"image/png ",
+		" image/png",
+		"IMAGE/PNG",
+		"image/pngx",
+		"ximage/png",
+		"image/jpeg\nimage/png",
+		"",
+	} {
+		if logbook.ContentTypeAllowed(no) {
+			t.Errorf("the allowlist accepts %q", no)
+		}
+	}
+}
+
+// THE BOUND IS A REFUSAL TO MINT AND IT NAMES THE FIELD (PD-20).
+//
+// A `byteSize` over MEDIA_MAX_BYTES is refused BEFORE anything is signed,
+// which is the only place it can be refused: SigV4 signs an exact header
+// value, so what the signature pins is `== byteSize` and the bucket can never
+// enforce `<= maxBytes`.
+func TestValidateMediaBeginRefusesTheFirstWrongFieldByName(t *testing.T) {
+	const max = int64(26214400)
+	digest := strings.Repeat("a", 64)
+
+	str := func(s string) *string { return &s }
+	num := func(n int64) *int64 { return &n }
+
+	good := logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10), ContentType: str("image/png")}
+	if err := logbook.ValidateMediaBegin(good, max); err != nil {
+		t.Fatalf("a well-formed begin was refused: %v — without this half every "+
+			"case below is satisfied by a validator that rejects everything", err)
+	}
+
+	for _, c := range []struct {
+		name  string
+		body  logbook.MediaBegin
+		field string
+	}{
+		{"no sha256 at all", logbook.MediaBegin{ByteSize: num(10), ContentType: str("image/png")}, "sha256"},
+		{"an uppercase digest", logbook.MediaBegin{SHA256: str(strings.ToUpper(digest)), ByteSize: num(10), ContentType: str("image/png")}, "sha256"},
+		{"a short digest", logbook.MediaBegin{SHA256: str("abc"), ByteSize: num(10), ContentType: str("image/png")}, "sha256"},
+		{"no contentType at all", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10)}, "contentType"},
+		{"text/html", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10), ContentType: str("text/html")}, "contentType"},
+		{"image/heic", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10), ContentType: str("image/heic")}, "contentType"},
+		// AN ABSENT byteSize AND `"byteSize": 0` MUST NOT BE THE SAME VALUE.
+		// With a bare int64 they are, and a client that forgot the key is told
+		// its photograph is too small.
+		{"no byteSize at all", logbook.MediaBegin{SHA256: str(digest), ContentType: str("image/png")}, "byteSize"},
+		{"zero bytes", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(0), ContentType: str("image/png")}, "byteSize"},
+		{"negative bytes", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(-1), ContentType: str("image/png")}, "byteSize"},
+		{"one byte over the bound", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(max + 1), ContentType: str("image/png")}, "byteSize"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := logbook.ValidateMediaBegin(c.body, max)
+			if err == nil {
+				t.Fatalf("accepted %s", c.name)
+			}
+			var invalid logbook.InvalidFieldError
+			if !errors.As(err, &invalid) {
+				t.Fatalf("error = %v, want an InvalidFieldError so the 422 can name a field", err)
+			}
+			if invalid.Field != c.field {
+				t.Errorf("field = %q, want %q (%v)", invalid.Field, c.field, err)
+			}
+		})
+	}
+
+	// EXACTLY THE BOUND IS ALLOWED. An off-by-one here is a photograph the
+	// client sized against the documented ceiling and cannot upload.
+	atTheBound := logbook.MediaBegin{SHA256: str(digest), ByteSize: num(max), ContentType: str("image/png")}
+	if err := logbook.ValidateMediaBegin(atTheBound, max); err != nil {
+		t.Errorf("a photograph of exactly MEDIA_MAX_BYTES was refused: %v", err)
+	}
+}
+
+func TestValidateMediaMintBoundsTheListAndNamesTheField(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	list := func(ids ...string) *[]string { return &ids }
+
+	if err := logbook.ValidateMediaMint(logbook.MediaMint{IDs: list(digest)}); err != nil {
+		t.Fatalf("a one-id mint was refused: %v", err)
+	}
+
+	many := make([]string, logbook.MaxMintIDs)
+	for i := range many {
+		many[i] = digest
+	}
+	if err := logbook.ValidateMediaMint(logbook.MediaMint{IDs: &many}); err != nil {
+		t.Errorf("a mint of exactly MaxMintIDs was refused: %v", err)
+	}
+	over := append(many, digest)
+
+	for _, c := range []struct {
+		name string
+		body logbook.MediaMint
+	}{
+		// AN ABSENT `ids` AND `"ids": []` ARE DIFFERENT REQUESTS and both are
+		// refused, which is why the field is a pointer.
+		{"no ids key at all", logbook.MediaMint{}},
+		{"an empty list", logbook.MediaMint{IDs: list()}},
+		{"one id over the bound", logbook.MediaMint{IDs: &over}},
+		{"an id that is not a digest", logbook.MediaMint{IDs: list(digest, "kyoto")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := logbook.ValidateMediaMint(c.body)
+			if err == nil {
+				t.Fatalf("accepted %s", c.name)
+			}
+			var invalid logbook.InvalidFieldError
+			if !errors.As(err, &invalid) || invalid.Field != "ids" {
+				t.Errorf("error = %v, want an InvalidFieldError naming `ids`", err)
+			}
+		})
+	}
+}

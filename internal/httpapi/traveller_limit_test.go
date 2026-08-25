@@ -185,8 +185,13 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 		t.Fatalf("the 2nd request at a limit of 1 = %d %s, want 429", got.status, got.body)
 	}
 
+	// THE ID IS READ OFF THE STORE RATHER THAN WRITTEN DOWN. This line said
+	// `traveller-1` and went red at R3, when the fake store started minting
+	// UUIDs — which it had to, because `travellers.id` is a uuid column and
+	// internal/media refuses anything else outright. A literal here turns
+	// "the refusal names the traveller" into "the fake mints this string".
 	logs := h.logs.String()
-	if !strings.Contains(logs, "traveller-1") {
+	if !strings.Contains(logs, h.travellerID(t, token)) {
 		t.Errorf("no log line names the traveller whose allowance ran out:\n%s", logs)
 	}
 	if raw := strings.TrimPrefix(token, "Bearer "); strings.Contains(logs, raw) {

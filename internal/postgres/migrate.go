@@ -85,6 +85,62 @@ var ErrChecksumMismatch = errors.New("postgres: a migration was edited after it 
 // such a file must be written to be re-runnable.
 const noTransactionDirective = "-- migrate:no-transaction"
 
+// noTransactionReRunnable is the SECOND header line such a file must carry,
+// and the runner REFUSES one that does not (DEC-99(b)).
+//
+// THE REQUIREMENT WAS ALREADY WRITTEN ABOVE AND ENFORCED BY NOTHING, which is
+// the sharp half of the ruling: "such a file must be written to be
+// re-runnable" has been in this file since VS4 with no test, no lint and no
+// acceptance check behind it. Measured against this Migrator with a
+// three-statement file that fails at statement 3: run 1 reported
+// `statement 3 … ERROR: division by zero`; runs 2 and 3, byte-identical file,
+// both reported `statement 2 … ERROR: relation "probe_half_applied" already
+// exists`. The actual fault is not reachable from any run after the first, and
+// DEC-95's `restart: always` retries that for ever.
+//
+// WHAT DECLARING IT MEANS: every statement in the file is `IF NOT EXISTS` or
+// `DROP … IF EXISTS`, or is otherwise a no-op against a database that has
+// already had it. `CREATE INDEX CONCURRENTLY` is the statement class this
+// exists for and it is also the one that leaves an INVALID index behind when
+// it fails — see the recovery below.
+//
+// IT IS STRICTER THAN DEC-99 ASKS FOR, AND DELIBERATELY. The ruling asks for
+// the requirement to be "stated in the file header and greppable"; refusing
+// the file is that statement with a failure attached, and it fails at LOAD
+// time rather than at statement 1, so a file that has not thought about
+// re-runnability can never reach a database at all.
+const noTransactionReRunnable = "-- migrate:re-runnable"
+
+// THE RECOVERY, WRITTEN HERE BECAUSE THIS IS WHERE SOMEBODY LOOKING AT A BOOT
+// LOOP ARRIVES (DEC-99(c)).
+//
+// A no-transaction file that failed part way has applied statements 1..i and
+// recorded NOTHING, so every later boot re-runs from statement 1. The failure
+// message carries the version and the STATEMENT TEXT (see apply), which is what
+// makes the first line of the log enough to tell which of those two runs you
+// are reading. To get out:
+//
+//	-- 1. what the ledger thinks is applied. The failing version is ABSENT
+//	--    from this, which is the whole of the problem.
+//	SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version;
+//
+//	-- 2. CREATE INDEX CONCURRENTLY that fails leaves the index behind, marked
+//	--    INVALID. It is not usable and it is not dropped by a retry, and it
+//	--    still costs writes, so it must go before the file is re-run.
+//	SELECT c.relname, i.indisvalid
+//	  FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+//	 WHERE NOT i.indisvalid;
+//
+//	DROP INDEX CONCURRENTLY IF EXISTS <the name that came back>;
+//
+//	-- 3. then fix the real fault — the one the FIRST run reported — and let
+//	--    the container restart. With every statement IF NOT EXISTS, the
+//	--    re-run passes over what is already there and stops at the fault.
+//
+// Recording the version by hand is the WRONG answer and is named here so it is
+// not reached for: the file is half applied, so a ledger row saying otherwise
+// makes the schema permanently disagree with what the runner believes about it.
+
 // upName and downName are the only two filenames the runner accepts. The
 // four-digit pad is not decoration: S05 says lexical order, and lexical order
 // over an embed.FS is correct only at a constant width, since `10_x.up.sql`
@@ -237,8 +293,17 @@ func (m Migrator) apply(ctx context.Context, conn *sql.Conn, f Migration) error 
 	if f.NoTransaction {
 		for i, s := range stmts {
 			if _, err := conn.ExecContext(ctx, s); err != nil {
-				return fmt.Errorf("postgres: %s statement %d (no-transaction, so statements 1..%d are already applied): %w",
-					f.Name, i+1, i, err)
+				// THE TEXT, NOT ONLY THE ORDINAL (DEC-99(d)). The ordinal MOVES
+				// between boots — statement 3 on the run that found the fault,
+				// statement 2 on every run after it — so a message carrying the
+				// number alone reads as one failure wandering rather than two
+				// different ones, and the real fault becomes unreachable from
+				// any log an operator is actually looking at. See
+				// noTransactionReRunnable above for how to get out of it.
+				return fmt.Errorf("postgres: %s statement %d, %q (no-transaction, so "+
+					"statements 1..%d are already applied and NO schema_migrations row "+
+					"was written, which means the next boot re-runs from statement 1): %w",
+					f.Name, i+1, statementSummary(s), i, err)
 			}
 		}
 		if _, err := conn.ExecContext(ctx, record, f.Version, f.Checksum); err != nil {
@@ -255,7 +320,8 @@ func (m Migrator) apply(ctx context.Context, conn *sql.Conn, f Migration) error 
 
 	for i, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s); err != nil {
-			return fmt.Errorf("postgres: %s statement %d: %w", f.Name, i+1, err)
+			return fmt.Errorf("postgres: %s statement %d, %q: %w",
+				f.Name, i+1, statementSummary(s), err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, record, f.Version, f.Checksum); err != nil {
@@ -321,12 +387,23 @@ func loadMigrations(fsys fs.FS) ([]Migration, error) {
 			}
 			sum := sha256.Sum256(body)
 			src := string(body)
+			noTx := strings.HasPrefix(src, noTransactionDirective)
+			if noTx && !declaresReRunnable(src) {
+				return nil, fmt.Errorf("postgres: %s carries %s and does not declare %s "+
+					"in its header — a no-transaction file is NOT atomic, so a failure "+
+					"part way leaves statements 1..i applied and no schema_migrations "+
+					"row, and every later boot re-runs from statement 1 and fails on an "+
+					"already-applied statement with a DIFFERENT error that hides the "+
+					"original fault (DEC-99). Write every statement as IF NOT EXISTS or "+
+					"DROP ... IF EXISTS and say so with that line",
+					name, noTransactionDirective, noTransactionReRunnable)
+			}
 			out = append(out, Migration{
 				Version:       v,
 				Name:          name,
 				SQL:           src,
 				Checksum:      hex.EncodeToString(sum[:]),
-				NoTransaction: strings.HasPrefix(src, noTransactionDirective),
+				NoTransaction: noTx,
 			})
 		case downName.MatchString(name):
 			downsByVersion[downName.FindStringSubmatch(name)[1]] = true
@@ -350,4 +427,62 @@ func loadMigrations(fsys fs.FS) ([]Migration, error) {
 		}
 	}
 	return out, nil
+}
+
+// declaresReRunnable reports whether a file's HEADER carries the
+// re-runnability declaration.
+//
+// THE HEADER AND NOT THE FILE. splitStatements keeps a comment attached to the
+// statement below it, so a `-- migrate:re-runnable` line sitting halfway down
+// is a comment about one statement rather than a claim about the file — and a
+// marker anywhere-in-the-bytes is a marker somebody can write by accident, in
+// a string literal, in a comment about why the file is NOT re-runnable. So the
+// scan stops at the first line that is neither blank nor a `--` comment.
+func declaresReRunnable(src string) bool {
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+			continue
+		case strings.HasPrefix(trimmed, noTransactionReRunnable):
+			return true
+		case strings.HasPrefix(trimmed, "--"):
+			continue
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// statementSummary is the statement as one readable line.
+//
+// IT IS NOT THE RAW TEXT AND THAT IS THE POINT OF IT. splitStatements attaches
+// a statement's leading comment block to the statement, and 0001's comments run
+// to thirty lines — so the raw text in a log line would bury the SQL under the
+// prose explaining it, which is the opposite of "log line one is enough". The
+// leading comments come off, the whitespace collapses, and a long statement is
+// cut with an ellipsis: what survives is the verb and the object, which is what
+// tells one statement from another.
+func statementSummary(stmt string) string {
+	var kept []string
+	body := false
+	for _, line := range strings.Split(stmt, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !body {
+			if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+				continue
+			}
+			body = true
+		}
+		if trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	one := strings.Join(kept, " ")
+	const cap = 160
+	if len(one) > cap {
+		return one[:cap] + "…"
+	}
+	return one
 }

@@ -82,7 +82,14 @@ func (m *Memory) PresignGet(_ context.Context, key Key, aud Audience) (string, e
 	if aud != Private && aud != Public {
 		return "", fmt.Errorf("media: %d is not an audience", aud)
 	}
-	return m.fake("GET", path, m.lifetime(aud), nil), nil
+	// THE DISPOSITION IS ON THE TWIN'S URLs TOO (DEC-51). It is inside the
+	// real signature, so a holder cannot strip it — measured: deleting the
+	// query parameter answers 403 SignatureDoesNotMatch. A twin whose read
+	// URLs did not carry it would let a handler leg about "every presigned
+	// GET is marked as a download" pass against a handler that stopped asking
+	// for one, which is the vacuous shape this package's whole design refuses.
+	return m.fake("GET", path, m.lifetime(aud), nil,
+		"response-content-disposition", "attachment"), nil
 }
 
 func (m *Memory) Stat(_ context.Context, key Key) (Attributes, error) {
@@ -156,10 +163,13 @@ func (m *Memory) lifetime(aud Audience) time.Duration {
 // fake builds an unroutable URL carrying the two query parameters the legs
 // read. `memory.invalid` is a reserved TLD (RFC 2606), so a test that
 // accidentally fetches one gets a DNS failure rather than somebody's server.
-func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string]string) string {
+func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string]string, extra ...string) string {
 	q := url.Values{}
 	q.Set("X-Amz-Expires", strconv.FormatInt(int64(ttl/time.Second), 10))
 	q.Set("X-Amz-Method", method)
+	for i := 0; i+1 < len(extra); i += 2 {
+		q.Set(extra[i], extra[i+1])
+	}
 
 	names := []string{"host"}
 	for name := range headers {
@@ -169,4 +179,37 @@ func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string
 	q.Set("X-Amz-SignedHeaders", strings.Join(names, ";"))
 
 	return "https://memory.invalid/" + path + "?" + q.Encode()
+}
+
+// PutWithoutChecksum is what an upload through one of the two BANNED presign
+// calls leaves behind: the right bytes at the right address, with NO checksum
+// recorded against them.
+//
+// IT IS A TEST SEAM AND IT IS THE ONLY REASON THE BAN IS A RUNTIME GUARD RATHER
+// THAN AN AST WALK (DEC-88). `StatObject` with `Checksum: true` answers the
+// digest the BUCKET stored, and both banned calls sign `host` and nothing else,
+// so an object uploaded through either carries an EMPTY checksum — measured
+// against MinIO. Without a way to produce that state, the commit path's
+// non-empty-and-matching check is a branch no leg can reach, and the emptiness
+// this package's Attributes.SHA256 comment calls "load-bearing" is a claim
+// nothing checks.
+//
+// It deliberately skips the write-once and the digest refusals as well, because
+// a `host`-only signature enforces neither — that IS the finding.
+func (m *Memory) PutWithoutChecksum(key Key, up Upload, body []byte) error {
+	path, _, err := Address(key.Traveller, key.Object)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.made {
+		return fmt.Errorf("media: NoSuchBucket: %s", path)
+	}
+	m.objects[path] = Attributes{
+		Size:        int64(len(body)),
+		ContentType: up.ContentType,
+		SHA256:      "",
+	}
+	return nil
 }

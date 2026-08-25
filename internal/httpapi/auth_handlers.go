@@ -29,6 +29,7 @@ import (
 	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
+	"travellog/internal/media"
 )
 
 // Deps is what the routes need. Neither limiter is optional — see Mount.
@@ -38,6 +39,52 @@ type Deps struct {
 	Log            *slog.Logger
 	AuthLimit      *httpx.Limiter
 	TravellerLimit *httpx.Limiter
+
+	// THE MEDIA GROUP (R3). Two ports and one number, and none of the three
+	// is optional on a build that mounts the media routes — Mount panics on a
+	// nil, for the reason it panics on a nil limiter: an optional field left
+	// unset reads as working software.
+	//
+	// TWO PORTS AND NOT ONE, because they are two systems with two failure
+	// modes. `Media` is the row — what was declared, and whether it has been
+	// committed. `Objects` is the bucket — what is actually there, and the
+	// only thing that can mint a capability. `logbook.Service` is what spans
+	// them, and it is the ONLY thing in R1-R8 that does (PD-05).
+	Media   logbook.MediaStore
+	Objects media.Store
+
+	// MediaMaxBytes is MEDIA_MAX_BYTES: an API-side refusal to MINT, taken
+	// before the capability exists. It is a number on Deps rather than a
+	// package constant because it is configuration (spec L30) and because
+	// internal/logbook reads no environment.
+	MediaMaxBytes int64
+
+	// Now is the clock the begin response's `expiresAt` is measured from. It
+	// is a field so a leg can pin it; nil means time.Now.
+	Now func() time.Time
+}
+
+// Clock is Now, or time.Now.
+//
+// A METHOD RATHER THAN A DEFAULT SET AT WIRING TIME, because Deps is a struct
+// literal at four call sites and a zero value that panics on use would be a
+// nil-pointer dereference inside a handler rather than a working default.
+func (d Deps) Clock() func() time.Time {
+	if d.Now == nil {
+		return time.Now
+	}
+	return d.Now
+}
+
+// mediaService is PD-05's Service, built from the two ports rather than stored
+// as a third field.
+//
+// A THIRD FIELD WOULD BE A THIRD THING TO WIRE AND A FOURTH WAY TO GET IT
+// WRONG: a Deps carrying Media, Objects AND a Service built from some other
+// pair is a state the type would allow and nothing would catch. It is a value
+// struct of two interfaces, so building it per request costs nothing.
+func (d Deps) mediaService() logbook.Service {
+	return logbook.Service{Media: d.Media, Objects: d.Objects}
 }
 
 // credentials is both request bodies. DEC-61 settles the field names and
@@ -121,16 +168,60 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
 	}
+	// THE MEDIA PORTS PANIC FOR THE REASON THE LIMITERS DO. A nil object store
+	// is not "no media": it is a nil-pointer dereference inside a handler on
+	// the first upload, wearing a 500 that says nothing, on a route whose
+	// whole job is to hand out a capability. Failing at wiring time is loud,
+	// immediate, and cannot reach production.
+	if deps.Media == nil {
+		panic("httpapi: the media routes need a store; a nil one is not 'no media'")
+	}
+	if deps.Objects == nil {
+		panic("httpapi: the media routes need an object store — nothing else can mint " +
+			"an upload capability, and a nil one is a panic on the first photograph")
+	}
+	// A CEILING OF ZERO IS NOT "NO CEILING", IT IS A FEATURE SWITCHED OFF BY A
+	// SETTING THAT READS LIKE A SAFETY MEASURE. internal/config already floors
+	// MEDIA_MAX_BYTES at the fixture's own largest object and says exactly
+	// that; this is the guard the second caller gets, because the guard that
+	// only exists in the caller is the guard the second caller does not get.
+	if deps.MediaMaxBytes <= 0 {
+		panic("httpapi: MEDIA_MAX_BYTES is not set on Deps, and a bound of zero " +
+			"refuses every upload — which is a feature switched off by a setting " +
+			"that reads like a safety measure")
+	}
 	perAddress := httpx.RateLimit(deps.AuthLimit, deps.Log)
 	perTraveller := limitByTraveller(deps.TravellerLimit, deps.Log)
 	authed := RequireTraveller(deps.Auth, deps.Log)
+	capability := httpx.CapabilityHeaders()
 	for _, route := range Routes(deps) {
 		handler := http.Handler(route.Handler)
-		if route.Auth {
-			handler = authed(perTraveller(handler))
-		} else {
+
+		// THE CEILING COMES FROM THE ROW AND NOT FROM `Auth` (PD-09). On every
+		// row today the two agree, and this line is what makes the field real
+		// rather than decoration: change a row's Limit and the route wears a
+		// different ceiling. It also decides the COMPOSITION, and that is not
+		// cosmetic — the traveller limiter keys on the traveller, which is on
+		// the context only after RequireTraveller has resolved the credential,
+		// so it can only go INSIDE the authentication.
+		switch route.Limit {
+		case LimitTraveller:
+			handler = perTraveller(handler)
+		default:
 			handler = perAddress(handler)
 		}
+		if route.Auth {
+			handler = authed(handler)
+		}
+
+		// DEC-51's POLICY, FROM THE TABLE, AND OUTSIDE THE CEILING AND THE
+		// CREDENTIAL CHECK. A 401 and a 429 from a capability route are still
+		// responses about a capability route, and a policy that only applies
+		// once a handler runs is a policy whose absence nobody can see.
+		if route.NoStore {
+			handler = capability(handler)
+		}
+
 		mux.Handle(route.Method+" "+route.Pattern, recordRoute(route, handler))
 	}
 }

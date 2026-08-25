@@ -50,6 +50,24 @@ ARC_TRIP="kyoto"
 # name must agree with S3_BUCKET's default in deploy/docker-compose.yml.
 ARC_BUCKET="travellog-media"
 ARC_CANARY="travellog-arc-canary"
+
+# THE PHOTOGRAPH THE MEDIA ARC UPLOADS, and its sha256 written out.
+#
+# THE DIGEST IS A LITERAL AND THAT IS THE POINT OF IT. Computing it here with
+# `shasum` would make the arc agree with itself: the address IS the content, so
+# a literal is what says the server and this script hashed the same bytes. If
+# ARC_PHOTO changes, A16 fails on the id and the new digest is in the failure
+# message.
+#
+#   printf '%s' 'travellog-arc-photograph' | shasum -a 256
+#   -> 1330026df05364d4054b989efb295eb1661a2d9771aaf1b052d60bcd273a442d
+ARC_PHOTO="travellog-arc-photograph"
+ARC_DIGEST="1330026df05364d4054b989efb295eb1661a2d9771aaf1b052d60bcd273a442d"
+ARC_BYTES=24
+
+# A second address, begun and never uploaded, so A22 can prove that a
+# REFERENCE waits for the bytes rather than for the row.
+ARC_UNCOMMITTED="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 JSON_CT="Content-Type: application/json"
 
 # The trip body is a single-quoted literal because it carries no variable, and
@@ -391,7 +409,7 @@ phase_arc() {
 	need curl
 	need jq
 
-	local code base token auth_header shouty traveller_id
+	local code base token auth_header shouty traveller_id url
 
 	step "A0: docker compose down -v — the volume goes, so what follows is real"
 	"${COMPOSE[@]}" down -v
@@ -576,6 +594,125 @@ phase_arc() {
 	assert_eq 2 "$(header X-Logbook-Format)" "  the formats this build can write"
 
 	########################################################################
+	# A16-A21: THE MEDIA ARC (PD-04, R3). begin -> presigned PUT -> commit ->
+	# reference -> mint -> fetch, against the running container and the running
+	# MinIO.
+	#
+	# WHY IT IS HERE AND NOT ONLY IN `go test`. VS6 and VS7 both shipped routes
+	# green in `go test` and answering 404 in the container. And the handler
+	# legs run against media.Memory, whose URLs are `memory.invalid` on purpose
+	# — so NOTHING in `go test ./...` has ever put a byte through a real
+	# signature from outside the test binary. The two things only this can say
+	# are that the routes are mounted and that a URL this server minted is a
+	# URL a client can actually use: everything about the signature is decided
+	# by the HOST it covers, and DEC-42's two addresses are two variables that
+	# can be swapped with every unit test still green.
+	########################################################################
+	local digest headers put_status begun
+
+	step "A16: POST /v1/media — the three routes are in the running container"
+	code="$(req -X POST "$base/v1/media" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg d "$ARC_DIGEST" --argjson n "$ARC_BYTES" \
+			'{sha256:$d,byteSize:$n,contentType:"image/png"}')")"
+	assert_eq 201 "$code" "POST /v1/media"
+	assert_eq "$ARC_DIGEST" "$(jqbody .id)" "the id — the address IS the digest"
+	assert_eq false "$(jqbody .alreadyExists)" "alreadyExists on a first begin"
+	begun="$(body)"
+	url="$(printf '%s' "$begun" | jq -r .uploadUrl)"
+	[ -n "$url" ] && [ "$url" != null ] || fail "begin minted no uploadUrl"
+
+	# THE MAP AND THE SIGNATURE AGREE, FROM OUTSIDE THE TEST BINARY (DEC-88).
+	# The handler leg asserts this against media.Memory, which does not sign at
+	# all; this reads X-Amz-SignedHeaders out of a URL a REAL SigV4 signer
+	# produced. Equality in both directions, because a map with an extra header
+	# is as broken as one with a missing header.
+	step "A17: uploadHeaders is exactly X-Amz-SignedHeaders minus host"
+	local signed handed
+	signed="$(printf '%s' "$url" | sed -n 's/.*X-Amz-SignedHeaders=\([^&]*\).*/\1/p' |
+		tr ';' '\n' | sed 's/%3B/\n/g' | grep -v '^host$' | sort | tr '\n' ';')"
+	handed="$(printf '%s' "$begun" | jq -r '.uploadHeaders | keys[]' | sort | tr '\n' ';')"
+	[ -n "$signed" ] || fail "the URL signs host and nothing else — that is what a URL from one of the two BANNED presign calls looks like"
+	assert_eq "$signed" "$handed" "the header map's key set against the URL's own signed set"
+
+	# THE UPLOAD, THROUGH THE MINTED URL, REPLAYING THE MAP VERBATIM. This is
+	# the one assertion in the repository that says a phone could actually use
+	# what this server hands out: the signature covers the HOST, so
+	# S3_PUBLIC_BASE_URL being wrong is a 403 here and a green suite everywhere
+	# else.
+	step "A18: PUT the bytes through the presigned URL"
+	local -a header_args=()
+	while IFS=$'\t' read -r name value; do
+		header_args+=(-H "$name: $value")
+	done < <(printf '%s' "$begun" | jq -r '.uploadHeaders | to_entries[] | "\(.key)\t\(.value)"')
+	printf '%s' "$ARC_PHOTO" >"$WORK/photo"
+	put_status="$(curl -sS -o "$WORK/put" -w '%{http_code}' -X PUT --data-binary "@$WORK/photo" \
+		"${header_args[@]}" "$url")"
+	assert_eq 200 "$put_status" "PUT to the presigned URL"
+
+	# DEC-88's WRITE-ONCE, AT THE BUCKET AND NOT IN A COMMENT. `If-None-Match:
+	# *` is signed in, so a second PUT is 412 PreconditionFailed with the
+	# original bytes intact — and THE COMMIT PATH READS 412 AS SUCCESS, which
+	# is the sentence docs/CLIENT-PREREQUISITES.md carries. Without it a client
+	# retrying after an unacknowledged success reports a failure.
+	step "A19: a SECOND PUT at the same address is 412, not a silent replacement"
+	put_status="$(curl -sS -o "$WORK/put2" -w '%{http_code}' -X PUT --data-binary "@$WORK/photo" \
+		"${header_args[@]}" "$url")"
+	assert_eq 412 "$put_status" "the second PUT"
+
+	step "A20: POST /v1/media/{id}/commit, then again — the second is 200"
+	code="$(req -X POST "$base/v1/media/$ARC_DIGEST/commit" -H "$auth_header")"
+	assert_eq 200 "$code" "commit"
+	assert_eq true "$(jqbody .alreadyExists)" "alreadyExists after the commit"
+	code="$(req -X POST "$base/v1/media/$ARC_DIGEST/commit" -H "$auth_header")"
+	assert_eq 200 "$code" "a SECOND commit — the retry contract, not a 409"
+
+	# THE REFERENCE, WHICH IS WHAT THE WHOLE FLOW IS FOR. It goes through
+	# `PUT /v1/trips/{id}`, and the cover check is a COMMITTED check rather
+	# than an existence check — so this assertion is only reachable because
+	# A20 ran.
+	step "A21: the committed object can be a trip's cover, and mint answers a URL that fetches it"
+	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg c "$ARC_DIGEST" '{name:"Kyoto in May",coverAsset:$c}')")"
+	assert_eq 200 "$code" "PUT /v1/trips/$ARC_TRIP with the committed cover"
+	assert_eq "$ARC_DIGEST" "$(jqbody .coverAsset)" "the stored cover"
+
+	code="$(req -X POST "$base/v1/media/mint" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg d "$ARC_DIGEST" '{ids:[$d]}')")"
+	assert_eq 200 "$code" "POST /v1/media/mint"
+	# DEC-51's TWO HEADERS, ON A RESPONSE THAT CARRIES A BEARER CAPABILITY, and
+	# asserted on PRESENCE. A presigned URL is unlimited replay and cannot be
+	# revoked before it expires: `no-store` keeps it out of an intermediary's
+	# cache and `no-referrer` keeps it out of the next site's logs.
+	assert_eq 'no-store, private' "$(header Cache-Control)" "  Cache-Control on the mint"
+	assert_eq 'no-referrer' "$(header Referrer-Policy)" "  Referrer-Policy on the mint"
+	local read_url
+	read_url="$(jqbody -r '.urls[0]')"
+	assert_contains "$read_url" 'response-content-disposition=attachment' \
+		"  the minted URL's disposition (DEC-51: a mislabelled object is downloaded, never rendered)"
+
+	code="$(curl -sS -o "$WORK/fetched" -D "$WORK/head" -w '%{http_code}' "$read_url")"
+	assert_eq 200 "$code" "GET the minted URL"
+	assert_eq "$ARC_PHOTO" "$(cat "$WORK/fetched")" "the bytes that came back, byte for byte"
+
+	step "A22: a reference to an object that has NOT been committed is refused by name"
+	code="$(req -X POST "$base/v1/media" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg d "$ARC_UNCOMMITTED" --argjson n "$ARC_BYTES" \
+			'{sha256:$d,byteSize:$n,contentType:"image/png"}')")"
+	assert_eq 201 "$code" "begin a second object and never upload it"
+	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg c "$ARC_UNCOMMITTED" '{name:"Kyoto in May",coverAsset:$c}')")"
+	assert_eq 422 "$code" "PUT /v1/trips with an UNCOMMITTED cover"
+	assert_eq invalid_field "$(jqbody .code)" "  its code"
+	assert_eq coverAsset "$(jqbody .field)" "  its field"
+	# AND THE ALLOWLIST, WHICH THE SCHEMA ENFORCES TOO — the psql half of that
+	# claim is the acceptance check's, and this is the Go half in the container.
+	code="$(req -X POST "$base/v1/media" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --argjson n "$ARC_BYTES" \
+			'{sha256:"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",byteSize:$n,contentType:"text/html"}')")"
+	assert_eq 422 "$code" "begin with contentType text/html"
+	assert_eq contentType "$(jqbody .field)" "  its field"
+
+	########################################################################
 	# THE RESTART LEG. `down` and NOT `down -v` — see the header. Everything
 	# above proves the API; only this proves pgdata, and its failure mode is
 	# invisible until a redeploy destroys somebody's log.
@@ -605,8 +742,26 @@ phase_arc() {
 	code="$(req -H "$auth_header" "$base/v1/logbook")"
 	assert_eq 200 "$code" "GET /v1/logbook after restart"
 	assert_eq "Kyoto in May" "$(jqbody '.logbook.trips[0].name')" "the trip's name, after a full teardown"
-	assert_eq 'W/"2-1"' "$(header ETag)" "the ETag — the version counter survived too"
+	# `2-2` AND NOT `2-1` SINCE R3, AND THE SECOND HALF IS THE ASSERTION. A21
+	# writes the trip a SECOND time to give it its cover, so logbook_version is
+	# 2 by the time the stack is torn down — and this line is what says the
+	# COUNTER survived rather than merely the row. The literal moved with the
+	# arc that moved it, in the same commit, which is the thing R2 found three
+	# times that R1 had not done.
+	assert_eq 'W/"2-2"' "$(header ETag)" "the ETag — the version counter survived too"
 	assert_eq "[]" "$(jqbody -c '.logbook.trips[0].cityIds')" "cityIds"
+	# AND THE COVER, which is the only thing in this arc that outlives the
+	# stack on BOTH sides of the seam: the media_objects row is in pgdata and
+	# the bytes are in miniodata, and a `down` that kept one and lost the other
+	# is a reference that resolves and points at nothing.
+	assert_eq "$ARC_DIGEST" "$(jqbody -r '.logbook.trips[0].coverAsset')" \
+		"the trip's cover, after a full teardown"
+	code="$(req -X POST "$base/v1/media/mint" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg d "$ARC_DIGEST" '{ids:[$d]}')")"
+	assert_eq 200 "$code" "POST /v1/media/mint after the restart"
+	code="$(curl -sS -o "$WORK/fetched" -w '%{http_code}' "$(jqbody -r '.urls[0]')")"
+	assert_eq 200 "$code" "GET the re-minted URL — miniodata survived too"
+	assert_eq "$ARC_PHOTO" "$(cat "$WORK/fetched")" "the bytes, after a full teardown"
 	ok "the log outlived the stack"
 }
 

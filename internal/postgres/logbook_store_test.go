@@ -62,12 +62,32 @@ func aCity(t *testing.T, db *sql.DB, travellerID, id, name string) {
 	}
 }
 
+// aMediaObject is a COMMITTED object, and `uploaded_at` is what makes it one.
+//
+// IT USED TO LEAVE uploaded_at NULL, and every leg that referenced it passed
+// because the cover check was a bare existence check. R3 made it a COMMITTED
+// check — the four foreign keys guarantee the row exists and say nothing about
+// uploaded_at, because an FK cannot see a column it does not reference — so a
+// helper that begins and never uploads is a helper whose objects no route may
+// reference. `aBegunMediaObject` below is the uncommitted one, and it has its
+// own callers.
 func aMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO media_objects (traveller_id, id, byte_size, content_type, uploaded_at)
+		 VALUES ($1::uuid, $2, 1024, 'image/png', now())`, travellerID, id); err != nil {
+		t.Fatalf("inserting the media object %s: %v", id, err)
+	}
+}
+
+// aBegunMediaObject is the other half: a row that exists and whose bytes have
+// not landed. It is what "begun and never uploaded" looks like on disk.
+func aBegunMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
 		`INSERT INTO media_objects (traveller_id, id, byte_size, content_type)
 		 VALUES ($1::uuid, $2, 1024, 'image/png')`, travellerID, id); err != nil {
-		t.Fatalf("inserting the media object %s: %v", id, err)
+		t.Fatalf("beginning the media object %s: %v", id, err)
 	}
 }
 
@@ -414,19 +434,39 @@ func TestPutTripRefusesACityTheTravellerDoesNotHold(t *testing.T) {
 	}
 }
 
+// TWO WAYS FOR A COVER TO BE WRONG, AND THE ROUTE ANSWERS BOTH THE SAME WAY.
+//
+// The object nobody ever began is refused by the foreign key as well; the
+// object begun and never uploaded is refused ONLY here, because an FK cannot
+// see a column it does not reference. Both reach the client as
+// `422 invalid_field` on `coverAsset`, which is the point of the Go check —
+// the FK's own answer is a 500 with no field on it.
 func TestPutTripRefusesACoverThatWasNeverUploaded(t *testing.T) {
-	store, db, _ := logbookStore(t)
-	id := aTraveller(t, db)
+	for _, c := range []struct {
+		name  string
+		begin bool
+	}{
+		{"an object nothing holds", false},
+		{"an object begun and never uploaded", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store, db, _ := logbookStore(t)
+			id := aTraveller(t, db)
+			if c.begin {
+				aBegunMediaObject(t, db, id, anAsset)
+			}
 
-	_, _, err := store.PutTrip(context.Background(), id, logbook.TripWrite{
-		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"), CoverAsset: text(anAsset),
-	})
-	var invalid logbook.InvalidFieldError
-	if !errors.As(err, &invalid) {
-		t.Fatalf("PutTrip(an unknown cover) = %v (%T), want a named field", err, err)
-	}
-	if invalid.Field != "coverAsset" {
-		t.Errorf("field = %q, want %q", invalid.Field, "coverAsset")
+			_, _, err := store.PutTrip(context.Background(), id, logbook.TripWrite{
+				ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"), CoverAsset: text(anAsset),
+			})
+			var invalid logbook.InvalidFieldError
+			if !errors.As(err, &invalid) {
+				t.Fatalf("PutTrip(%s) = %v (%T), want a named field", c.name, err, err)
+			}
+			if invalid.Field != "coverAsset" {
+				t.Errorf("field = %q, want %q", invalid.Field, "coverAsset")
+			}
+		})
 	}
 }
 
@@ -1005,8 +1045,12 @@ func insertWithNullDate(t *testing.T, db *sql.DB, travellerID, table string) {
 		statement = `INSERT INTO photos (traveller_id, id, trip_id, city_id, taken_at, asset)
 			VALUES ($1::uuid, 'photo-null', 'autumn-crossing', 'kyoto', NULL, '` + anAsset + `')`
 	case "walks":
+		// THE TRACK IS NOT `[]` SINCE 0003 (walks_points_present_ck, PD-21).
+		// This leg is about a NULL DATE, and an empty array would make it fail
+		// on the track instead — a red for the wrong reason.
 		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
-			VALUES ($1::uuid, 'walk-null', 'autumn-crossing', 'kyoto', NULL, 1.2, '[]'::jsonb)`
+			VALUES ($1::uuid, 'walk-null', 'autumn-crossing', 'kyoto', NULL, 1.2,
+			        '[{"lat":35.0,"lng":135.0}]'::jsonb)`
 	}
 	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
 		t.Fatalf("inserting a NULL-dated row into %s: %v", table, err)
@@ -1025,7 +1069,8 @@ func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
 			VALUES ($1::uuid, 'photo-ok', 'autumn-crossing', 'kyoto', '2027-09-19T04:12:00Z', '` + anAsset + `')`
 	case "walks":
 		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
-			VALUES ($1::uuid, 'walk-ok', 'autumn-crossing', 'kyoto', '2027-09-19', 1.2, '[]'::jsonb)`
+			VALUES ($1::uuid, 'walk-ok', 'autumn-crossing', 'kyoto', '2027-09-19', 1.2,
+			        '[{"lat":35.0,"lng":135.0}]'::jsonb)`
 	}
 	if _, err := db.ExecContext(context.Background(), statement, travellerID); err != nil {
 		t.Fatalf("inserting a dated row into %s: %v", table, err)

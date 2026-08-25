@@ -9,6 +9,8 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -141,7 +143,13 @@ func TestAFailingFileLeavesNoHalfAppliedSchema(t *testing.T) {
 // THE ESCAPE HATCH, PROVEN FROM BOTH SIDES. The same file with and without the
 // directive: without it, PostgreSQL refuses the statement outright.
 func TestTheNoTransactionDirectiveIsWhatMakesConcurrentlyPossible(t *testing.T) {
-	const body = "CREATE TABLE one (x int);\nCREATE INDEX CONCURRENTLY one_x_idx ON one (x);\n"
+	// BOTH STATEMENTS ARE `IF NOT EXISTS` because the with-the-directive half
+	// below carries `-- migrate:re-runnable`, and that line is a claim about
+	// the file rather than a password: a declared file whose statements are
+	// not idempotent is the boot loop DEC-99 is about, written down as though
+	// it were not.
+	const body = "CREATE TABLE IF NOT EXISTS one (x int);\n" +
+		"CREATE INDEX CONCURRENTLY IF NOT EXISTS one_x_idx ON one (x);\n"
 
 	t.Run("without the directive it is refused", func(t *testing.T) {
 		db, schema := testdb.Open(t)
@@ -158,7 +166,7 @@ func TestTheNoTransactionDirectiveIsWhatMakesConcurrentlyPossible(t *testing.T) 
 	t.Run("with it the file applies", func(t *testing.T) {
 		db, schema := testdb.Open(t)
 		applied, err := (Migrator{Schema: schema, Logger: quietLogger()}).
-			Migrate(context.Background(), db, tiny(noTransactionDirective+"\n"+body))
+			Migrate(context.Background(), db, tiny(noTransactionDirective+"\n"+noTransactionReRunnable+"\n"+body))
 		if err != nil {
 			t.Fatalf("the escape hatch did not work: %v", err)
 		}
@@ -434,5 +442,244 @@ func TestTheSameMigrationAppliesWhenNothingHoldsTheLock(t *testing.T) {
 	}
 	if len(applied) != 2 {
 		t.Errorf("applied %v, want both", applied)
+	}
+}
+
+// ------------------------------------------------------- DEC-99: RE-RUNNABILITY
+
+// fixtureFS wraps the two files under internal/postgres/testdata in the
+// filenames the runner accepts.
+//
+// THE INDIRECTION IS THE PLAN'S FILE NAME MEETING THE RUNNER'S RULE.
+// `loadMigrations` refuses anything that is not `NNNN_name.up.sql`, and a
+// four-digit file sitting in testdata would read as a migration to anybody
+// scanning the tree. So the bytes live under the name the step names and are
+// mounted here under the name the runner wants — one mapping, in one place,
+// with the fixture still a real file a reader can open.
+func fixtureFS(t *testing.T, version string) fstest.MapFS {
+	t.Helper()
+	up, err := os.ReadFile(filepath.Join("testdata", "notx_fixture.up.sql"))
+	if err != nil {
+		t.Fatalf("reading the no-transaction fixture: %v", err)
+	}
+	down, err := os.ReadFile(filepath.Join("testdata", "notx_fixture.down.sql"))
+	if err != nil {
+		t.Fatalf("reading the no-transaction fixture's down file: %v", err)
+	}
+	return fstest.MapFS{
+		version + "_notx_fixture.up.sql":   &fstest.MapFile{Data: up},
+		version + "_notx_fixture.down.sql": &fstest.MapFile{Data: down},
+	}
+}
+
+// subject is one no-transaction migration and the FS it can be loaded from.
+type subject struct {
+	source string
+	name   string
+	fsys   fs.FS
+}
+
+// noTransactionSubjects is every `-- migrate:no-transaction` file this
+// repository holds, DERIVED rather than listed, from both places one can be:
+// migrations/, which ships, and the testdata fixture, which does not.
+//
+// IT IS DERIVED FROM migrations.FS SO THE FIRST REAL ONE JOINS THE GUARD BY
+// ARRIVING. The day somebody writes `CREATE INDEX CONCURRENTLY` into a shipped
+// migration, that file is a subject of the twice-run leg without anybody
+// editing this function — which is the difference between a guard and a
+// checklist.
+func noTransactionSubjects(t *testing.T) []subject {
+	t.Helper()
+
+	var out []subject
+	shipped, err := loadMigrations(migrations.FS)
+	if err != nil {
+		t.Fatalf("loading the shipped migrations: %v", err)
+	}
+	for _, m := range shipped {
+		if m.NoTransaction {
+			out = append(out, subject{source: "migrations/", name: m.Name, fsys: migrations.FS})
+		}
+	}
+
+	fixture := fixtureFS(t, "0001")
+	out = append(out, subject{
+		source: "internal/postgres/testdata/",
+		name:   "notx_fixture.up.sql",
+		fsys:   fixture,
+	})
+	return out
+}
+
+// THE GUARD DEC-99 ORDERS, AND ITS OWN PRECONDITION.
+//
+// A `-- migrate:no-transaction` file that fails part way is an UNRECOVERABLE
+// BOOT LOOP: the runner applies statements 1..i, writes no schema_migrations
+// row, and every later boot re-runs from statement 1 — failing on an
+// ALREADY-APPLIED statement with a DIFFERENT error that hides the original
+// fault, for ever, under DEC-95's `restart: always`.
+//
+// SO THE SECOND RUN IS THE ONE THAT MATTERS, AND IT HAS TO BE MADE TO HAPPEN.
+// Calling Migrate twice proves nothing on its own: the first run records a
+// ledger row and the second skips the file entirely. What a half-applied
+// failure leaves behind is the statements applied and NO ledger row, so this
+// leg deletes the row between the runs. That is the boot loop's exact state,
+// and "re-runnable" means the second pass over the same statements is clean.
+//
+// THE PRECONDITION IS NOT DECORATION. 0003 is entirely transactional, so
+// migrations/ contributes ZERO subjects today; without the non-empty
+// assertion this leg is green having run nothing at all.
+//
+// MUTATION: take `IF NOT EXISTS` off the fixture's second statement and the
+// second run fails with `relation "notx_probe_x_idx" already exists` — which
+// is the exact shape the boot loop reports.
+func TestNoTransactionMigrationsAreReRunnable(t *testing.T) {
+	subjects := noTransactionSubjects(t)
+	if len(subjects) == 0 {
+		t.Fatal("no `-- migrate:no-transaction` migration anywhere — this leg " +
+			"has nothing to be about, and a subject set of zero is a green that " +
+			"means nothing (DEC-99)")
+	}
+
+	var fromTestdata int
+	for _, s := range subjects {
+		if s.source == "internal/postgres/testdata/" {
+			fromTestdata++
+		}
+	}
+	if fromTestdata == 0 {
+		t.Fatal("the testdata fixture is not in the subject set — migrations/ is " +
+			"entirely transactional today, so deleting it leaves this leg with " +
+			"nothing to run")
+	}
+
+	for _, s := range subjects {
+		t.Run(s.source+s.name, func(t *testing.T) {
+			db, schema := testdb.Open(t)
+			m := Migrator{Schema: schema, Logger: quietLogger()}
+			ctx := context.Background()
+
+			applied, err := m.Migrate(ctx, db, s.fsys)
+			if err != nil {
+				t.Fatalf("first run: %v", err)
+			}
+			if len(applied) == 0 {
+				t.Fatalf("the first run applied nothing")
+			}
+
+			// What a half-applied no-transaction failure leaves: the
+			// statements in place and no row to say so.
+			if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations`); err != nil {
+				t.Fatalf("clearing the ledger to stage the boot loop: %v", err)
+			}
+
+			if _, err := m.Migrate(ctx, db, s.fsys); err != nil {
+				t.Fatalf("the SECOND run over the same statements failed: %v\n"+
+					"    that is the boot loop DEC-99 is about: a half-applied "+
+					"no-transaction file re-runs from statement 1 on every boot, "+
+					"and this is what it reports instead of the real fault", err)
+			}
+		})
+	}
+}
+
+// A NO-TRANSACTION FILE THAT DOES NOT DECLARE ITSELF RE-RUNNABLE IS REFUSED AT
+// LOAD TIME (DEC-99(b)).
+//
+// The runner's own comment has always demanded it — "such a file must be
+// written to be re-runnable" — and NOTHING ENFORCED IT, which is the sharp
+// half of the ruling. Stating the requirement in a header is what the ruling
+// asks for; refusing the file is that requirement with a failure attached, and
+// it fails at load rather than at statement 1, so it can never reach a
+// database at all.
+func TestANoTransactionFileMustDeclareItIsReRunnable(t *testing.T) {
+	body := noTransactionDirective + "\nCREATE TABLE IF NOT EXISTS one (x int);\n"
+	_, err := loadMigrations(tiny(body))
+	if err == nil {
+		t.Fatal("a no-transaction migration with no re-runnability declaration was accepted")
+	}
+	for _, want := range []string{"0001_one.up.sql", noTransactionReRunnable, "IF NOT EXISTS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+
+	// THE POSITIVE CONTROL. Without it this leg is satisfied by a runner that
+	// refuses every no-transaction file, which would make the escape hatch
+	// unreachable and every leg above it about nothing.
+	declared := noTransactionDirective + "\n" + noTransactionReRunnable +
+		"\nCREATE TABLE IF NOT EXISTS one (x int);\n"
+	loaded, err := loadMigrations(tiny(declared))
+	if err != nil {
+		t.Fatalf("a file that DOES declare it was refused: %v", err)
+	}
+	if len(loaded) != 1 || !loaded[0].NoTransaction {
+		t.Fatalf("loaded %d files, NoTransaction=%v; want one no-transaction file",
+			len(loaded), len(loaded) == 1 && loaded[0].NoTransaction)
+	}
+
+	// AND THE DECLARATION IS A HEADER, NOT A STRING ANYWHERE IN THE FILE. A
+	// marker inside a statement is a marker somebody wrote by accident.
+	buried := noTransactionDirective + "\nCREATE TABLE IF NOT EXISTS one (x int);\n" +
+		noTransactionReRunnable + "\n"
+	if _, err := loadMigrations(tiny(buried)); err == nil {
+		t.Error("the declaration was accepted from below the first statement")
+	}
+}
+
+// THE FAILURE MESSAGE CARRIES THE STATEMENT TEXT AND NOT ONLY ITS ORDINAL
+// (DEC-99(d)), so log line one is enough.
+//
+// MEASURED SHAPE OF THE DEFECT: run 1 of a three-statement file reported
+// `statement 3 … ERROR: division by zero`; runs 2 and 3, byte-identical file,
+// both reported `statement 2 … ERROR: relation "probe_half_applied" already
+// exists`. With the ordinal alone, an operator reading the second boot's log
+// has the wrong statement number AND the wrong error, and the real fault is
+// unreachable from any run after the first.
+//
+// BOTH HALVES ARE HERE. The first run must name the statement it died on, in
+// words; the second must too, so the two lines can be told apart by reading
+// rather than by counting.
+func TestAFailingNoTransactionFileNamesTheStatementTextItDiedOn(t *testing.T) {
+	db, schema := testdb.Open(t)
+	m := Migrator{Schema: schema, Logger: quietLogger()}
+	ctx := context.Background()
+
+	body := noTransactionDirective + "\n" + noTransactionReRunnable + "\n" +
+		"CREATE TABLE IF NOT EXISTS probe_half_applied (x int);\n" +
+		"SELECT 1/0;\n"
+
+	_, err := m.Migrate(ctx, db, tiny(body))
+	if err == nil {
+		t.Fatal("a file whose second statement divides by zero was reported as applied")
+	}
+	for _, want := range []string{"0001_one.up.sql", "statement 2", "SELECT 1/0", "division by zero"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the failure does not carry %q, so log line one is not enough: %v", want, err)
+		}
+	}
+
+	// The first statement IS applied — that is what makes the loop — and the
+	// ledger is empty, which is what makes it repeat.
+	if n := count(t, db, `SELECT count(*) FROM information_schema.tables
+		WHERE table_schema=current_schema() AND table_name='probe_half_applied'`); n != 1 {
+		t.Fatalf("probe_half_applied exists %d times; the half-applied state this "+
+			"leg is about did not happen", n)
+	}
+	if n := count(t, db, `SELECT count(*) FROM schema_migrations`); n != 0 {
+		t.Fatalf("schema_migrations holds %d rows, want 0 — a no-transaction file "+
+			"that failed must not be recorded", n)
+	}
+
+	// THE SECOND RUN, WHICH IS THE ONE AN OPERATOR ACTUALLY READS. It reports
+	// a DIFFERENT statement and a DIFFERENT error, and the text is what says
+	// so — the ordinal alone reads as the same failure moving.
+	again := m
+	_, err = again.Migrate(ctx, db, tiny(body))
+	if err == nil {
+		t.Fatal("the second run succeeded — the fixture is meant to fail every time")
+	}
+	if !strings.Contains(err.Error(), "SELECT 1/0") {
+		t.Errorf("the second run's failure does not carry the statement text either: %v", err)
 	}
 }
