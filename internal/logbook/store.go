@@ -46,6 +46,26 @@ type Snapshot struct {
 type Store interface {
 	Read(ctx context.Context, travellerID string, assemble func(version int64) bool) (Snapshot, error)
 	PutTrip(ctx context.Context, travellerID string, w TripWrite) (Trip, int64, error)
+
+	// DeleteTrip implements D3's own table and nothing more, and ANSWERS THE
+	// WHOLE LOG rather than the trip it removed.
+	//
+	// THE CACHE CANNOT SPLICE A CASCADE, which is why this is the one write in
+	// the plan that does not answer a bare entity. DEC-32's write response
+	// exists so the phone can patch one object into its cached document; D3
+	// removes rows from FIVE tables — the trip, its photographs, its walks,
+	// its visits and its itinerary — and clears a column on rows in a sixth.
+	// A client handed a 204 would have to re-derive all of that from a sheet's
+	// copy, which is the definition of two implementations of one rule.
+	//
+	// AN UNKNOWN TRIP IS NOT AN ERROR AND MOVES NO VERSION. The client's own
+	// contract is that a delete of something absent has succeeded — "the
+	// caller asked for that trip to be absent and it is" — so this answers the
+	// log as it stands. Moving the version anyway would be defensible and is
+	// wrong in one specific way: a retried delete would invalidate the phone's
+	// whole cached document, and DEC-103 exists precisely because deletes get
+	// retried against servers that did not have the route.
+	DeleteTrip(ctx context.Context, travellerID, tripID string) (Snapshot, error)
 }
 
 // ErrNoMediaObject is a media route asking about a digest this traveller has

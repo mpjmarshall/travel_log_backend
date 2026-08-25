@@ -35,6 +35,7 @@ type fakeLogbook struct {
 	version   int64
 	doc       logbook.Document
 	assembles int
+	deletes   int
 	lastWrite logbook.TripWrite
 	failWith  error
 }
@@ -120,6 +121,68 @@ func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
 	if logbook.Sent(w.CoverAsset) {
 		t.CoverAsset = logbook.Value(w.CoverAsset)
 	}
+}
+
+// DeleteTrip is the fake's D3: it removes the trip and the rows the schema's
+// cascades would remove, and it KEEPS every place — which is the sheet's own
+// promise and the one thing a fake that "just deletes the trip" would get
+// right by accident and a fake that deletes too much would get wrong.
+//
+// A MISS MOVES NO VERSION HERE EITHER. The store's contract says so, and a
+// fake that bumped anyway would make TestARepeatedDeleteAnswersTheSameTag
+// green against a store that did.
+func (f *fakeLogbook) DeleteTrip(_ context.Context, _ string, tripID string) (logbook.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failWith != nil {
+		return logbook.Snapshot{}, f.failWith
+	}
+
+	held := false
+	trips := f.doc.Trips[:0:0]
+	for _, trip := range f.doc.Trips {
+		if trip.ID == tripID {
+			held = true
+			continue
+		}
+		trips = append(trips, trip)
+	}
+	if held {
+		f.doc.Trips = trips
+		photos := f.doc.Photos[:0:0]
+		for _, photo := range f.doc.Photos {
+			if photo.TripID != tripID {
+				photos = append(photos, photo)
+			}
+		}
+		f.doc.Photos = photos
+		walks := f.doc.Walks[:0:0]
+		for _, walk := range f.doc.Walks {
+			if walk.TripID != tripID {
+				walks = append(walks, walk)
+			}
+		}
+		f.doc.Walks = walks
+		for i := range f.doc.Places {
+			visits := f.doc.Places[i].Visits[:0:0]
+			for _, visit := range f.doc.Places[i].Visits {
+				if visit.TripID != tripID {
+					visits = append(visits, visit)
+				}
+			}
+			f.doc.Places[i].Visits = visits
+		}
+		f.version++
+	}
+	f.deletes++
+	doc := f.doc
+	return logbook.Snapshot{Version: f.version, Document: &doc}, nil
+}
+
+func (f *fakeLogbook) deleteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deletes
 }
 
 func (f *fakeLogbook) assembleCount() int {

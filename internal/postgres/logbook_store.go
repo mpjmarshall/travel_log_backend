@@ -677,6 +677,91 @@ func readOneTrip(ctx context.Context, tx *sql.Tx, travellerID, tripID string) (l
 	return t, rows.Err()
 }
 
+// ---------------------------------------------------------- D3: THE CASCADE
+
+// deleteTripSQL IS ONE STATEMENT, AND EVERY OTHER ROW D3 ITEMISES GOES BECAUSE
+// THE SCHEMA SAYS SO RATHER THAN BECAUSE GO ASKS TWICE.
+//
+// The sheet's own table, and the foreign key that implements each line:
+//
+//	"N photos and their notes"   -> photos_trip_fk       ON DELETE CASCADE
+//	"N recorded walks"           -> walks_trip_fk        ON DELETE CASCADE
+//	"N pins in …" — KEPT         -> NOTHING. places has no trip_id at all;
+//	                                what goes is visits_trip_fk's rows, and a
+//	                                place left with none is a wishlist place.
+//	"the shared link stops"      -> share_links_trip_fk  ON DELETE CASCADE
+//	the itinerary                -> trip_cities_trip_fk  ON DELETE CASCADE
+//	the cities                   -> trip_cities_city_fk is RESTRICT, and no
+//	                                key from trips reaches cities at all.
+//	another trip's photograph    -> photos_visit_fk ON DELETE SET NULL
+//	                                (visit_id), which fires as the visits go.
+//
+// WRITING ANY OF THOSE OUT IN GO WOULD BE A SECOND IMPLEMENTATION OF THE SHEET,
+// and the one that is easy to write is the one that is wrong: `DELETE FROM
+// places WHERE id IN (SELECT place_id FROM visits WHERE trip_id = $1)` is the
+// CRUD reflex, it takes five pins the sheet promised to keep, and nothing
+// errors.
+const deleteTripSQL = `DELETE FROM trips WHERE traveller_id = $1::uuid AND id = $2`
+
+// errNothingDeleted is how a miss ROLLS THE VERSION BUMP BACK.
+//
+// It is a sentinel and not a bool because of where the decision has to be
+// taken: `WithTravellerTx` bumps logbook_version BEFORE the body runs, so by
+// the time the body knows the trip was not there the number has already moved.
+// Returning an error is the only way to un-move it — the bump rides the
+// rollback with everything else — and this one is caught immediately outside,
+// so it never reaches a caller.
+var errNothingDeleted = errors.New("postgres: that trip was not in this log")
+
+// DeleteTrip is D3, and it answers THE WHOLE LOG.
+//
+// THE DOCUMENT IS READ INSIDE THE WRITE TRANSACTION, which is not the
+// repeatable-read snapshot GET /v1/logbook uses and does not need to be. The
+// traveller's advisory lock is held for the whole of it, so no other write for
+// this traveller can land between the DELETE and the ten SELECTs; and the
+// reads see this transaction's own delete because they are in it. What the
+// snapshot buys the READER — a consistent view against concurrent writers — the
+// lock buys the WRITER, and taking a repeatable-read snapshot as well would
+// mean a second transaction and therefore a second moment.
+//
+// A MISS IS A SUCCESS AND MOVES NOTHING. See logbook.Store's contract: the
+// client's own rule is that a delete of something absent has succeeded, and a
+// bump on a retried delete throws away the phone's whole cached document.
+func (s LogbookStore) DeleteTrip(ctx context.Context, travellerID, tripID string) (logbook.Snapshot, error) {
+	var snap logbook.Snapshot
+
+	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, deleteTripSQL, travellerID, tripID)
+		if err != nil {
+			return fmt.Errorf("postgres: deleting the trip %s: %w", tripID, err)
+		}
+		gone, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("postgres: counting the deleted trip %s: %w", tripID, err)
+		}
+		if gone == 0 {
+			return errNothingDeleted
+		}
+		doc, err := readDocument(ctx, tx, travellerID)
+		if err != nil {
+			return err
+		}
+		snap.Document = &doc
+		return nil
+	})
+	switch {
+	case errors.Is(err, errNothingDeleted):
+		// Nothing was written, so the version the caller should see is the one
+		// that was already there — which is what a plain read answers, in its
+		// own snapshot, with `assemble` saying yes.
+		return s.Read(ctx, travellerID, func(int64) bool { return true })
+	case err != nil:
+		return logbook.Snapshot{}, travellerError(err, travellerID)
+	}
+	snap.Version = version
+	return snap, nil
+}
+
 // travellerError translates the transaction helpers' sentinel into the
 // domain's own, so a handler never has to know internal/postgres exists.
 func travellerError(err error, travellerID string) error {

@@ -1076,3 +1076,176 @@ func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
 		t.Fatalf("inserting a dated row into %s: %v", table, err)
 	}
 }
+
+// ------------------------------------------------------- D3: the trip cascade
+
+// THE SHAPE THE CLIENT'S OWN HISTORY SAYS WENT WRONG, AND THE FIXTURE CANNOT
+// EXPRESS IT.
+//
+// "Deleting a trip left twenty-two of ANOTHER trip's photographs naming a
+// visit that had gone — no count moved and the log was corrupt." In the
+// client's captured document no photograph of another trip names an
+// autumn-crossing visit (measured at this working tree: 0), so the
+// fixture-scale legs in internal/seed cannot reach this branch at all. It is
+// built here instead, which is the same arrangement `to_file_test.dart` uses
+// in the client for the window filter its sample log no longer exercises.
+//
+// WHAT MUST HAPPEN: `visit_id` is cleared and NOTHING ELSE ON THE ROW MOVES.
+// `photos_visit_fk … ON DELETE SET NULL (visit_id)` is what does it, and the
+// COLUMN LIST is what makes it executable — a composite FK's plain SET NULL
+// nulls traveller_id too, which is NOT NULL, and the delete aborts.
+//
+// AND THE PHOTOGRAPH ITSELF SURVIVES. That is the assertion a dangling-
+// reference check cannot make: deleting the photograph leaves nothing dangling
+// either.
+func TestDeletingATripClearsAnotherTripsVisitReferenceAndNothingElse(t *testing.T) {
+	db := seeded(t)
+	ctx := context.Background()
+
+	// The fixture already holds it: `p-autumn` is filed on autumn-crossing and
+	// names `v-fushimi-may`, a visit of kyoto-in-may. Asserted rather than
+	// assumed, because this leg is worthless if it is not the shape.
+	var tripID, visitTrip string
+	if err := db.QueryRowContext(ctx, `
+		SELECT p.trip_id, v.trip_id FROM photos p JOIN visits v
+		  ON (p.traveller_id, p.visit_id) = (v.traveller_id, v.id)
+		WHERE p.traveller_id = $1 AND p.id = 'p-autumn'`, tid).Scan(&tripID, &visitTrip); err != nil {
+		t.Fatalf("the premise failed: p-autumn does not name a visit: %v", err)
+	}
+	if tripID == visitTrip {
+		t.Fatalf("the premise failed: p-autumn's visit belongs to its own trip (%s), so "+
+			"deleting the OTHER trip cannot reach it", tripID)
+	}
+
+	before := photoRow(t, db, "p-autumn")
+	if before.visitID != "v-fushimi-may" || before.placeID != "fushimi-inari" {
+		t.Fatalf("the premise failed: p-autumn is filed at %q/%q", before.placeID, before.visitID)
+	}
+
+	if _, err := (LogbookStore{DB: db}).DeleteTrip(ctx, tid, "kyoto-in-may"); err != nil {
+		t.Fatalf("DeleteTrip: %v", err)
+	}
+
+	after := photoRow(t, db, "p-autumn")
+	if after.missing {
+		t.Fatalf("p-autumn is gone. It belongs to autumn-crossing; deleting kyoto-in-may " +
+			"must not take another trip's photograph, and a dangling-reference check " +
+			"answers 0 either way.")
+	}
+	if after.visitID != "" {
+		t.Errorf("p-autumn still names the visit %q, which went with kyoto-in-may.\n"+
+			"    This is the cascade the client's own history says moved no count and\n"+
+			"    left the log corrupt: `photos_visit_fk … ON DELETE SET NULL (visit_id)`\n"+
+			"    is what clears it, and the COLUMN LIST is what makes it executable.",
+			after.visitID)
+	}
+	// AND NOTHING ELSE MOVED. `place_id` in particular: the pin is still
+	// Fushimi Inari, and the sheet says nothing about another trip's filing.
+	if after.placeID != before.placeID {
+		t.Errorf("p-autumn's place_id went from %q to %q. Only visit_id is in the column "+
+			"list; clearing the pin as well is a photograph that has lost its place "+
+			"because somebody else's trip was deleted.", before.placeID, after.placeID)
+	}
+	if after.tripID != before.tripID || after.cityID != before.cityID ||
+		after.caption != before.caption || !after.takenAt.Equal(before.takenAt) {
+		t.Errorf("p-autumn changed elsewhere: %+v -> %+v", before, after)
+	}
+}
+
+// A DELETE THAT REMOVES NOTHING MOVES NO VERSION, and that is the branch a
+// retried delete takes.
+//
+// The client treats an unknown id as success — "the caller asked for that trip
+// to be absent and it is" — and DEC-103 exists because deletes DO get retried,
+// against servers that answered 404 for a route they did not have. So the
+// second call has to be cheap in the one way the phone can feel: if it bumped
+// logbook_version, every retry would invalidate the whole cached document and
+// the next GET would carry the log back down the wire for nothing.
+//
+// IT IS ASSERTED AS A VERSION AND AS A DOCUMENT. The version is the falsifiable
+// half — `WithTravellerTx` takes the bump BEFORE the body runs, so the only way
+// not to move it is to let the body's error roll the transaction back, and an
+// implementation that "helpfully" ignores the miss moves it.
+func TestADeleteThatRemovesNothingIsSuccessAndMovesNoVersion(t *testing.T) {
+	db := seeded(t)
+	store := LogbookStore{DB: db}
+	ctx := context.Background()
+
+	first, err := store.DeleteTrip(ctx, tid, "kyoto-in-may")
+	if err != nil {
+		t.Fatalf("the first DeleteTrip: %v", err)
+	}
+	if first.Version < 1 {
+		t.Fatalf("a delete that removed a trip left version %d", first.Version)
+	}
+
+	again, err := store.DeleteTrip(ctx, tid, "kyoto-in-may")
+	if err != nil {
+		t.Fatalf("deleting the same trip twice answered %v; a delete asks for something "+
+			"to be absent, and an absent thing satisfies it", err)
+	}
+	if again.Version != first.Version {
+		t.Errorf("a repeated delete moved logbook_version from %d to %d.\n"+
+			"    Nothing changed, so nothing should have: a bump here invalidates the\n"+
+			"    phone's whole cached document on every retry, and DEC-103 exists\n"+
+			"    because deletes are exactly what gets retried.",
+			first.Version, again.Version)
+	}
+	if again.Document == nil {
+		t.Fatalf("a repeated delete answered no document")
+	}
+	if len(again.Document.Trips) != 1 || again.Document.Trips[0].ID != "autumn-crossing" {
+		t.Errorf("the log came back holding %d trips, want just autumn-crossing",
+			len(again.Document.Trips))
+	}
+}
+
+// AND A TRIP OF ANOTHER TRAVELLER IS AN UNKNOWN TRIP, NOT A DELETE.
+//
+// Every statement in this file is scoped by traveller_id and the primary keys
+// are composite, so this cannot go wrong by accident — which is exactly why it
+// is worth one leg: the shape that WOULD go wrong is a `WHERE id = $1` that
+// somebody writes because the id looks unique, and the fixture has only ever
+// had one traveller for it to be right about.
+func TestOneTravellerCannotDeleteAnothersTrip(t *testing.T) {
+	db := seeded(t)
+	ctx := context.Background()
+	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'other@example.com','x')`, otherT)
+
+	snap, err := (LogbookStore{DB: db}).DeleteTrip(ctx, otherT, "kyoto-in-may")
+	if err != nil {
+		t.Fatalf("DeleteTrip: %v", err)
+	}
+	if len(snap.Document.Trips) != 0 {
+		t.Errorf("the stranger's log came back with %d trips", len(snap.Document.Trips))
+	}
+	if n := count(t, db, `SELECT count(*) FROM trips WHERE traveller_id=$1`, tid); n != 2 {
+		t.Errorf("the owner has %d trips left, want 2 — a delete keyed on the id alone "+
+			"reaches every traveller's row of that name", n)
+	}
+}
+
+type storedPhoto struct {
+	missing                          bool
+	tripID, cityID, placeID, visitID string
+	caption                          string
+	takenAt                          time.Time
+}
+
+func photoRow(t *testing.T, db *sql.DB, id string) storedPhoto {
+	t.Helper()
+	var out storedPhoto
+	var placeID, visitID, caption sql.NullString
+	err := db.QueryRowContext(context.Background(), `
+		SELECT trip_id, city_id, place_id, visit_id, caption, taken_at
+		FROM photos WHERE traveller_id = $1 AND id = $2`, tid, id).
+		Scan(&out.tripID, &out.cityID, &placeID, &visitID, &caption, &out.takenAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storedPhoto{missing: true}
+	}
+	if err != nil {
+		t.Fatalf("reading the photograph %s: %v", id, err)
+	}
+	out.placeID, out.visitID, out.caption = placeID.String, visitID.String, caption.String
+	return out
+}

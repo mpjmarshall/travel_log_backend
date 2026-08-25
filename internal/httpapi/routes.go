@@ -115,14 +115,20 @@ type Route struct {
 	NoStore bool
 }
 
-// Routes is the whole API surface at R3: two credential routes, one
-// conditional read, one whole-state write, and the three media routes.
+// Routes is the whole API surface at R5: two credential routes, one
+// conditional read, one whole-state write, D3's cascade, and the three media
+// routes.
 func Routes(deps Deps) []Route {
 	return []Route{
 		{http.MethodPost, "/v1/auth/register", register(deps), false, LimitCredential, false},
 		{http.MethodPost, "/v1/auth/session", signIn(deps), false, LimitCredential, false},
 		{http.MethodGet, "/v1/logbook", readLogbook(deps), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/trips/{id}", putTrip(deps), true, LimitTraveller, false},
+
+		// D3's CASCADE, AND IT IS AUTHENTICATED AND NOTHING ELSE. The
+		// name-confirmation gate the safety lens asked for is DECLINED, in
+		// writing, at the top of trip_handlers.go.
+		{http.MethodDelete, "/v1/trips/{id}", deleteTrip(deps), true, LimitTraveller, false},
 
 		// THE THREE MEDIA ROUTES, AND ONLY TWO OF THEM CARRY A CAPABILITY IN
 		// THEIR ANSWER — which is the whole reason `NoStore` is a field rather

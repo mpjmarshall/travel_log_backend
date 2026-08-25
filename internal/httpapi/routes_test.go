@@ -24,16 +24,17 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	// SEVEN AT R3, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it from
-	// `len(Routes(...))` would make this line unfalsifiable — it would say
-	// "the table holds as many routes as the table holds". What it is for is
-	// that a route ARRIVING or LEAVING is a decision somebody made, and it
+	// EIGHT AT THIS COMMIT, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving
+	// it from `len(Routes(...))` would make this line unfalsifiable — it would
+	// say "the table holds as many routes as the table holds". What it is for
+	// is that a route ARRIVING or LEAVING is a decision somebody made, and it
 	// should cost one line in a test rather than nothing at all. It was four
-	// at VS7; R3 adds begin, commit and mint.
-	if len(routes) != 7 {
-		t.Errorf("the table holds %d routes; R3's surface is seven — two credential "+
-			"routes, one conditional read, one whole-state write, and the three "+
-			"media routes", len(routes))
+	// at VS7; R3 added begin, commit and mint; R5 adds D3's cascade here and
+	// five more with the share and session routes.
+	if len(routes) != 8 {
+		t.Errorf("the table holds %d routes; the surface is eight — two credential "+
+			"routes, one conditional read, one whole-state write, D3's cascade, and "+
+			"the three media routes", len(routes))
 	}
 
 	for _, route := range routes {
