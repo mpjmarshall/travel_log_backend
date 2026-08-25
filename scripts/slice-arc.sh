@@ -304,6 +304,14 @@ phase_record() {
 		"$REPO/scripts/slice-arc.sh" arc >"$WORK/refusal" 2>&1
 	code=$?
 	set -e
+	# THE EXIT CODE ALONE IS A VACUOUS ASSERTION AND MUST NOT BE THE WHOLE LEG.
+	# Measured: with `refuse_the_live_project` mutated to `return 0` and docker
+	# stubbed so nothing could be destroyed, THIS LINE STILL PASSED — the arc
+	# ran on past the refusal and died at the first health check, which is also
+	# exit 1. The two `assert_contains` below are what actually reddened. So the
+	# guard is proved by WHAT THE REFUSAL SAYS, not by the fact that something
+	# failed, and anybody tempted to simplify this leg down to its exit code
+	# would be deleting the whole of its evidence.
 	assert_eq 1 "$code" "the arc's exit code under the live project"
 	assert_contains "$(cat "$WORK/refusal")" "SLICE_DESTROY_VOLUME=1" "the refusal names the way to mean it"
 	assert_contains "$(cat "$WORK/refusal")" "make backup first" "the refusal names the backup"
