@@ -42,6 +42,13 @@ services:
       DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-4}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-10}
       TRAVELLER_RATE_LIMIT_PER_MIN: ${TRAVELLER_RATE_LIMIT_PER_MIN:-600}
+      # THE PUBLIC READ'S OWN CEILING AND ITS OWN BUCKET (PD-09). `GET
+      # /l/{token}` is the only unauthenticated route that is not a credential
+      # attempt, so inheriting AUTH_RATE_LIMIT_PER_MIN would put one person
+      # browsing a shared trip in the same 10/min bucket as everybody's
+      # sign-in. It does not bind behind a proxy until ClientKey learns
+      # X-Forwarded-For; Caddy is deferred.
+      PUBLIC_RATE_LIMIT_PER_MIN: ${PUBLIC_RATE_LIMIT_PER_MIN:-120}
       ARGON2_MAX_CONCURRENT: ${ARGON2_MAX_CONCURRENT:-2}
       # DEC-96's per-request bound. httpx.Timeout was written at VS3 and had
       # ZERO production call sites for four steps, because main.go had no

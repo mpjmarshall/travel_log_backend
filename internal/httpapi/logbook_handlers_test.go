@@ -38,6 +38,22 @@ type fakeLogbook struct {
 	deletes   int
 	lastWrite logbook.TripWrite
 	failWith  error
+
+	// links is `share_links` beside the log rather than inside it, which is
+	// where the real table sits: a share link is a capability and the log is a
+	// record. It REVOKES AND KEEPS (DEC-67), so a revoked row is still here —
+	// which is the whole reason `GET /l/{token}` can tell a revoked token from
+	// an unknown one and must not.
+	links []fakeLink
+}
+
+// fakeLink is one row of share_links, holding the DIGEST (DEC-85) exactly as
+// the column does.
+type fakeLink struct {
+	hash        string
+	travellerID string
+	tripID      string
+	revoked     bool
 }
 
 func (f *fakeLogbook) Read(_ context.Context, _ string, assemble func(int64) bool) (logbook.Snapshot, error) {
@@ -229,14 +245,33 @@ func (f *fakeShare) SetShareOptions(_ context.Context, _, tripID string, w logbo
 	})
 }
 
-func (f *fakeShare) NewShareLink(_ context.Context, _, tripID, token string) (logbook.Trip, int64, error) {
-	return f.change(tripID, func(t *logbook.Trip) {
+func (f *fakeShare) NewShareLink(_ context.Context, travellerID, tripID, token string) (logbook.Trip, int64, error) {
+	trip, version, err := f.change(tripID, func(t *logbook.Trip) {
 		t.ShareLinkID = &token
 		t.Shared = true
 	})
+	if err != nil {
+		return trip, version, err
+	}
+	// REVOKE THEN INSERT, IN THE ORDER THE STORE DOES IT AND FOR ITS REASON:
+	// `share_links_one_live` is a partial unique index, so a mint that forgot
+	// its revoke RAISES against real PostgreSQL. Here it would simply leave
+	// two live rows, which is why the leg that holds this is in
+	// internal/postgres — this twin only has to be a faithful enough
+	// `share_links` for the public read to be tested against.
+	f.books.mu.Lock()
+	defer f.books.mu.Unlock()
+	f.books.revokeLive(tripID)
+	f.books.links = append(f.books.links, fakeLink{
+		hash: string(logbook.HashShareToken(token)), travellerID: travellerID, tripID: tripID,
+	})
+	return trip, version, nil
 }
 
 func (f *fakeShare) StopSharing(_ context.Context, _, tripID string) (logbook.Trip, int64, error) {
+	f.books.mu.Lock()
+	f.books.revokeLive(tripID)
+	f.books.mu.Unlock()
 	return f.change(tripID, func(t *logbook.Trip) {
 		t.ShareLinkID = nil
 		t.Shared = false
@@ -244,6 +279,16 @@ func (f *fakeShare) StopSharing(_ context.Context, _, tripID string) (logbook.Tr
 		// resetShareFlagsSQL.
 		t.SharePhotos, t.ShareNotes, t.ShareCoordinates = true, true, false
 	})
+}
+
+// revokeLive is `UPDATE share_links SET revoked_at = now() WHERE … revoked_at
+// IS NULL`, and it KEEPS THE ROW. The caller holds books.mu.
+func (f *fakeLogbook) revokeLive(tripID string) {
+	for i := range f.links {
+		if f.links[i].tripID == tripID {
+			f.links[i].revoked = true
+		}
+	}
 }
 
 // change is the shape all three share, including the 404: a share write is a

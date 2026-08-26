@@ -43,14 +43,21 @@ func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	// branches, and nothing in this app authorises destroying a recording of a
 	// day — the same argument that leaves `DELETE /v1/cities/{id}` out of R6.
 	//
-	// The plan's own table holds 22 rows at the end of R8 — `/healthz` is
-	// cmd/api's and is not one of them — so R8's public read is the last.
-	if len(routes) != 21 {
-		t.Errorf("the table holds %d routes; R7's surface is twenty-one — two "+
+	// R8 ADDS EXACTLY ONE AND IT IS THE LAST: `GET /l/{token}`, the only row
+	// in this table with no bearer token in front of it.
+	//
+	// TWENTY-TWO HERE AND TWENTY-THREE SHIPPED, AND THE DIFFERENCE IS NOT AN
+	// ERROR IN EITHER. The plan's route table holds 23 rows and the
+	// twenty-third is `GET /healthz`, which is cmd/api's and deliberately not
+	// in this table — a liveness probe is not part of the API. The two numbers
+	// are asserted in two places on purpose: this one, over the slice, and
+	// cmd/api's own leg over the mux the server serves.
+	if len(routes) != 22 {
+		t.Errorf("the table holds %d routes; R8's surface is twenty-two — two "+
 			"credential routes, one conditional read, one whole-state write, D3's "+
 			"cascade, T5's city, C1's pin, D2's removal, H1's three share writes, "+
 			"U1's pencil, the revocation surface, the three media routes, R7's four "+
-			"photograph routes and N1's one walk route", len(routes))
+			"photograph routes, N1's one walk route and the public read", len(routes))
 	}
 
 	for _, route := range routes {
@@ -75,7 +82,7 @@ func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
 	// Three of each: register and sign-in spend two credential tokens getting
 	// the bearer, which leaves one for the loop to spend and then be refused.
-	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 3})
+	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 3, publicPerMin: 3})
 	token := bearer(t, h)
 
 	for _, route := range Routes(h.deps) {
@@ -95,14 +102,23 @@ func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
 	}
 }
 
-// AND THEY ARE NOT ONE BUDGET. The credential ceiling bounds an unauthenticated
-// 64 MiB-per-attempt Argon2 surface and is deliberately low; the authenticated
-// one bounds a stolen token and has to be high enough that no honest client
-// meets it. This is the leg that fails if somebody "composes" by wrapping the
+// AND THEY ARE NOT ONE BUDGET — THREE OF THEM, SINCE R8. The credential
+// ceiling bounds an unauthenticated 64 MiB-per-attempt Argon2 surface and is
+// deliberately low; the authenticated one bounds a stolen token and has to be
+// high enough that no honest client meets it; and the public one bounds a
+// route with no identity at all and must not be either of the first two.
+//
+// This is the leg that fails if somebody "composes" by wrapping the
 // authenticated routes in the credential limiter — every route would have a
 // ceiling, TestEveryRouteInTheTableIsRateLimited would pass, and a phone
 // syncing a log would meet a limit built for a password guesser.
-func TestTheTwoBudgetsAreNotOneBudget(t *testing.T) {
+//
+// AND IT IS THE LEG THAT FAILS IF R8's ROW INHERITS THE CREDENTIAL BUCKET,
+// which is what the old `Auth`-derived rule would have given it (PD-09): the
+// expectation below is now a function of `route.Limit` and not of `route.Auth`,
+// because those two stopped agreeing at this step. `GET /l/{token}` is
+// unauthenticated and is NOT a credential attempt.
+func TestTheThreeBudgetsAreThreeBudgets(t *testing.T) {
 	// THE TRAVELLER CEILING IS DERIVED FROM THE TABLE AND NOT A CONSTANT, and
 	// that is a correction R6 had to make rather than a preference. It was 60
 	// with a hard-coded `for range 6`, which is a ceiling this leg's OWN
@@ -111,29 +127,33 @@ func TestTheTwoBudgetsAreNotOneBudget(t *testing.T) {
 	// last four routes are refused for a reason that has nothing to do with
 	// which budget they draw on. A leg that reddens when a route is ADDED is a
 	// leg somebody edits the number in; deriving it means the next step's
-	// routes cost nothing.
+	// routes cost nothing. THE PUBLIC CEILING IS DERIVED THE SAME WAY.
 	//
 	// THE CREDENTIAL CEILING STAYS A SMALL LITERAL, because being refused
 	// there is the assertion.
 	const tries = 6
 	ceiling := tries*len(Routes(Deps{})) + tries
-	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: ceiling})
+	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: ceiling, publicPerMin: ceiling})
 	token := bearer(t, h)
 
 	for _, route := range Routes(h.deps) {
 		path := strings.ReplaceAll(route.Pattern, "{id}", "kyoto")
+		path = strings.ReplaceAll(path, "{token}", "mnpqrstuvwxy")
 		limited := false
 		for range tries {
 			if h.do(t, route.Method, path, aTrip, token).status == http.StatusTooManyRequests {
 				limited = true
 			}
 		}
-		if limited != !route.Auth {
+		if want := route.Limit == LimitCredential; limited != want {
 			t.Errorf("%s %s: refused inside a ceiling of %d = %v, want %v.\n"+
-				"    The authenticated routes must be spending the TRAVELLER budget and\n"+
-				"    the credential routes the ADDRESS budget; a route drawing on the\n"+
-				"    wrong one is either unusable or unbounded.",
-				route.Method, route.Pattern, ceiling, limited, !route.Auth)
+				"    Its row names the %s ceiling. The authenticated routes must be\n"+
+				"    spending the TRAVELLER budget, the credential routes the ADDRESS\n"+
+				"    budget, and the public read a THIRD bucket of its own — a route\n"+
+				"    drawing on the wrong one is either unusable or unbounded, and the\n"+
+				"    public read drawing on the credential one locks everybody out of\n"+
+				"    signing in.",
+				route.Method, route.Pattern, ceiling, limited, want, route.Limit)
 		}
 	}
 }
@@ -175,10 +195,12 @@ func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 			// ONE AND THE OTHER TO PLENTY. That is what makes it about WHICH
 			// limiter rather than about limiting: a route wired to the wrong
 			// bucket meets a ceiling of a thousand and never 429s at all.
-			opt := options{ratePerMin: 1000, travellerPerMin: 1000}
+			opt := options{ratePerMin: 1000, travellerPerMin: 1000, publicPerMin: 1000}
 			switch route.Limit {
 			case LimitTraveller:
 				opt.travellerPerMin = 1
+			case LimitPublic:
+				opt.publicPerMin = 1
 			default:
 				opt.ratePerMin = 1
 			}
@@ -207,6 +229,7 @@ func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 
 			spend := func() int {
 				path := strings.ReplaceAll(route.Pattern, "{id}", strings.Repeat("a", 64))
+				path = strings.ReplaceAll(path, "{token}", "mnpqrstuvwxy")
 				status := h.do(t, route.Method, path, bodyFor(route), bearerHeader).status
 				if renews && route.Auth {
 					bearerHeader = signInAs(t, h, "matt@example.com")

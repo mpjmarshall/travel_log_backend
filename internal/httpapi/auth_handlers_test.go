@@ -210,10 +210,16 @@ type harness struct {
 	logbook *fakeLogbook
 	media   *fakeMedia
 	objects *media.Memory
+	public  *fakePublic
 	deps    Deps
-	logs    *bytes.Buffer
-	client  *http.Client
-	addrs   *addressLog
+
+	// bearerToken is memoised because registration is CLOSED after the first
+	// traveller (DEC-86) and every sign-in spends a credential token — so a
+	// leg that needs the bearer twice must not pay for it twice.
+	bearerToken string
+	logs        *bytes.Buffer
+	client      *http.Client
+	addrs       *addressLog
 }
 
 // addressLog records the client address of every request that reaches the
@@ -260,6 +266,7 @@ func recordAddresses(a *addressLog) httpx.Middleware {
 type options struct {
 	ratePerMin      int
 	travellerPerMin int
+	publicPerMin    int
 	maxConcurrent   int
 	hasher          auth.Hasher
 }
@@ -271,6 +278,9 @@ func newHarness(t *testing.T, opt options) *harness {
 	}
 	if opt.travellerPerMin == 0 {
 		opt.travellerPerMin = 1000
+	}
+	if opt.publicPerMin == 0 {
+		opt.publicPerMin = 1000
 	}
 	if opt.maxConcurrent == 0 {
 		opt.maxConcurrent = 8
@@ -321,6 +331,18 @@ func newHarness(t *testing.T, opt options) *harness {
 		t.Fatalf("EnsureBucket: %v", err)
 	}
 	rows := newFakeMedia()
+	// THE PUBLIC TWIN READS THE SAME DOCUMENT EVERY OTHER TWIN WRITES, so a
+	// trip created through the harness is one a share link can publish, and
+	// the row rules it applies are the ones internal/postgres proves against
+	// real SQL. A twin that published rows the store would not would make
+	// every leg here evidence about nothing.
+	//
+	// THE MINTER IS COUNTED. `countingObjects` wraps the real media.Memory
+	// rather than replacing it, because "sharePhotos off mints nothing" is a
+	// claim about CALLS and no assertion on a response body can see a URL that
+	// was minted and dropped.
+	shared := &fakePublic{books: books}
+	counted := &countingObjects{Store: objects}
 	deps := Deps{
 		Auth:           service,
 		Logbook:        books,
@@ -329,11 +351,13 @@ func newHarness(t *testing.T, opt options) *harness {
 		Places:         geography,
 		Photos:         moments,
 		Walks:          moments,
+		Public:         shared,
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(opt.ratePerMin, nil),
 		TravellerLimit: httpx.NewLimiter(opt.travellerPerMin, nil),
+		PublicLimit:    httpx.NewLimiter(opt.publicPerMin, nil),
 		Media:          rows,
-		Objects:        objects,
+		Objects:        counted,
 		MediaMaxBytes:  testMediaMaxBytes,
 		Now: func() time.Time {
 			at, _ := time.Parse(time.RFC3339, fixedNow)
@@ -365,7 +389,7 @@ func newHarness(t *testing.T, opt options) *harness {
 	t.Cleanup(server.Close)
 	return &harness{
 		server: server, store: store, logbook: books, deps: deps,
-		media: rows, objects: objects,
+		media: rows, objects: objects, public: shared,
 		logs: logs, client: server.Client(), addrs: addrs,
 	}
 }

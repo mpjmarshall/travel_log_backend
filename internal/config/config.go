@@ -58,8 +58,24 @@ type Config struct {
 	DBMaxIdleConns           int
 	AuthRateLimitPerMin      int
 	TravellerRateLimitPerMin int
-	Argon2MaxConcurrent      int
-	RequestTimeout           time.Duration
+
+	// PublicRateLimitPerMin is a THIRD ceiling and it is a third variable for
+	// the reason the second one is a second (PD-09). `GET /l/{token}` carries
+	// no identity at all, so it can only be keyed on the address — and it is
+	// not a credential attempt, so the credential ceiling is the wrong number
+	// AND the wrong bucket. Under a derivation from `Auth` it would inherit
+	// AUTH_RATE_LIMIT_PER_MIN (10/min) from the SAME bucket instance as
+	// register and sign-in, and one person browsing a shared trip would lock
+	// everybody out of signing in.
+	//
+	// THE HONEST SENTENCE, and it is the one internal/httpx/ratelimit.go
+	// already carries: this ceiling does not bind behind a proxy until
+	// `httpx.ClientKey` learns X-Forwarded-For, because every request would
+	// then arrive from the proxy's address and this becomes one bucket for the
+	// whole internet. Caddy is deferred to the next slice.
+	PublicRateLimitPerMin int
+	Argon2MaxConcurrent   int
+	RequestTimeout        time.Duration
 
 	// THE BUCKET GROUP, and it is nine variables rather than four because
 	// object storage is the first thing this application talks to that is not
@@ -171,6 +187,7 @@ func Load() (Config, error) {
 		DBMaxIdleConns:           l.atLeast("DB_MAX_IDLE_CONNS", 0),
 		AuthRateLimitPerMin:      l.atLeast("AUTH_RATE_LIMIT_PER_MIN", 1),
 		TravellerRateLimitPerMin: l.atLeast("TRAVELLER_RATE_LIMIT_PER_MIN", 1),
+		PublicRateLimitPerMin:    l.atLeast("PUBLIC_RATE_LIMIT_PER_MIN", 1),
 		Argon2MaxConcurrent:      l.atLeast("ARGON2_MAX_CONCURRENT", 1),
 		RequestTimeout:           l.duration("REQUEST_TIMEOUT", MinRequestTimeout, MaxRequestTimeout),
 		S3InternalEndpoint:       l.address("S3_INTERNAL_ENDPOINT"),

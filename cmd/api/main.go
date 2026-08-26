@@ -326,7 +326,7 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 		Store:  postgres.AuthStore{DB: db},
 		Hasher: auth.Capped{Hasher: auth.Argon2id{Params: auth.DefaultParams}, Gate: gate},
 	}
-	credential, traveller := limiters(cfg)
+	credential, traveller, public := limiters(cfg)
 
 	return func(mux *http.ServeMux) {
 		httpapi.Mount(mux, httpapi.Deps{
@@ -349,11 +349,21 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 			// cannot empty a track — and there is no route anywhere that can
 			// delete a walk, because nothing in this app authorises destroying
 			// a recording of a day.
-			Photos:         postgres.PhotoStore{DB: db},
-			Walks:          postgres.WalkStore{DB: db},
+			Photos: postgres.PhotoStore{DB: db},
+			Walks:  postgres.WalkStore{DB: db},
+			// THE PUBLIC READ'S PORT (R8), same argument, same price — and it
+			// is the one whose interface matters most, because it is the only
+			// handler in the API that no bearer token stands in front of. It
+			// can resolve a token digest and read one trip's published rows,
+			// and it can do nothing else at all.
+			Public:         postgres.ShareReadStore{DB: db},
 			Log:            log,
 			AuthLimit:      credential,
 			TravellerLimit: traveller,
+			// THE THIRD CEILING, ITS OWN INSTANCE (PD-09). Sharing the
+			// credential bucket would mean one person reading a shared trip
+			// locks everybody out of signing in.
+			PublicLimit: public,
 			// THE MEDIA GROUP (R3). Two ports and one number, and Mount panics
 			// on any of the three being absent — for the reason it panics on a
 			// nil limiter: an optional field left unset reads as working
@@ -370,7 +380,7 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 	}, nil
 }
 
-// limiters builds the API's two ceilings from the two variables that carry
+// limiters builds the API's THREE ceilings from the three variables that carry
 // them.
 //
 // IT IS A FUNCTION OF ITS OWN SO THAT A TEST CAN SPEND FROM THEM. Which
@@ -379,9 +389,16 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 // authenticated ones a ceiling of 10, and every leg about status codes passes.
 // Mount's nil panic is what guards the wiring; this is what guards the
 // arithmetic.
-func limiters(cfg config.Config) (credential, traveller *httpx.Limiter) {
+//
+// THREE AND NOT TWO SINCE R8, AND THEY ARE THREE INSTANCES AND NOT ONLY THREE
+// NUMBERS (PD-09). `GET /l/{token}` is unauthenticated and is not a credential
+// attempt, so it needs its own budget AND its own bucket: sharing the
+// credential instance would put one person browsing a shared trip in the same
+// 10/min allowance as everybody's sign-in.
+func limiters(cfg config.Config) (credential, traveller, public *httpx.Limiter) {
 	return httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil),
-		httpx.NewLimiter(cfg.TravellerRateLimitPerMin, nil)
+		httpx.NewLimiter(cfg.TravellerRateLimitPerMin, nil),
+		httpx.NewLimiter(cfg.PublicRateLimitPerMin, nil)
 }
 
 // mediaConfig is the nine S3_* variables becoming the store's own Config, and

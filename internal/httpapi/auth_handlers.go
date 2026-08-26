@@ -61,8 +61,25 @@ type Deps struct {
 	Photos logbook.PhotoStore
 	Walks  logbook.WalkStore
 
+	// THE PUBLIC READ'S PORT (R8), and it is a SEVENTH port rather than two
+	// more methods on Logbook — on ShareStore's precedent, and here the
+	// argument is the sharpest it has been: this is the only handler in the
+	// API that no credential stands in front of, so "what can this handler
+	// reach" is the whole security question of the step. It can resolve a
+	// token digest and read one trip's published rows. It cannot read a log,
+	// cannot write, and cannot mint a share link.
+	Public logbook.PublicStore
+
 	AuthLimit      *httpx.Limiter
 	TravellerLimit *httpx.Limiter
+
+	// PublicLimit is the THIRD ceiling and a third limiter INSTANCE, which is
+	// the half that matters (PD-09). One number cannot be three, and one
+	// BUCKET cannot be shared: under the derivation this table used to make,
+	// `GET /l/{token}` counted against the same instance as register and
+	// sign-in, so one person browsing a shared trip would 429 everybody's
+	// sign-in.
+	PublicLimit *httpx.Limiter
 
 	// THE MEDIA GROUP (R3). Two ports and one number, and none of the three
 	// is optional on a build that mounts the media routes — Mount panics on a
@@ -210,6 +227,16 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		panic("httpapi: the authenticated routes need a rate limiter of their own; " +
 			"a nil one is not 'no limit', it is an unlimited log read for a stolen token")
 	}
+	// THE PUBLIC LIMITER PANICS FOR THE REASON THE OTHER TWO DO, and its
+	// absence is the worst of the three: `GET /l/{token}` is the one route
+	// anybody on the internet can reach without a credential, and a nil
+	// limiter there is an unbounded token-enumeration surface that reads as
+	// working software.
+	if deps.PublicLimit == nil {
+		panic("httpapi: the public read needs a rate limiter of its own; a nil one " +
+			"is not 'no limit', it is unmetered token enumeration on the only " +
+			"route with no credential in front of it")
+	}
 	if deps.Logbook == nil {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
@@ -221,6 +248,12 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.Share == nil {
 		panic("httpapi: the share routes need a store; a nil one is not 'no sharing', " +
 			"it is a panic the first time somebody presses Stop sharing")
+	}
+	// THE PUBLIC PORT PANICS FOR THE SAME REASON, on the route where a panic
+	// is a 500 handed to a stranger holding a link somebody sent them.
+	if deps.Public == nil {
+		panic("httpapi: the public read needs a store; a nil one is not 'no public " +
+			"sharing', it is a panic on every link anybody has ever handed out")
 	}
 	// THE GEOGRAPHY PORTS PANIC FOR THE SAME REASON, and the place one has the
 	// sharper consequence: `DELETE /v1/places/{id}` is D2, and a nil store
@@ -270,6 +303,11 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	}
 	perAddress := httpx.RateLimit(deps.AuthLimit, deps.Log)
 	perTraveller := limitByTraveller(deps.TravellerLimit, deps.Log)
+	// A SECOND per-ADDRESS middleware over a DIFFERENT LIMITER, which is the
+	// whole of PD-09's fix. The keying function is identical; the bucket store
+	// is not, and that is what stops a reader of a shared trip spending a
+	// sign-in's allowance.
+	perPublicAddress := httpx.RateLimit(deps.PublicLimit, deps.Log)
 	authed := RequireTraveller(deps.Auth, deps.Log)
 	capability := httpx.CapabilityHeaders()
 	for _, route := range Routes(deps) {
@@ -285,6 +323,8 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		switch route.Limit {
 		case LimitTraveller:
 			handler = perTraveller(handler)
+		case LimitPublic:
+			handler = perPublicAddress(handler)
 		default:
 			handler = perAddress(handler)
 		}
