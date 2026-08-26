@@ -1170,6 +1170,200 @@ tokens: **1,037 (1.620%)**, against 1/64 = 1.563%. It fired twice inside full
 `go test ./...` runs during this step's mutation work and is nothing to do with
 R6.
 
+## R7 — photographs and walks, and a named failing test that was green ten times out of ten
+
+Run at `33c1171` and at this working tree, against postgres:17.11 on
+127.0.0.1:5479, 5481 and 5482/5483 under `travellog-r7db`, `travellog-r7arc`
+and `travellog-r7seed`. The live stack on 8080/5434 was not written to — checked
+after the arc, `travellog-postgres-1` still holds its 5 travellers.
+
+### Every mutation run in this step
+
+Each applied by script, each CHECKED to have actually changed the file before
+the suite ran, each restored by `git checkout`. A mutation that does not change
+the file is a green suite proving nothing — and one of them did exactly that on
+the first attempt, because the file was untracked and `git diff` is silent
+about those.
+
+| mutation | reddens | stays green |
+|---|---|---|
+| `upsertPhotoSQL` also writes **`place_id = NULL, visit_id = NULL`** | 1 leg, on the COUNT | the pair check, the dangling check, every other leg |
+| `PutWalk` proposes an **empty** track instead of the stored one | 2 legs: both walk controls | every photo leg |
+| the `points` **CASE WHEN flag is always true** | **NOTHING** — see below | everything |
+| the server **picks the visit itself** (unordered `SELECT … LIMIT 1`) | the named leg **10/10**, plus 2 others | every non-refile leg |
+| `refilePhotoSQL` sets **`place_id` only** | 3 refile legs | the caption and snooze legs |
+| the snooze **bumps per photograph** | 2 snooze legs | everything else |
+| `StoredCaption` stores **`""`** instead of NULL | 2 legs, in 2 packages | everything else |
+| `storedWalkName` **does not trim** | 1 leg | the track legs |
+| `MaxWalkPoints` raised to **21,600** | 2 legs — 1 before the leg was corrected | the empty-track leg |
+| `checkPoints` **accepts** an empty track | 1 leg | the cap leg |
+| `Service.RefilePhoto` stops refusing a **nameless occasion** | 1 leg | every store leg |
+| the **cross-city** guard deleted | 1 leg | everything else |
+| the **ordinal park** deleted before the renumber | 1 leg, on `visits_place_ordinal_uq` | everything else |
+| the walk handler answers the **bare `Walk`** | 2 legs — 1 before the leg was corrected | everything else |
+| `PutPhoto` answers the **request** rather than the row | 1 leg | every store-side count |
+
+### THE ONE THAT SAID SOMETHING: the plan's own named failing test, again
+
+Third step in a row. R5 found the first, R6 the second, and this is the
+sharpest of the three because the plan ANTICIPATED the failure mode and the
+countermeasure did not work.
+
+R7's test strategy writes the refile leg out in full, names the mutation (an
+unordered `SELECT … LIMIT 1`), and adds `-count=10` with the reason: "an
+unordered SELECT can return the right row by luck and a single green proves
+nothing".
+
+```
+mutation applied, the plan's leg as written    10 PASS / 10
+```
+
+The leg names ONE occasion, "deliberately NOT the newest", and the planner
+returned that very row every time. **The luck is not random**, so repetition
+buys nothing: a two-row table gives the same row on every execution.
+
+What ships files the SAME photograph to EACH occasion in turn:
+
+```
+mutation applied, the corrected leg            10 FAIL / 10
+control, the corrected leg                     10 PASS / 10
+```
+
+Run at both scales — `internal/postgres` on a purpose-built pair six hours
+apart, and `internal/seed` on the client's own log, where `nishiki` holds FOUR
+occasions on `japan-2026` at ONE INSTANT (2026-09-18T09:10:00.000Z, four times
+over). At that scale not even the timestamp can break the tie.
+
+### AND A MUTATION THAT CANNOT REDDEN, WITH THE REASON
+
+Forcing the `points` `CASE WHEN` flag to `true` — the whole-state behaviour on
+the one column that matters — changes the file and reddens **nothing**.
+
+That is not a hole. `PutWalk` reads the row first and proposes the STORED track
+when the body carried none, because the INSERT tuple is validated against
+`walks_points_present_ck` before `ON CONFLICT` resolves it. So with the flag
+forced true the statement writes the track back over itself, byte for byte. The
+guard against a whole-state track write is the PROPOSAL and not the flag, and
+the mutation that reaches it is the second row of the table above, which
+reddens both walk legs.
+
+Worth writing down because the flag is the line a reader would point at.
+
+### Two legs of my own that could not see their mutation
+
+Both found by running, not by reading.
+
+- **the cap leg** read `logbook.MaxWalkPoints` in every position, so raising
+  the constant raised its own inputs and the leg stayed green — the mutation
+  reddened the byte-ceiling leg alone. DEC-106 fixes the number, so it is a
+  literal now.
+- **the EmitWalk leg** could only see "return the bare Walk" through the AST
+  sweep, because the twin always answered a walk WITH a track. That is not a
+  flaw in the twin: since 0003 no STORED walk can have an empty one, so what
+  the emitter guards is a Walk that was ASSEMBLED rather than read back. The
+  twin now models that shape explicitly and says so.
+
+### The numbers, re-derived here rather than copied from the plan
+
+```
+env -u TEST_DATABASE_URL go test ./... -count=1 -v | grep -c -- '--- PASS'   689
+TEST_DATABASE_URL=...    go test ./... -count=1 -v | grep -c -- '--- PASS'   939
+grep -cE '^\t\t\{http\.Method' internal/httpapi/routes.go                     21
+grep -cE '^\s*assert_(eq|contains) ' scripts/slice-arc.sh                    230
+```
+
+**The database variable buys 250 legs at this commit.** R6 measured 223.
+
+### The count that must not fall, per route, at fixture scale
+
+```
+psql "$SEED_DSN" -c "SELECT count(*) FROM photos WHERE place_id IS NOT NULL"
+```
+
+| route | before | after |
+|---|---|---|
+| `PUT /v1/photos/{id}` (caption only) | 95 | **95** |
+| `POST /v1/photos/snooze` | 95 | **95** |
+| `PUT /v1/walks/{id}` (name, and discard) | 95 | **95** |
+| `POST /v1/photos/{id}/refile`, between pins | 95 | **95** |
+| `POST /v1/photos/{id}/refile`, of an unfiled photograph | 95 | **96** |
+| `DELETE /v1/photos/{id}` of a filed one | 95 | **94** |
+
+And the three standing guards on the seeded log, in one output:
+
+```
+psql "$SEED_DSN" -f scripts/no_dangling_references.sql
+  photos naming a visit that is gone                   0
+  photos naming a place that is gone                   0
+  visits naming a trip that is gone                    0
+  photographs that are half-filed                      0
+  photographs filed to another place's occasion        0
+  walks with an empty track                            0
+  photographs naming a place (THIS ONE IS NOT A ZERO)  95
+```
+
+### The byte counts DEC-93 and DEC-106 rest on
+
+Measured through the shipped types, on UNROUNDED coordinates:
+
+```
+   500 points     25,629 B     41x inside httpx.MaxBodyBytes (1,048,576)
+   501 points     25,680 B
+21,600 points  1,099,622 B     six hours at 1 Hz — OVER the ceiling
+```
+
+The last reproduces DEC-93's own 1,099,390 B to within the walk's scalar
+fields. **DEC-106's "TWO ORDERS OF MAGNITUDE inside" does not survive
+recomputation**: 1,048,576 / 25,629 is **41**. Size right, multiplier wrong,
+conclusion untouched.
+
+**And it is a claim about coordinate precision.** The same 21,600 fixes rounded
+to seven decimal places are **794,666 B** and FIT. The cap still holds — the
+body ceiling is one of DEC-93's two arguments and the read path is the other —
+but nobody should re-derive "it fits" from a rounded fixture.
+
+### The acceptance check, verbatim, with exit codes
+
+```
+make check && make slice && make seed                        exit=2
+  (make check alone                                          exit=0)
+  make slice under the DEFAULT project is refused by DEC-92's own guard,
+  which R4 added and which five acceptance checks still ask for.
+  Under its own project name, the whole line is                exit=0
+
+go test ./internal/httpapi/ -run Refil -count=10              exit=0
+  Selects three legs there. The leg that can SEE the mutation is in
+  internal/postgres and internal/seed:
+  go test ./internal/postgres/ ./internal/seed/ -run Refil -count=10  exit=0
+
+psql "$TEST_DATABASE_URL" -f scripts/no_dangling_references.sql
+  the file DID NOT EXIST — three acceptance checks have named it since v7.0
+  and no step's file list created it. Written in this step.
+  TEST_DATABASE_URL is the TEST database, which holds no schema at rest:
+    ERROR: relation "photos" does not exist            exit=0  (!!)
+  `psql -f` does not stop on error. \set ON_ERROR_STOP on is what makes the
+  file able to fail:
+    against the empty test database                    exit=3
+    against a seeded database                          exit=0
+
+psql "$TEST_DATABASE_URL" -c "SELECT count(*) FROM photos WHERE place_id IS NOT NULL"
+    ERROR: relation "photos" does not exist            exit=1
+  Against the SEEDED database:  95                     exit=0
+
+curl … http://127.0.0.1:8080/v1/walks/kyoto-walk-1 | jq '.points | length'
+  NOT RUN AGAINST 8080 — that is the live stack. And `kyoto-walk-1` is not in
+  the client fixture, whose walks are w-busan and w-kibune. Against the
+  verbatim id on a safe stack the route answers, correctly,
+    422 {"code":"invalid_field","field":"tripId"}
+  because DEC-33 makes an unknown id a CREATE — and `jq '.points | length'`
+  on that body is `null`, which is what the check says must never happen.
+  Narrowed to w-busan on 8101:  3                      exit=0
+
+go vet ./...                                                  exit=0
+python3 scripts/check-plan.py docs/plan-v7.json               exit=0
+  0 failure(s); 66 ids; 23 routes; 8 steps; 14 deletions
+```
+
 ## What is still guarded by nothing
 
 Carried forward so the list does not shorten by silence, with what VS8 moved

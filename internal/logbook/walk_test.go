@@ -118,6 +118,8 @@ func TestTheCapIsFarInsideTheBodyCeilingAndSixHoursIsNot(t *testing.T) {
 		logbook.MaxWalkPoints, capped, float64(httpx.MaxBodyBytes)/float64(capped),
 		httpx.MaxBodyBytes)
 
+	t.Logf("%6d points = %9d B", logbook.MaxWalkPoints+1, walkBytes(t, track(logbook.MaxWalkPoints+1)))
+
 	// 21,600 IS THE NUMBER THE RULING TURNS ON: a six-hour walk at 1 Hz, which
 	// is a walk somebody really takes.
 	const sixHoursAt1Hz = 21600
