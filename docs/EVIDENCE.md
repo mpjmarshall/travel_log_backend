@@ -1482,9 +1482,9 @@ $ COMPOSE_PROJECT_NAME=travellog-r8seed API_PORT=8092 POSTGRES_PORT=5472 \
     MINIO_PORT=9012 S3_PUBLIC_BASE_URL=http://127.0.0.1:9012 make seed
   exit=0       284 photos, 49 visits, 1 share link
 
-$ docker compose logs api | grep -c '/l/\[redacted\]'
-  3            exit=0       <- the positive control
-$ docker compose logs api | grep -c 'kyoto-9f2a'
+$ make logs | grep -c '/l/\[redacted\]'      # killed after 5s — see below
+  7            exit=0       <- the positive control
+$ make logs | grep -c 'kyoto-9f2a'
   0            exit=1       <- the answer is right and the EXIT CODE is failure
 
 $ curl -sSi http://127.0.0.1:8092/l/kyoto-9f2a | grep -iE 'cache-control|referrer-policy'
@@ -1502,9 +1502,12 @@ $ curl -sS http://127.0.0.1:8092/l/kyoto-9f2a |
    that is R4's own DEC-92 guard doing its job. Five acceptance checks in this
    plan read this way; R5, R6 and R7 each recorded it.
 2. **`make logs` FOLLOWS.** The target is `docker compose logs -f api`, so
-   `make logs | grep -c …` never terminates. And `grep -c` returning **0**
-   exits **1**, so the line that reports the correct answer reports it as a
-   failure to any `&&` chain.
+   `make logs | grep -c …` never terminates — the two lines above were run with
+   the sub-process killed after five seconds, which is not what the check says
+   and is the only way it answers at all. And **`grep -c` returning `0` exits
+   `1`**, so the line that reports the correct answer reports it as a failure
+   to any `&&` chain: the redaction check passes at exit 0 and the leak check
+   passes at exit **1**.
 3. **`.visits` IS NOT A KEY IN THIS DOCUMENT.** The check's jq line reads
    `.places[] | .visits | length` and expects `[1]`. `docs/PUBLIC-ENVELOPE.md`
    §3 — written at R5, three steps before this code — renamed that list to
