@@ -110,7 +110,7 @@ func Recover(log *slog.Logger) Middleware {
 					slog.String("panic", fmt.Sprint(p)),
 					slog.String("requestId", requestIDForRecover(w, r)),
 					slog.String("method", r.Method),
-					slog.String("path", r.URL.Path),
+					slog.String("path", LoggedPath(r)),
 					slog.String("stack", string(debug.Stack())),
 				)
 
@@ -208,7 +208,7 @@ func AccessLog(log *slog.Logger, quiet ...string) Middleware {
 				travellerID, route := facts.read()
 				attrs := []slog.Attr{
 					slog.String("method", r.Method),
-					slog.String("path", r.URL.Path),
+					slog.String("path", LoggedPath(r)),
 					slog.Int("status", sw.status),
 					slog.Int("bytes", sw.bytes),
 					slog.Int64("durationUs", time.Since(start).Microseconds()),

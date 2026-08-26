@@ -563,7 +563,7 @@ func logFailure(r *http.Request, log *slog.Logger, err error) {
 		log = slog.Default()
 	}
 	log.LogAttrs(r.Context(), slog.LevelError, "auth: the request failed",
-		slog.String("path", r.URL.Path),
+		slog.String("path", httpx.LoggedPath(r)),
 		slog.String("requestId", httpx.RequestIDFrom(r.Context())),
 		slog.String("err", err.Error()),
 	)
