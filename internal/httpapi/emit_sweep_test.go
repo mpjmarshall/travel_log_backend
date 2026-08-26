@@ -81,6 +81,11 @@ var bareBodies = map[string]string{
 	"internal/httpapi/photo_handlers.go:envelope": "logbook.Emit's own return value, on " +
 		"the half of M2.2's re-file that MINTED an occasion — two entities moved, so " +
 		"the phone cannot splice what it was not sent",
+	"internal/httpapi/public_handlers.go:envelope": "logbook.EmitPublic's own return " +
+		"value, on the public read. It normalises for the same reason logbook.Emit " +
+		"does and in two places the private document never reaches: `photos` is [] " +
+		"and never null when sharePhotos is off, and `walks[].points` is [] and " +
+		"never null when shareCoordinates is off",
 	"internal/httpapi/media_handlers.go:answer": "httpapi's own beginBody, built in this " +
 		"file; it is a local type and is only here because it is assembled across " +
 		"branches rather than in one literal",

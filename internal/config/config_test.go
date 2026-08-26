@@ -18,6 +18,11 @@ import (
 // notice the subject forgetting to read one. TestLoadNamesEveryVariableWhenTheEnvironmentIsEmpty
 // pins the count from the other side.
 //
+// AND A NINTH AT R8. PUBLIC_RATE_LIMIT_PER_MIN is the ceiling on the one
+// route with no identity at all, and it is a THIRD variable for the reason the
+// second is a second: it is not a credential attempt, so it needs its own
+// number AND its own bucket.
+//
 // EIGHT SINCE THE LIMITER FIX. TRAVELLER_RATE_LIMIT_PER_MIN is the
 // authenticated ceiling, and it is a SECOND variable rather than a second use
 // of AUTH_RATE_LIMIT_PER_MIN because the two bound different things: the
@@ -32,6 +37,7 @@ var allVars = []string{
 	"DB_MAX_IDLE_CONNS",
 	"AUTH_RATE_LIMIT_PER_MIN",
 	"TRAVELLER_RATE_LIMIT_PER_MIN",
+	"PUBLIC_RATE_LIMIT_PER_MIN",
 	"ARGON2_MAX_CONCURRENT",
 	"REQUEST_TIMEOUT",
 	"S3_INTERNAL_ENDPOINT",
@@ -57,6 +63,7 @@ func complete() map[string]string {
 		"DB_MAX_IDLE_CONNS":            "4",
 		"AUTH_RATE_LIMIT_PER_MIN":      "10",
 		"TRAVELLER_RATE_LIMIT_PER_MIN": "600",
+		"PUBLIC_RATE_LIMIT_PER_MIN":    "120",
 		"ARGON2_MAX_CONCURRENT":        "2",
 		"REQUEST_TIMEOUT":              "15s",
 		"S3_INTERNAL_ENDPOINT":         "http://minio:9000",
@@ -199,6 +206,7 @@ func TestLoadReadsEveryValueFromACompleteEnvironment(t *testing.T) {
 		DBMaxIdleConns:           4,
 		AuthRateLimitPerMin:      10,
 		TravellerRateLimitPerMin: 600,
+		PublicRateLimitPerMin:    120,
 		Argon2MaxConcurrent:      2,
 		RequestTimeout:           15 * time.Second,
 		S3InternalEndpoint:       "http://minio:9000",

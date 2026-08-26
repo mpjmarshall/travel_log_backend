@@ -203,9 +203,11 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		Places:         postgres.PlaceStore{DB: db},
 		Photos:         postgres.PhotoStore{DB: db},
 		Walks:          postgres.WalkStore{DB: db},
+		Public:         postgres.ShareReadStore{DB: db},
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),
+		PublicLimit:    httpx.NewLimiter(1000, nil),
 		// THE MEDIA GROUP IS PRESENT SO Mount COMES UP; NO LEG HERE TOUCHES
 		// IT. This file is about DEC-96's bounded answer to a request blocked
 		// on a lock, and the media routes are wired against the real

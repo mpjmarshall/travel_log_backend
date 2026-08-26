@@ -211,3 +211,63 @@ the proxy hop, and `X-Forwarded-For` client resolution. Until it lands the rate
 limiter keys on `RemoteAddr`, which is **correct for a direct connection and
 wrong the moment a proxy appears** — so the public read's limiter does not bind
 behind one. That is now a weakened limit rather than merely postponed TLS.
+
+---
+
+## 9. `GET /l/{token}` is the only unauthenticated route, and it ships at R8
+
+Until now every sentence in this file was about a stack nobody outside the
+machine could reach. That stops being true the first time somebody sends a
+share link, because **this is the only route in the API that answers without a
+bearer token**. Nine things follow, and each is a check a human with a device
+performs — nothing below is guarded by a leg.
+
+**UNTICKED, AND IT MUST STAY THAT WAY UNTIL SOMEBODY RUNS IT.**
+
+- [ ] **The limiter binds.** `PUBLIC_RATE_LIMIT_PER_MIN` is 120 by default,
+      per address, on its own bucket — and `httpx.ClientKey` keys on
+      `RemoteAddr`, so **behind a proxy it is one bucket for the whole
+      internet**. Twelve characters of `[a-z0-9]` is 59.5 bits, so enumeration
+      is not the threat; an unmetered public route on a 1 GiB box is. Do §8
+      first, or do not expose this route.
+- [ ] **The number is not 120 because anybody measured it.** It is untuned,
+      like the two ceilings beside it. Watch a real share page's request
+      pattern before trusting it — a page that fetches an envelope and then 96
+      images makes ONE request here, not 97, because the images go straight to
+      the bucket.
+- [ ] **Fifteen minutes is what the copy says.** §7 already carries it; what
+      R8 adds is that there is **no refresh path** — the reader cannot mint,
+      so the page must re-GET the envelope. If a share page is built and it
+      does not re-GET, the number is a promise the product cannot keep.
+- [ ] **The envelope is 61,503 bytes on the seeded log**, of which **68% is
+      presigned URLs** (41,664 characters for 96 photographs, plus 434 for the
+      cover). It is gzipped by the same middleware as every other route and no
+      leg asserts that for this one. Check the wire.
+- [ ] **`Cache-Control: no-store, private` and `Referrer-Policy: no-referrer`
+      must survive whatever sits in front.** They are set from the route table,
+      above the handler, so they are on the 404 too — but a proxy that strips
+      or rewrites response headers reopens exactly what they close: a cached
+      envelope keeps serving live media capabilities after 'Stop sharing'.
+      Verify with `curl -sSi` through the proxy, not against the container.
+- [ ] **The path must not reach any other log.** `httpx.LoggedPath` rewrites
+      `/l/{anything}` to `/l/[redacted]` at five sites inside this process.
+      **A reverse proxy's access log is not one of them.** Caddy logs the
+      request URI by default; a share token in `access.log` is the same leak
+      this repository spent a step closing. Configure that before the first
+      link goes out.
+- [ ] **And neither must a referrer.** `no-referrer` is what keeps the
+      presigned URL out of the NEXT origin's logs when a share page links
+      somewhere. It is inside the response this server writes; nothing checks
+      that a browser honoured it.
+- [ ] **Revoked and unknown must stay indistinguishable end to end.** They are
+      the same body and the same header set from this server, and equal work
+      inside it. A proxy that adds a timing difference, a WAF that answers
+      differently for a "known bad" token, or a CDN that caches one and not the
+      other reopens the oracle.
+- [ ] **There is still no way to revoke an already-minted photograph URL.**
+      Out of scope by decision and bounded by the presign lifetime. 'Stop
+      sharing' stops NEW ones at once; §7's sentence is the honest one.
+
+**And one thing this route does NOT change**: nothing here reclaims a media
+object, and the bucket is still not backed up. §4 and §5 are unchanged and both
+still apply.

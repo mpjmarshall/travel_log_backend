@@ -274,6 +274,70 @@ type ShareStore interface {
 	StopSharing(ctx context.Context, travellerID, tripID string) (Trip, int64, error)
 }
 
+// ErrNoShare is `GET /l/{token}` asking about a token nothing holds.
+//
+// IT IS ALSO WHAT A REVOKED LINK BECOMES, ONE LAYER UP AND NOT HERE. The store
+// answers the row regardless of `revoked_at` (PD-12, DEC-10) so that the
+// handler can do the SAME WORK for both and answer the same bytes: a handler
+// that returned early on "no row" but, for a revoked row, resolved the trip,
+// read three flags and minted a dozen URLs would be byte-identical and still a
+// clean oracle for "this token was once real" — which DEC-67's revoke-and-keep
+// design makes worth attacking, because every token ever issued is still a row.
+var ErrNoShare = errors.New("logbook: no such share link")
+
+// ShareLink is what a token resolves to, and it carries the revocation rather
+// than hiding it — see ErrNoShare.
+//
+// IT NAMES A TRAVELLER, WHICH IS THE WHOLE REASON THIS PORT IS SEPARATE. Every
+// other read in this API arrives with a traveller already resolved from a
+// bearer token; this one arrives with nothing, and the traveller comes OUT of
+// the lookup. `share_links_token_key` is a GLOBAL unique index on the digest
+// for exactly that reason.
+type ShareLink struct {
+	TravellerID string
+	TripID      string
+
+	// Revoked is `revoked_at IS NOT NULL`. H1's 'Stop sharing' and U1's own
+	// 'Stop' both write it, and the row stays (DEC-67).
+	Revoked bool
+}
+
+// PublicStore is the read behind `GET /l/{token}`, declared here and satisfied
+// by internal/postgres.
+//
+// IT IS ITS OWN PORT rather than two more methods on Store, on ShareStore's
+// precedent and for the reason stated there: the interface a handler is handed
+// says what that handler can reach. The public handler cannot read a whole
+// log, cannot write anything at all, and cannot mint a share link — and it is
+// the only handler in this API that no bearer token stands in front of, so
+// what it can reach is the question the whole step is about.
+//
+// TWO METHODS AND NOT ONE, AND THE SPLIT IS PD-12's. `ShareLink` is the
+// lookup and `PublicLog` is the work; keeping them apart is what lets the
+// handler do the identical amount of work for a revoked token and an unknown
+// one, and what lets a leg COUNT that rather than time it. One method
+// answering a whole envelope would decide the revocation question inside the
+// store, where nothing above it could arrange for the two cases to agree.
+//
+// THE COST OF TWO CALLS IS TWO TRANSACTIONS, AND IT IS WRITTEN DOWN RATHER
+// THAN HIDDEN: a link revoked in between serves one more envelope. That window
+// is the width of one indexed lookup, against a capability the same request
+// hands out for fifteen minutes (DEC-84) — so the race is dwarfed by the thing
+// it would be protecting, and one transaction would buy nothing while removing
+// the seam PD-12's leg counts on.
+type PublicStore interface {
+	// ShareLink resolves a token DIGEST (DEC-85) to a link, revoked or not.
+	// ErrNoShare is a digest nothing holds.
+	ShareLink(ctx context.Context, tokenHash []byte) (ShareLink, error)
+
+	// PublicLog reads the rows docs/PUBLIC-ENVELOPE.md §5 allows: the trip,
+	// its cities in travel order, the places it visited with only its own
+	// visits inside them, its photographs, and its walks that were not
+	// discarded. The three sharing flags come back on the Trip; what they
+	// REMOVE is logbook.EmitPublic's, not this method's.
+	PublicLog(ctx context.Context, travellerID, tripID string) (PublicSource, error)
+}
+
 // ErrNoMediaObject is a media route asking about a digest this traveller has
 // never begun. It is a sentinel rather than a bare error because the handler
 // has to tell "no such object" (a 404) from "the bucket is unreachable" (a

@@ -1198,3 +1198,107 @@ cannot see it: the row exists, the bytes do not.
 
 `logbookFormatVersion` is still 2, the emitted document still has the same six
 keys, and the ETag's emitter half is still 2. What moved is the SURFACE.
+
+---
+
+# R8 — the public share read, and the two client items it creates
+
+**`GET /l/{token}` ships.** Nothing in the Travel Log app calls it: it is the
+route a share PAGE would call, and there is no page — `next_slice` says so.
+What is here is (a) the two things this route makes true about code the client
+already has, and (b) the document's shape, for whoever builds that page.
+
+## R8.1 THE FIFTEEN-MINUTE WINDOW IS A HARD WALL, AND FOUR SENTENCES OF COPY DEPEND ON IT
+
+Already carried at §R2 as DEC-84's number; what R8 adds is **why it cannot be
+refreshed**.
+
+The envelope EMBEDS signed URLs. The reader holds no credential, and
+`POST /v1/media/mint` is authenticated — **so there is no refresh path an
+unauthenticated reader can take.** Fifteen minutes runs from the moment the
+envelope was generated, not from the moment a picture was fetched.
+
+- **Whoever renders a share page must re-GET `/l/{token}`** to refresh them. A
+  page that loads once and lives in a tab shows broken pictures after fifteen
+  minutes and there is nothing on the page that can fix it.
+- The response carries `Cache-Control: no-store, private`, so a correct cache
+  will not serve a stale envelope — which is the same fact from the other side.
+- **The honest client sentence, unchanged:** stopping a share stops new links at
+  once, and a photograph already loaded may keep working for up to fifteen
+  minutes. D1, D2, D3's *"the shared link stops working"* and H1 are the four
+  places it belongs.
+
+## R8.2 `log_image.dart`'s "drawn, not spoken" PREMISE IS NOW FALSE
+
+This is the one item in this document that asks the client to **re-examine a
+decision it argued carefully and correctly** — under a premise this repository
+has just removed.
+
+`ui/log_image.dart` draws a silent plate on any image error, and the client's
+own record justifies the silence in terms:
+
+> today every asset is bundled and declared, so a failure plate means a
+> **build defect** rather than something a user can act on
+
+**A presigned URL makes that untrue.** Expiry is routine, not a defect, and it
+IS something a user can act on — the action is "reload the page", or on the
+phone "pull to refresh". A silent plate turns a fifteen-minute deadline into a
+picture that is simply missing, with nothing anywhere saying why.
+
+It is the same class as DEC-47's `ImageProvider`-keyed-by-object-id item at
+§R2, and both should be done in one pass, because both are about the client
+learning that **a picture can now fail for a reason a user can act on**. The
+decision to re-take is *"drawn, not spoken"*, not the plate itself.
+
+## R8.3 The public envelope is NOT the private document, and `days` is the rename
+
+If you build the share page, decode this with its own codec. It is six keys and
+none of them is `logbook`:
+
+```
+version   trip   cities   places   photos   walks
+```
+
+- **`traveller` is not in it.** A link is a capability over ONE TRIP, not over
+  a log.
+- **`trip.coverUrl` and `photos[].url` REPLACE `coverAsset` and `asset`** — a
+  signed URL rather than a 64-hex object id, because the reader cannot mint.
+- **`places[].days` REPLACES `places[].visits`, and the rename is the point.**
+  In the private document `visits` means EVERY visit of that place, across
+  every trip. Here it would mean this trip's only. A distinct name is what
+  stops somebody restoring `tripId` and `id` "for symmetry" and republishing
+  another trip's history. A `day` is two keys: `at` and `note`.
+- **`shareLinkId`, `sharePhotos`, `shareNotes`, `shareCoordinates` and `shared`
+  are not in it.** They are the owner's settings; the reader's business is what
+  they can see.
+- **Every list is always present and always a list.** `sharePhotos: false`
+  makes `photos` an empty array, never a missing key and never `null`.
+
+What the three switches remove, exactly:
+
+| off | what leaves the envelope |
+|---|---|
+| `sharePhotos` | `photos` becomes `[]` **and** `trip.coverUrl` becomes `null`. No URL is minted at all. |
+| `shareNotes` | `places[].days[].note` **and** `photos[].caption`, both to `null`. |
+| `shareCoordinates` | `places[].coordinates`, `photos[].coordinates`, `photos[].accuracyMetres` to `null`, **and** `walks[].points` to `[]`. **`cities[].centre` STAYS.** |
+
+**One switch governs a place's pin and a photograph's coordinate both**
+(DEC-108). If H1 ever splits them it is a fourth flag with its own sentence, and
+the measurement to inherit is in `docs/PUBLIC-ENVELOPE.md`: 31 of one trip's 96
+photographs carry a coordinate, which is a movement trace rather than a map.
+
+## R8.4 A revoked link and one that never existed are the same 404
+
+Byte for byte, header for header. Do not write a share page that tells the
+reader *"this link has been turned off"* — the server does not say that, and it
+must not, because saying it would tell anybody guessing tokens which of their
+guesses were once real.
+
+The body is `{"code":"not_found"}`, which is the same word every unknown id in
+this API answers with.
+
+## R8.5 Nothing in this step changed the log's shape
+
+`logbookFormatVersion` is still 2, the emitted private document still has the
+same six keys, and the ETag's emitter half is still 2. What moved is the
+SURFACE, and the surface a Travel Log build calls is unchanged.

@@ -1364,7 +1364,227 @@ python3 scripts/check-plan.py docs/plan-v7.json               exit=0
   0 failure(s); 66 ids; 23 routes; 8 steps; 14 deletions
 ```
 
+## R8 — the public read, and a plan whose own acceptance check is stale against its own document
+
+**Commits, named rather than described** — six of code and tests, and this
+record. Six of the nine inherited sections in this file do not state their
+commit; nothing added here repeats that.
+
+```
+6ae1a70  the capability out of the log, at every site that prints a path
+7f73afa  the public envelope as an allowlist, and a mint that does not happen
+707317e  the three row rules, and a lookup that is the only branch
+e1d39f7  GET /l/{token} — one row, three fields, none of them derivable
+423b1ac  the public envelope at fixture scale, where the numbers were measured
+b5a06d1  the public read in the running container, with no credential at all
+```
+
+Every mutation below was applied at `b5a06d1`'s tree, run, and reverted; every
+number is one that was printed. M1 and M2 were run at `6ae1a70` before the fix
+landed, which is what makes them reds rather than predictions.
+
+### Every mutation run in this step
+
+| # | the mutation | the leg that went red | what it printed |
+|---|---|---|---|
+| M1 | route only `AccessLog` through `LoggedPath` | 4 of the 5 log legs; `access log` stays green; the AST sweep names all three files | `recover wrote no redacted path at all` |
+| M2 | delete a provocation, keep the positive control | that site's leg | `access log wrote no redacted path at all — the leg is not measuring anything` |
+| M2b | delete the provocation AND the positive control | **nothing — it passes** | `ok travellog/internal/httpapi` |
+| M3 | strip `Visit.note`, not `Photo.caption` | the notes leg, on caption | `photos[].caption = "the last light on the ridge" with shareNotes off` |
+| M4 | strip `Walk.points`, keep the photograph's coordinate | the coordinates leg, on BOTH names | `photos[].accuracyMetres survived: 12 — it is half of the same fact` |
+| M5 | mint the URLs and drop them from the body | the COUNT leg, **and nothing else in the tree** | `sharePhotos is off and 1 signed URLs were minted` |
+| M6 | `places` scoped to the trip's CITIES | the places leg, on BOTH names | `the public envelope carries wishlist-pin, a WISHLIST place` |
+| M7 | `places` filtered, the VISITS inside them not | the visits leg — **and the places leg does NOT** | `fushimi-inari published with 2 visits, want 1` |
+| M7b | M7 at FIXTURE SCALE | the fixture-scale visits leg | `fushimi-inari published with 28 visits, want 1 — a link shared for one trip is publishing 27 visits belonging to three others` |
+| M8 | a discarded track is published | the walks leg, on the walk AND the count | `a DISMISSED walk is published` |
+| M9 | mint at the PRIVATE lifetime | the call-site TTL leg | `a URL in the PUBLIC envelope expires in 120s — that is the PRIVATE lifetime` |
+| M10 | revoked: do the work, discard it | the WORK leg — **and the byte-identical half does NOT** | `a revoked token cost {lookups:1 reads:1 mints:2} and an unknown one cost {lookups:1 reads:0 mints:0}` |
+| M11 | revoked: answer a different status | the byte-identical leg | `revoked = 409, unknown = 404, want 404 and 404` |
+| M12 | the row loses `NoStore` | the header leg, on the 200 AND the 404 | `Cache-Control = "", want "no-store, private"` |
+| M13 | the row takes `LimitCredential` | the sign-in leg | `six public reads at a ceiling of two produced no 429` |
+| M14 | the emitter grows a `plan` key | the key walk AND both goldens | `the document has a level the allowlist does not name` |
+| M14b | M14 with **both goldens regenerated to match it** | the key walk, **still** | `places[] carries: [cityId coordinates days id name plan] / allowed: [cityId coordinates days id name]` |
+| M15 | three shipped compose defaults changed at once | **nothing** | `make check exit=0, 0 FAIL lines` |
+
+### THE PAIR THAT PROVES ONE LEG CANNOT SEE THE OTHER'S DEFECT
+
+M6 and M7 are the whole argument for PD-07 being two rules and not one.
+
+```
+M6  places scoped to the CITIES     -> TestThePublicEnvelopeCarriesOnlyTheSharedTripsOwnPlaces  FAIL
+                                       TestAPublishedPlaceCarriesOnlyTheSharedTripsVisits       PASS
+M7  the visits inside them unfiltered -> TestThePublicEnvelopeCarriesOnlyTheSharedTripsOwnPlaces PASS
+                                       TestAPublishedPlaceCarriesOnlyTheSharedTripsVisits       FAIL
+```
+
+v7.0's plan had the first leg only. Under M7 it is green, every key in the
+document is on the allowlist, and `fushimi-inari` is publishing **twenty-seven
+other trips' visits** with their dates and their notes.
+
+### THE ONE THAT SAID THE MOST: M5, AND IT REDDENS EXACTLY ONE LEG IN THE TREE
+
+Run against the whole module, not one package:
+
+```
+$ go test ./... -count=1
+--- FAIL: TestSharePhotosOffMintsNothingAtAll
+    sharePhotos is off and 1 signed URLs were minted.
+
+$ go test ./internal/logbook/ -count=1 -v | grep -c -- '--- FAIL'
+1
+```
+
+One of 972 legs. That is the whole argument for **counting mints rather than
+inspecting a body**: presigning is offline arithmetic, so a URL minted and
+dropped leaves no trace in any log, in any response, and in any other
+assertion this repository can make.
+
+### THE POSITIVE CONTROL, MEASURED IN BOTH DIRECTIONS
+
+The plan asks for "drop the positive control from a log leg and empty the log —
+the leg must still fail". Both halves were run:
+
+```
+provocation deleted, control PRESENT   --- FAIL: …/access_log
+                                       "wrote no redacted path at all — the leg
+                                        is not measuring anything"
+provocation deleted, control REMOVED   ok  travellog/internal/httpapi
+```
+
+The second line is the defect the control exists to prevent, printed.
+
+### A MUTATION THAT CANNOT REDDEN, AND THE REASON IS ITSELF THE GUARD
+
+`TestTheThreeBudgetsAreThreeBudgets` derives its expectation from
+`route.Limit`. Mutating that very field (M13) moves the expectation with it, so
+the leg stays green — it is asserting that the wiring agrees with the table,
+which is exactly what it is for and exactly why it cannot see a wrong table.
+What catches M13 is the leg that pins the **behaviour** instead:
+`TestExhaustingThePublicReadDoesNotRefuseASignIn`, which knows nothing about
+the field.
+
+This is the fourth such finding in the plan (R4, R5, R6, R7 each had one) and
+the second where the reason is worth writing down rather than the fact.
+
+### THE ACCEPTANCE CHECK, VERBATIM, WITH EXIT CODES — AND THREE THINGS IN IT ARE WRONG
+
+```
+$ make check && make slice && make seed
+  make check    exit=0
+  make slice    exit=2      <- refuses the live project, BY DESIGN, since R4
+
+$ COMPOSE_PROJECT_NAME=travellog-r8arc API_PORT=8091 POSTGRES_PORT=5471 \
+    MINIO_PORT=9011 S3_PUBLIC_BASE_URL=http://127.0.0.1:9011 make slice
+  exit=0       every phase green — record gate arc testdb healthcheck
+               316 ok lines in the run, from 284 assert lines in the source
+
+$ COMPOSE_PROJECT_NAME=travellog-r8seed API_PORT=8092 POSTGRES_PORT=5472 \
+    MINIO_PORT=9012 S3_PUBLIC_BASE_URL=http://127.0.0.1:9012 make seed
+  exit=0       284 photos, 49 visits, 1 share link
+
+$ make logs | grep -c '/l/\[redacted\]'      # killed after 5s — see below
+  7            exit=0       <- the positive control
+$ make logs | grep -c 'kyoto-9f2a'
+  0            exit=1       <- the answer is right and the EXIT CODE is failure
+
+$ curl -sSi http://127.0.0.1:8092/l/kyoto-9f2a | grep -iE 'cache-control|referrer-policy'
+  Cache-Control: no-store, private
+  Referrer-Policy: no-referrer                exit=0
+
+$ curl -sS http://127.0.0.1:8092/l/kyoto-9f2a |
+    jq '[.places[] | select(.id=="fushimi-inari") | .days | length]'
+  [1]                                          exit=0
+```
+
+**THREE DEFECTS IN THE CHECK ITSELF, AND ALL THREE ARE THE PLAN'S OWN RULE 10.**
+
+1. **`make slice` cannot pass as written on a machine with a live stack**, and
+   that is R4's own DEC-92 guard doing its job. Five acceptance checks in this
+   plan read this way; R5, R6 and R7 each recorded it.
+2. **`make logs` FOLLOWS.** The target is `docker compose logs -f api`, so
+   `make logs | grep -c …` never terminates — the two lines above were run with
+   the sub-process killed after five seconds, which is not what the check says
+   and is the only way it answers at all. And **`grep -c` returning `0` exits
+   `1`**, so the line that reports the correct answer reports it as a failure
+   to any `&&` chain: the redaction check passes at exit 0 and the leak check
+   passes at exit **1**.
+3. **`.visits` IS NOT A KEY IN THIS DOCUMENT.** The check's jq line reads
+   `.places[] | .visits | length` and expects `[1]`. `docs/PUBLIC-ENVELOPE.md`
+   §3 — written at R5, three steps before this code — renamed that list to
+   `days`, with the reason spelled out: `visits` in the private document means
+   EVERY visit of that place and here it would mean this trip's only, which is
+   the same word for two different sets. **Run verbatim it answers `[0]`**, and
+   `[0]` and `[28]` are both wrong in the same direction:
+
+   ```
+   jq '[… | .visits | length]'   ->  [0]     the plan's line
+   jq '[… | .days   | length]'   ->  [1]     the document's key
+   ```
+
+   The plan is stale against a document the plan itself commissioned.
+
+### THE PUBLIC ENVELOPE, MEASURED ON THE SEEDED LOG
+
+```
+$ curl -sS http://127.0.0.1:8092/l/kyoto-9f2a | wc -c
+61503
+$ jq '{photos, places, cities, walks, urlChars, coverLen, lats}'   # shortened
+  96 photographs   5 places   5 cities   1 walk
+  41,664 characters of photograph URLs, and 434 for the cover
+  5 lat-bearing objects in the whole document — the five city centres
+```
+
+**Sixty-eight per cent of the envelope is presigned URLs.** STO-MIN-12 put one
+at roughly 394 characters; measured against real MinIO it is **434**.
+
+**And the five `lat`s are the scalpel on real data.** `autumn-crossing`'s
+`shareCoordinates` is `false` — the client's own default, because a pin on your
+accommodation has to be turned on every time — so the only coordinates in a
+document holding 5 places, 96 photographs and a track are the five city
+centres. 31 of those 96 photographs carry one in the database.
+
+### WHAT THE CONTAINER SAYS THAT NO GO TEST DOES
+
+```
+A42  the cover URL the envelope embedded fetched 200 with NO credential,
+     and the bytes came back byte for byte, at X-Amz-Expires=900
+A45  a revoked token and one nobody ever held: the same body AND the same
+     header set, compared minus X-Request-Id and Date
+     {"code":"not_found"}
+     Cache-Control: no-store, private / Content-Length: 20 /
+     Content-Type: application/json / HTTP/1.1 404 Not Found /
+     Referrer-Policy: no-referrer / Vary: Accept-Encoding
+     — with the revoked ROW still in share_links (DEC-67)
+A46  6 lines carrying /l/[redacted], 0 carrying the token
+```
+
+### The numbers, re-derived here rather than copied
+
+```bash
+env -u TEST_DATABASE_URL go test ./... -count=1 -v | grep -c -- '--- PASS'  # 713
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'     # 972
+grep -cE '^\t\t\{http\.Method' internal/httpapi/routes.go                   # 22 (+ /healthz = 23)
+ls migrations/*.up.sql | wc -l                                             # 4
+grep -cE '^\tCode[A-Za-z]+ +Code = ' internal/httpx/errors.go               # 13
+grep -cE '^\s*assert_(eq|contains) ' scripts/slice-arc.sh                   # 284
+grep -oE '\$\{[A-Z_0-9]+:-[^}]*\}' deploy/docker-compose.yml | sort -u | wc -l  # 25
+```
+
+**The database tier is now a 259-leg gap** — 713 without `TEST_DATABASE_URL`
+and 972 with it. It was 250 at R7.
+
+---
+
 ## What is still guarded by nothing
+
+**SUPERSEDED AT R8, AND KEPT RATHER THAN EDITED.** `CLAUDE.md`'s R8 section
+carries the CONSOLIDATED list — every entry from VS2 to R8 in one place, with a
+verdict on each and a measured count for the largest class (twenty-five shipped
+default values that no leg pins). This section is VS8's snapshot and two of its
+entries went stale without anybody noticing: "the four unimplemented lists have
+no round trip" was closed by R4's `make seed`, and `ORDER BY id` is asserted for
+more than `trip_cities` since R4. **Read the consolidated one.** This stays
+because a list that rewrites itself is a list nobody can date.
 
 Carried forward so the list does not shorten by silence, with what VS8 moved
 out of it.
@@ -1440,11 +1660,11 @@ out of it.
 ## Running any of this again
 
 ```bash
-make check                 # the gate                                 (~7s)
+make check                 # the gate                                 (~25s with a database)
 make test-db               # prints the export line make check needs for the DB tier
 make test-s3               # prints the export line the integration tier needs
 make test-image            # the scratch image and the named volume   (~45s warm)
-make slice                 # all five phases below, 80 assertions      (~2m)
+make slice                 # all five phases below, 316 ok lines       (~3m)
 scripts/slice-arc.sh arc   # one phase; also record, gate, testdb, healthcheck
 
 # the integration tier — real MinIO, behind a build tag AND behind the variable
@@ -1455,19 +1675,22 @@ TEST_S3_ENDPOINT=... go test -tags integration ./internal/media/ -count=1
 was three commits stale before anybody noticed:
 
 ```bash
-TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 872 at R6
-                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 649, no database
+TEST_DATABASE_URL=... go test ./... -count=1 -v | grep -c -- '--- PASS'   # 972 at R8
+                       go test ./... -count=1 -v | grep -c -- '--- PASS'   # 713, no database
 TEST_S3_ENDPOINT=...   go test -tags integration ./internal/media/ -count=1 -v \
                          | grep -c -- '--- PASS'                           # 39 = 27 unit + 12 integration
 ```
 
-The **223-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
+The **259-leg** gap between the first two is what `TEST_DATABASE_URL` buys, and
 the DB tier **skips and says so** without it. It was 133 at `90f6a68`, R3
 measured 154, R4 measured 164, R5 measured 196, and R6 adds 27 more — the two
 new stores and the fixture-scale visits and D2 legs, every one of which needs a
 real database because a foreign key that fires on a DELETE is not a thing a twin
 has. R5's own 32 were the D3 cascade legs, the share store and the two
-revocations, against a partial unique index and a column default.
+revocations, against a partial unique index and a column default. R7 measured
+250 and R8 adds 9: the public read's row rules, at a purpose-built fixture and
+at fixture scale, where "which rows did the SELECT return" is the whole
+question.
 
 `make slice` **destroys the named volume** — `docker compose down -v` is its
 first step, because a 201 against a database that already held the row proves

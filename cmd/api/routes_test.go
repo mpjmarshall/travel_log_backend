@@ -20,6 +20,7 @@ import (
 
 	"travellog/internal/auth"
 	"travellog/internal/config"
+	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
 	"travellog/internal/media"
 )
@@ -28,6 +29,7 @@ func wiredConfig() config.Config {
 	return config.Config{
 		AuthRateLimitPerMin:      60,
 		TravellerRateLimitPerMin: 600,
+		PublicRateLimitPerMin:    120,
 		Argon2MaxConcurrent:      4,
 		// MEDIA_MAX_BYTES's FLOOR RATHER THAN ITS DEPLOYED VALUE. Mount
 		// refuses a zero, so this has to be set for the mux to come up at all
@@ -37,15 +39,25 @@ func wiredConfig() config.Config {
 	}
 }
 
-// THE TWO CEILINGS COME FROM THE TWO VARIABLES, AND NOT FROM EACH OTHER. A
+// THE THREE CEILINGS COME FROM THE THREE VARIABLES, AND NOT FROM EACH OTHER. A
 // swapped pair is invisible to every other leg in this package: the routes are
 // still mounted, the statuses are still right, and the credential routes would
 // be running at 600 a minute against a 64 MiB-per-attempt Argon2 surface while
-// a phone met a ceiling of 10. Spending from the two limiters is the only way
-// to see it from outside internal/httpx.
-func TestTheTwoCeilingsComeFromTheirOwnVariables(t *testing.T) {
-	cfg := config.Config{AuthRateLimitPerMin: 3, TravellerRateLimitPerMin: 7}
-	credential, traveller := limiters(cfg)
+// a phone met a ceiling of 10. Spending from the limiters is the only way to
+// see it from outside internal/httpx.
+//
+// THREE SINCE R8 (PD-09), and the third one is where the arithmetic and the
+// INSTANCE are both load-bearing: `GET /l/{token}` is unauthenticated and is
+// not a credential attempt, so a build that handed it the credential limiter
+// would answer every leg in this package identically and lock everybody out of
+// signing in the first time somebody read a shared trip twelve times.
+func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
+	cfg := config.Config{
+		AuthRateLimitPerMin:      3,
+		TravellerRateLimitPerMin: 7,
+		PublicRateLimitPerMin:    11,
+	}
+	credential, traveller, public := limiters(cfg)
 
 	spend := func(l *httpx.Limiter) int {
 		served := 0
@@ -63,9 +75,15 @@ func TestTheTwoCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	if got := spend(traveller); got != 7 {
 		t.Errorf("the traveller limiter served %d requests at TRAVELLER_RATE_LIMIT_PER_MIN=7, want 7", got)
 	}
-	if credential == traveller {
-		t.Error("the two ceilings are one limiter, so the credential routes and the " +
-			"authenticated ones spend the same allowance")
+	if got := spend(public); got != 11 {
+		t.Errorf("the public limiter served %d requests at PUBLIC_RATE_LIMIT_PER_MIN=11, want 11", got)
+	}
+	// THREE DISTINCT INSTANCES, ASSERTED PAIRWISE. Two variables feeding one
+	// limiter would pass all three counts above on the first spend and share
+	// one bucket for ever after.
+	if credential == traveller || credential == public || traveller == public {
+		t.Error("two of the three ceilings are one limiter, so routes that were given " +
+			"separate budgets are spending the same allowance")
 	}
 }
 
@@ -359,5 +377,51 @@ func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 			"raise one and the other has to move, or config accepts a handler "+
 			"budget the connection will not honour",
 			config.MaxRequestTimeout, writeTimeout)
+	}
+}
+
+// THE SHIPPED SURFACE IS TWENTY-THREE ROUTES AND THE TWENTY-THIRD IS
+// `/healthz`.
+//
+// TWO NUMBERS THAT LOOK LIKE A DISAGREEMENT AND ARE NOT, WHICH IS WORTH A LEG
+// BECAUSE THIS PROJECT HAS ALREADY HAD ONE REAL COUNT DISAGREEMENT HERE — R6's
+// unanchored `grep -c http.Method` answered 22 against 21 rows, because the
+// sentence documenting the grep matched it. `httpapi.Routes()` holds
+// 22 rows and the plan's table holds 23: the extra one is this package's
+// liveness probe, which is deliberately not in the API's table because a
+// liveness probe is not part of the API.
+//
+// SO THE CLAIM IS ASSERTED WHERE IT IS TRUE — over the MUX THE SERVER SERVES,
+// which is the only place both facts exist at once — and it is asserted by
+// ASKING THE MUX rather than by counting anything: every one of the 23 has to
+// resolve to its own pattern.
+func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
+	mux := wiredMux(t, quiet())
+
+	// THE PUBLIC READ IS NAMED HERE RATHER THAN LOOPED OVER, because what this
+	// leg is for is that it REACHES THE SERVER `docker compose up` STARTS. A
+	// route green in `go test` and 404 in the running container is the gap the
+	// arc exists to close, and this is its cheapest half.
+	req := httptest.NewRequest(http.MethodGet, "/l/mnpqrstuvwxy", nil)
+	if _, pattern := mux.Handler(req); pattern != "GET /l/{token}" {
+		t.Errorf("GET /l/{token} resolves to %q on the server's own mux — the one "+
+			"route in this API that anybody on the internet can reach is not mounted",
+			pattern)
+	}
+
+	// AND `/healthz` IS STILL BESIDE IT, unauthenticated and unlimited, which
+	// is the twenty-third row of the plan's table and the one that is not
+	// internal/httpapi's.
+	if _, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, healthzPath, nil)); pattern == "" {
+		t.Errorf("%s resolves to no pattern", healthzPath)
+	}
+
+	const inTheAPITable = 22
+	if got := len(httpapi.Routes(httpapi.Deps{})); got != inTheAPITable {
+		t.Errorf("httpapi.Routes() holds %d rows, want %d — with /healthz "+
+			"that is the 23 the plan's route table names. Re-derive rather than "+
+			"remember:\n"+
+			"    grep -cE '^\\t\\t\\{http\\.Method' internal/httpapi/routes.go",
+			got, inTheAPITable)
 	}
 }

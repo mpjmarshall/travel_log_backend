@@ -36,13 +36,11 @@
 //     and sign-in, so one person browsing a shared trip locks everybody out of
 //     signing in.
 //
-// AND `Limit` IS HONESTLY EARLY. On every row in this table it is still a pure
-// function of `Auth`, which is exactly the shape `Mutating` was in when it was
-// deleted below. The difference that makes it not decoration is that Mount
-// READS it: a wrong value here changes which ceiling a route wears, where a
-// wrong `Mutating` changed nothing at all. The row that cannot be derived
-// arrives in R8, and the leg that catches a wrong one today is
-// TestEveryRouteWearsTheCeilingItsTableRowNames.
+// AND `Limit` IS NO LONGER DERIVABLE, WHICH IS THE ROW R8 SAID WOULD ARRIVE.
+// This block used to end "the row that cannot be derived arrives in R8"; it is
+// `GET /l/{token}`, which is `Auth: false` and is NOT `LimitCredential`. Three
+// values cannot come out of one boolean, and the leg that catches a wrong one
+// is TestEveryRouteWearsTheCeilingItsTableRowNames.
 //
 // /healthz is unauthenticated and unlimited and is deliberately NOT in this
 // table — it is cmd/api's, because a liveness probe is not part of the API.
@@ -67,13 +65,29 @@ const (
 	// can only be applied INSIDE RequireTraveller, because the traveller is on
 	// the context only after the credential has been resolved.
 	LimitTraveller
+
+	// LimitPublic is R8's third budget, and it is the row this file predicted
+	// in its own words: "the day an unauthenticated route arrives that is not
+	// a credential attempt, this becomes a sixth field rather than a
+	// derivation." That day is `GET /l/{token}`.
+	//
+	// IT KEYS ON THE ADDRESS BECAUSE THERE IS NOTHING ELSE. The request
+	// carries no credential, so there is no identity to key on — and it is not
+	// a credential ATTEMPT, so LimitCredential is both the wrong number and
+	// the wrong BUCKET: sharing the instance would mean one person browsing a
+	// shared trip locks everybody out of signing in.
+	LimitPublic
 )
 
 func (l Limit) String() string {
-	if l == LimitTraveller {
+	switch l {
+	case LimitTraveller:
 		return "traveller"
+	case LimitPublic:
+		return "public"
+	default:
+		return "credential"
 	}
-	return "credential"
 }
 
 // Route is one row of the table.
@@ -115,11 +129,12 @@ type Route struct {
 	NoStore bool
 }
 
-// Routes is the whole API surface at R7: two credential routes, one
+// Routes is the whole API surface at R8: two credential routes, one
 // conditional read, one whole-state write, D3's cascade, T5's city, C1's pin,
 // D2's removal, H1's three share writes, U1's pencil, the one revocation
-// surface, the three media routes, R7's four photograph routes and N1's one
-// walk route.
+// surface, the three media routes, R7's four photograph routes, N1's one walk
+// route — and R8's public read, which is the only row with no bearer token in
+// front of it.
 //
 // THE COUNT IS RE-DERIVED AND NOT CARRIED, and the command is anchored so it
 // cannot match its own mention:
@@ -242,5 +257,39 @@ func Routes(deps Deps) []Route {
 		{http.MethodPost, "/v1/media", beginMedia(deps), true, LimitTraveller, true},
 		{http.MethodPost, "/v1/media/{id}/commit", commitMedia(deps), true, LimitTraveller, false},
 		{http.MethodPost, "/v1/media/mint", mintMedia(deps), true, LimitTraveller, true},
+
+		// R8's ONE ROW, AND IT IS THE ONLY ROUTE IN THIS TABLE WITH NO BEARER
+		// TOKEN IN FRONT OF IT. Everything about it is a decision about what a
+		// stranger holding a URL can see, and all three of its fields differ
+		// from every other row.
+		//
+		// `Auth: false` — the reader is nobody. The traveller comes OUT of the
+		// token lookup, through a GLOBAL unique index on the digest, because
+		// the request arrives with none in hand.
+		//
+		// `LimitPublic` — see the type. Under the derivation this table used
+		// to make, an unauthenticated route inherited the CREDENTIAL ceiling
+		// and its bucket, so one person reading a shared trip would 429
+		// everybody's sign-in.
+		//
+		// `NoStore: true` — AND THIS IS THE ROW THE FLAG WAS ADDED FOR
+		// (PD-09). Every other capability response in this table carries an
+		// `Authorization` header, so RFC 9111 §3.5 forbids a SHARED cache from
+		// storing it. Nothing reaches this one: a 200 with an ETag and no
+		// `Cache-Control` is heuristically cacheable by any intermediary, and
+		// a cached envelope keeps handing out live media capabilities after
+		// 'Stop sharing' for as long as it survives — which unbounds the very
+		// window DEC-84 fixed at fifteen minutes. `Referrer-Policy:
+		// no-referrer` is the other half: a share page fetches these URLs and
+		// then links somewhere, and without it the capability travels in a
+		// `Referer` header into the next origin's access log.
+		//
+		// THE PATH IS `/l/{token}` AND NOT `/v1/…`, WHICH IS DEC-10's SHAPE
+		// AND THE CLIENT'S. `Trip.shareLinkId` is twelve characters and H1
+		// renders `travellog.app/l/<token>` — a URL somebody reads off a
+		// screen and types. A version prefix would make it longer for a
+		// negotiation this route cannot have: a stranger sends no
+		// `X-Logbook-Format` and has nothing to do with a 406.
+		{http.MethodGet, "/l/{token}", publicShare(deps), false, LimitPublic, true},
 	}
 }

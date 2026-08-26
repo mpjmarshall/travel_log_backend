@@ -178,7 +178,7 @@ func RateLimitBy(l *Limiter, log *slog.Logger, keyName string, key func(*http.Re
 			if !held {
 				log.LogAttrs(r.Context(), slog.LevelError, "the rate limiter could not key this request",
 					slog.String("key", keyName),
-					slog.String("path", r.URL.Path),
+					slog.String("path", LoggedPath(r)),
 					slog.String("requestId", RequestIDFrom(r.Context())),
 				)
 				WriteError(w, r, CodeInternal)
@@ -187,7 +187,7 @@ func RateLimitBy(l *Limiter, log *slog.Logger, keyName string, key func(*http.Re
 			if !l.Allow(k) {
 				log.LogAttrs(r.Context(), slog.LevelWarn, "rate limited",
 					slog.String(keyName, k),
-					slog.String("path", r.URL.Path),
+					slog.String("path", LoggedPath(r)),
 					slog.String("requestId", RequestIDFrom(r.Context())),
 				)
 				WriteError(w, r, CodeRateLimited)

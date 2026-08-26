@@ -1,0 +1,12 @@
+(root): cities photos places trip version walks
+cities[]: centre country id name
+cities[].centre: lat lng
+cities[].country: code name
+photos[]: accuracyMetres caption cityId coordinates id placeId takenAt url
+photos[].coordinates: lat lng
+places[]: cityId coordinates days id name
+places[].coordinates: lat lng
+places[].days[]: at note
+trip: cityIds coverUrl end id name start summary
+walks[]: cityId distanceKm id points recordedOn
+walks[].points[]: lat lng

@@ -1322,6 +1322,192 @@ phase_arc() {
 	assert_eq 1 "$(in_psql "select count(*) from walks" | tr -d '[:space:]')" \
 		"  walks in the log — a PUT on a client-minted key is idempotent, so six writes to one id are one row"
 
+	########################################################################
+	# A41-A46: R8's ONE ROUTE, IN THE RUNNING CONTAINER.
+	#
+	# THIS IS THE ONLY PLACE `GET /l/{token}` IS EXERCISED WITH NO CREDENTIAL
+	# AT ALL, through the real chain, against real PostgreSQL and real MinIO.
+	# `go test` can say what the handler answers; only this can say that the
+	# capability it embeds FETCHES, that the two cache headers survive the
+	# whole middleware chain, and that the token never reaches the container's
+	# stdout.
+	#
+	# THE FIXTURE THE ARC HAS ALREADY BUILT IS WHAT MAKES IT WORTH READING:
+	# ARC_TRIP carries a committed cover (A21), a photograph filed to a pin
+	# with an occasion (A36), and a walk that N1's 'Discard' was pressed on
+	# (A39) — so "a dismissed track is not published" is asserted against a
+	# track somebody actually discarded through the API rather than a row
+	# somebody set a column on.
+	########################################################################
+	local public_token="publicshare1" public_wish="arc-wish"
+
+	step "A41: the trip gets a city, a place nobody has been to, a live track and a link"
+	# THE CITY, ATTACHED — a public envelope's `cities` is the trip's own
+	# itinerary in trip_cities.ordinal order, and ARC_TRIP has had none since
+	# A8 asserted `cityIds: []`.
+	code="$(req -X PUT "$base/v1/cities/$arc_r7_city" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$ARC_TRIP" '{name:"Busan",attachTo:$t}')")"
+	assert_eq 200 "$code" "PUT /v1/cities/$arc_r7_city with attachTo"
+
+	# A WISHLIST PIN IN THE SAME CITY. It is the row PD-07 is about: every key
+	# on it is on the allowlist, and it is somewhere the traveller has never
+	# been.
+	code="$(req -X PUT "$base/v1/places/$public_wish" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg c "$arc_r7_city" \
+			'{cityId:$c,name:"Somewhere to go",coordinates:{lat:35.1000,lng:129.0200}}')")"
+	assert_eq 200 "$code" "PUT /v1/places/$public_wish"
+	assert_eq 0 "$(in_psql "select count(*) from visits where place_id='$public_wish'" | tr -d '[:space:]')" \
+		"  visits on the wishlist pin — none, which is what makes it a wishlist pin"
+
+	# A SECOND WALK, NOT DISCARDED. arc-walk-1 is dismissed by now, so without
+	# this the `walks` list would be empty for two different reasons at once
+	# and neither assertion below would mean anything.
+	code="$(req -X PUT "$base/v1/walks/arc-walk-2" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$ARC_TRIP" --arg c "$arc_r7_city" \
+			'{tripId:$t,cityId:$c,recordedOn:"2027-09-29T00:00:00.000Z",distanceKm:2.5,
+			  points:[{lat:35.0975,lng:129.0104},{lat:35.0981,lng:129.0117}]}')")"
+	assert_eq 200 "$code" "PUT /v1/walks/arc-walk-2"
+	# `dismissed::text` AND NOT `dismissed`: psql's -tA prints a bare boolean as
+	# `t`, which is the same correction A10's `||'|'||` already carries.
+	assert_eq true "$(in_psql "select dismissed::text from walks where id='$arc_walk'" | tr -d '[:space:]')" \
+		"  arc-walk-1 is still discarded — the row the envelope must not publish"
+
+	code="$(req -X POST "$base/v1/trips/$ARC_TRIP/share" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$public_token" '{token:$t}')")"
+	assert_eq 201 "$code" "POST /v1/trips/$ARC_TRIP/share"
+	assert_eq true "$(jqbody .shared)" "  shared (DEC-91)"
+	assert_eq 0 "$(in_psql "select count(*) from share_links where share_links::text like '%$public_token%'" | tr -d '[:space:]')" \
+		"  rows of share_links holding the plaintext (DEC-85)"
+
+	step "A42: GET /l/$public_token — NO Authorization header, and the allowlist"
+	# NO -H "$auth_header". That is the whole point of the route and of this
+	# line: everything below is what a stranger with a URL can see.
+	code="$(req "$base/l/$public_token")"
+	assert_eq 200 "$code" "GET /l/{token} with no credential at all"
+	# DEC-51's TWO HEADERS, BY PRESENCE (PD-09). This route carries no
+	# Authorization header, so RFC 9111 §3.5's shared-cache prohibition — the
+	# thing silently protecting GET /v1/logbook — does not reach it.
+	assert_eq 'no-store, private' "$(header Cache-Control)" "  Cache-Control"
+	assert_eq 'no-referrer' "$(header Referrer-Policy)" "  Referrer-Policy"
+
+	assert_eq "cities photos places trip version walks" \
+		"$(jqbody -c 'keys | join(" ")')" "  the six top-level keys"
+	assert_eq null "$(jqbody -c '.traveller')" \
+		"  .traveller — a link is a capability over ONE TRIP and not over a log"
+	assert_eq null "$(jqbody -c '.logbook')" \
+		"  .logbook — this is a different shape from the private document"
+	assert_eq null "$(jqbody -c '.trip.shareLinkId')" \
+		"  .trip.shareLinkId — the capability is not handed back in the body reading it"
+	assert_eq null "$(jqbody -c '.trip.sharePhotos')" "  .trip.sharePhotos — the owner's setting"
+	assert_eq 2 "$(jqbody .version)" "  the format version"
+
+	# THE ROW RULES, IN THE CONTAINER (PD-07).
+	assert_eq 0 "$(jqbody "[.places[] | select(.id==\"$public_wish\")] | length")" \
+		"  the wishlist place in the envelope — none. Every key on it is on the allowlist; the ROW is the leak."
+	assert_eq 1 "$(jqbody "[.places[] | select(.id==\"$arc_r7_pin\")] | length")" \
+		"  the place the trip DID visit — a filter that empties the list satisfies the line above"
+	assert_eq 0 "$(jqbody '[.places[] | select(.visits)] | length')" \
+		"  places carrying a visits key — none: a Visit carries a tripId and an id, and days is what replaces it"
+	# THE DAY COUNT IS READ OFF THE ROWS RATHER THAN WRITTEN AS A LITERAL. What
+	# the envelope publishes is this trip's occasions at that pin, and how many
+	# the arc has made by now is a fact about the steps above rather than about
+	# this one — a literal here is a number somebody edits when A36 changes.
+	assert_eq "$(in_psql "select count(*) from visits where place_id='$arc_r7_pin' and trip_id='$ARC_TRIP'" | tr -d '[:space:]')" \
+		"$(jqbody '.places[0].days | length')" "  the days on the published place"
+	assert_eq 1 "$(jqbody '.walks | length')" "  walks — the discarded one is not published"
+	assert_eq arc-walk-2 "$(jqbody -r '.walks[0].id')" "  and it is the one that was not discarded"
+	assert_eq null "$(jqbody -c '.walks[0].name')" \
+		"  .walks[].name — not on the allowlist: a walk's name is a note in everything but its column"
+	assert_eq null "$(jqbody -c '.photos[0].tripId')" \
+		"  .photos[].tripId — every photograph here is on the shared trip"
+
+	# THE EMBEDDED CAPABILITY IS REAL, AND IT IS MINTED AT THE PUBLIC LIFETIME
+	# (DEC-84). Fifteen minutes rather than two, because this envelope has
+	# nothing to re-mint with: POST /v1/media/mint is authenticated.
+	local public_cover
+	public_cover="$(jqbody -r '.trip.coverUrl')"
+	assert_contains "$public_cover" 'X-Amz-Expires=900' \
+		"  the cover URL's lifetime — 900s, and 120 would be the phone's own"
+	code="$(curl -sS -o "$WORK/fetched" -D /dev/null -w '%{http_code}' "$public_cover")"
+	assert_eq 200 "$code" "GET the URL the envelope embedded, with no credential"
+	assert_eq "$ARC_PHOTO" "$(cat "$WORK/fetched")" "  the bytes that came back, byte for byte"
+
+	step "A43: shareCoordinates — the city centre is the one that survives"
+	# ARC_TRIP's switch is FALSE, which is the client's own default and not an
+	# accident: a pin on your accommodation is not something to hand out by
+	# link, so it has to be actively turned on every time (A10 asserts it).
+	code="$(req "$base/l/$public_token")"
+	assert_eq 200 "$code" "GET /l/{token} with coordinates off"
+	assert_eq null "$(jqbody -c '.places[0].coordinates')" "  places[].coordinates"
+	assert_eq null "$(jqbody -c '.photos[0].coordinates')" "  photos[].coordinates (DEC-108: ONE switch)"
+	assert_eq null "$(jqbody -c '.photos[0].accuracyMetres')" "  photos[].accuracyMetres"
+	assert_eq 0 "$(jqbody '.walks[0].points | length')" "  walks[].points"
+	assert_eq "[]" "$(jqbody -c '.walks[0].points')" "  and it is [] rather than null"
+	# THE SCALPEL. `[.. | objects | select(has("lat"))] | length` counts every
+	# lat-bearing object at any depth, so this is a claim about the WHOLE
+	# document rather than about the fields named above.
+	assert_eq 1 "$(jqbody '[.. | objects | select(has("lat"))] | length')" \
+		"  lat-bearing objects in the whole document — the ONE city centre, which is what a map opens on"
+
+	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP/share" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{shareCoordinates:true}')")"
+	assert_eq 200 "$code" "PUT share {shareCoordinates:true}"
+	code="$(req "$base/l/$public_token")"
+	assert_eq 200 "$code" "GET /l/{token} with coordinates on"
+	assert_eq 2 "$(jqbody '.walks[0].points | length')" "  walks[].points, back"
+	assert_contains "$(jqbody -c '.places[0].coordinates')" '"lat"' "  places[].coordinates, back"
+
+	step "A44: sharePhotos off — the array is EMPTY, not missing, and the cover goes"
+	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP/share" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{sharePhotos:false}')")"
+	assert_eq 200 "$code" "PUT share {sharePhotos:false}"
+	code="$(req "$base/l/$public_token")"
+	assert_eq 200 "$code" "GET /l/{token} with photographs off"
+	assert_eq "[]" "$(jqbody -c '.photos')" \
+		"  .photos — an EMPTY ARRAY: a reader that branches on presence has three states to handle"
+	assert_eq null "$(jqbody -c '.trip.coverUrl')" "  .trip.coverUrl"
+	assert_eq 1 "$(jqbody '.places | length')" "  places — still there, because a pin is not a photograph"
+	assert_eq 1 "$(jqbody '.walks | length')" "  walks — still there"
+	code="$(req -X PUT "$base/v1/trips/$ARC_TRIP/share" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{sharePhotos:true}')")"
+	assert_eq 200 "$code" "PUT share {sharePhotos:true} — back on for A45"
+
+	step "A45: a REVOKED token and one nobody ever held are one answer (PD-12, DEC-10)"
+	local unknown_answer unknown_headers revoked_answer revoked_headers
+	code="$(req "$base/l/abcdefghjkmn")"
+	assert_eq 404 "$code" "GET /l/{a token nobody ever held}"
+	unknown_answer="$(body)"
+	unknown_headers="$(tr -d '\r' <"$WORK/head" | grep -viE '^(x-request-id|date):' | sort)"
+
+	code="$(req -X DELETE "$base/v1/trips/$ARC_TRIP/share" -H "$auth_header")"
+	assert_eq 200 "$code" "DELETE /v1/trips/$ARC_TRIP/share — H1's 'Stop sharing'"
+	assert_eq 1 "$(in_psql "select count(*) from share_links where trip_id='$ARC_TRIP' and revoked_at is not null" | tr -d '[:space:]')" \
+		"  the revoked row SURVIVES (DEC-67) — which is what makes the answer below worth asserting"
+
+	code="$(req "$base/l/$public_token")"
+	assert_eq 404 "$code" "GET /l/{the revoked token}"
+	revoked_answer="$(body)"
+	revoked_headers="$(tr -d '\r' <"$WORK/head" | grep -viE '^(x-request-id|date):' | sort)"
+	assert_eq "$unknown_answer" "$revoked_answer" \
+		"the two bodies — a different one is a plain oracle for which tokens once existed"
+	assert_eq "$unknown_headers" "$revoked_headers" "the two header sets, minus X-Request-Id and Date"
+	assert_contains "$revoked_answer" 'not_found' \
+		"  and it is the vocabulary's word rather than an empty body"
+
+	step "A46: the capability never reached the container's stdout (PD-08)"
+	# THE POSITIVE CONTROL FIRST. `grep -c` returning 0 passes against a log
+	# that was never written just as well as against a redacted one, and an
+	# absence assertion is the easiest kind to write so that it cannot fail.
+	local api_log redacted_lines
+	api_log="$("${COMPOSE[@]}" logs api 2>&1)"
+	redacted_lines="$(printf '%s' "$api_log" | grep -c '/l/\[redacted\]' || true)"
+	if [ "$redacted_lines" -lt 1 ]; then
+		fail "the api log carries no '/l/[redacted]' at all, so the absence assertion below is measuring nothing"
+	fi
+	ok "lines carrying /l/[redacted] = $redacted_lines"
+	assert_eq 0 "$(printf '%s' "$api_log" | grep -c "$public_token" || true)" \
+		"lines carrying the share token itself"
+
 	step "A40: DELETE /v1/photos/$arc_photo_id — 204, a new ETag, and the count falls by one"
 	filed_before="$(in_psql "select count(*) from photos where place_id is not null" | tr -d '[:space:]')"
 	local visits_before
