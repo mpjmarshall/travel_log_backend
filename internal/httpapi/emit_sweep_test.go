@@ -70,6 +70,17 @@ var bareBodies = map[string]string{
 	"internal/httpapi/city_handlers.go:written.City": "a logbook.City, which carries no " +
 		"list field at all — measured, a bare one marshals with no list key in it — so " +
 		"an EmitCity would be the empty forwarding method DEC-62 warns against",
+	"internal/httpapi/photo_handlers.go:photo": "a logbook.Photo, which carries no " +
+		"list field at all — measured, a bare one marshals with no list key in it — so " +
+		"an EmitPhoto would be the empty forwarding method DEC-62 warns against. " +
+		"TestACityATravellerAndAPhotoCarryNoListAndThereforeNeedNoEmitter asserts it " +
+		"on the STRUCT and TestAPhotoAnswerCarriesNoListKeyAndThereforeNeedsNoEmitter " +
+		"asserts it on the bytes this route writes",
+	"internal/httpapi/photo_handlers.go:refiled.Photo": "the same logbook.Photo, on the " +
+		"half of M2.2's re-file that moved one entity and is therefore a splice",
+	"internal/httpapi/photo_handlers.go:envelope": "logbook.Emit's own return value, on " +
+		"the half of M2.2's re-file that MINTED an occasion — two entities moved, so " +
+		"the phone cannot splice what it was not sent",
 	"internal/httpapi/media_handlers.go:answer": "httpapi's own beginBody, built in this " +
 		"file; it is a local type and is only here because it is assembled across " +
 		"branches rather than in one literal",

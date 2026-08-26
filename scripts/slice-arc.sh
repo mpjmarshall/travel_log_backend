@@ -1076,8 +1076,14 @@ phase_arc() {
 	# AND THE MOVE IS THE HONEST FIX RATHER THAN A DELETION. The claim is that
 	# Emit normalises an EMPTY list to `[]` and never to `null` — the shape
 	# `logbook.g.dart` throws on — so it needs a list that is actually empty.
-	# A31 creates a city, so `cities` stopped being one; `walks` is still
-	# untouched by anything in this arc and demonstrates exactly the same rule.
+	# A31 creates a city, so `cities` stopped being one; `walks` is untouched
+	# by anything in this arc UP TO HERE and demonstrates exactly the same rule.
+	#
+	# "UP TO HERE" IS NEW AT R7 AND IS THE HONEST FORM. R7's A35-A40 create a
+	# walk, so this claim is now about a POINT in the arc rather than about the
+	# whole of it — which is why that block runs after this step rather than
+	# before, and which the next step to write a walk earlier has to read
+	# before moving anything.
 	assert_eq "[]" "$(jqbody -c '.logbook.walks')" "walks — [] and not null, on the write path too"
 	# AND THE CITY SURVIVES THE CASCADE, which is what `cities` is now good for
 	# and is a stronger claim than the one it carried. Nothing from `trips`
@@ -1110,6 +1116,231 @@ phase_arc() {
 	after_delete="$(header ETag)"
 	code="$(req -X DELETE "$base/v1/trips/$second_trip" -H "$auth_header")"
 	assert_eq 200 "$code" "the SECOND DELETE of the same trip"
+	assert_eq "$after_delete" "$(header ETag)" "  its ETag — nothing changed, so nothing moved"
+
+	########################################################################
+	# A35-A39: R7's FIVE ROUTES, IN THE RUNNING CONTAINER.
+	#
+	# THEY RUN AFTER A29, AND THE ORDER WAS DECIDED BY A LEG GOING RED.
+	# A29 asserts `walks` comes back as `[]` and not `null` on the write path,
+	# and R6 MOVED that claim onto `walks` with the sentence "walks is still
+	# untouched by anything in this arc". R7 is the step that stops being true
+	# of: this block creates one. Running afterwards keeps A29's leg exactly as
+	# R6 wrote it, and it also makes these five routes run against a log that
+	# has just been cascaded, which is the harder case rather than the easier
+	# one.
+	#
+	# THE ROWS LIVE ON `$ARC_TRIP` AND AT A PIN OF THEIR OWN, for the second
+	# half of the same reason: `photos_trip_fk` and `walks_trip_fk` are CASCADE,
+	# so anything on `$second_trip` would be gone by now, and a visit on
+	# `$arc_pin` would contradict A29's "every one of them was on the deleted
+	# trip".
+	########################################################################
+	local arc_photo_id="arc-ph-1" arc_walk="arc-walk-1"
+	local arc_r7_city="arc-busan" arc_r7_pin="arc-gamcheon"
+
+	step "A35: PUT /v1/photos/$arc_photo_id — a create, and it arrives UNFILED"
+	# The city and the pin R7's own steps use, so nothing here disturbs the
+	# shape A29 asserts about.
+	code="$(req -X PUT "$base/v1/cities/$arc_r7_city" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{name:"Busan",country:{code:"KR",name:"South Korea"},
+		                  centre:{lat:35.1796,lng:129.0756}}')")"
+	assert_eq 200 "$code" "PUT /v1/cities/$arc_r7_city"
+	code="$(req -X PUT "$base/v1/places/$arc_r7_pin" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg c "$arc_r7_city" \
+			'{cityId:$c,name:"Gamcheon",coordinates:{lat:35.0975,lng:129.0104}}')")"
+	assert_eq 200 "$code" "PUT /v1/places/$arc_r7_pin"
+
+	code="$(req -X PUT "$base/v1/photos/$arc_photo_id" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$ARC_TRIP" --arg c "$arc_r7_city" --arg a "$ARC_DIGEST" \
+			'{tripId:$t,cityId:$c,takenAt:"2027-09-28T09:00:00.000Z",asset:$a}')")"
+	assert_eq 200 "$code" "PUT /v1/photos/$arc_photo_id"
+	assert_eq null "$(jqbody -c .placeId)" "  .placeId — a photograph arrives UNFILED"
+	assert_eq null "$(jqbody -c .visitId)" "  .visitId — and both columns or neither"
+	assert_contains "$(header ETag)" 'W/"2-' "  the ETag"
+	# A BARE Photo IS SAFE AND THIS IS THE MEASUREMENT, on the wire rather than
+	# on a Go value: `Photo` carries no list field, so there is no nil slice for
+	# the marshaller to write as `null` and no EmitPhoto to add.
+	assert_eq 0 "$(jqbody '[to_entries[] | select(.value | type == "array")] | length')" \
+		"  list keys in the answer — none, which is why there is no EmitPhoto"
+
+	step "A35b: an UNCOMMITTED asset is refused by name, where photos_asset_fk cannot see it"
+	code="$(req -X PUT "$base/v1/photos/arc-ph-2" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$ARC_TRIP" --arg c "$arc_r7_city" --arg a "$ARC_UNCOMMITTED" \
+			'{tripId:$t,cityId:$c,takenAt:"2027-09-28T09:01:00.000Z",asset:$a}')")"
+	assert_eq 422 "$code" "PUT a photograph naming an object that was begun and never uploaded"
+	assert_eq asset "$(jqbody -r .field)" "  the field it names"
+	assert_eq 0 "$(in_psql "select count(*) from photos where id='arc-ph-2'" | tr -d '[:space:]')" \
+		"  the row after the refusal — an FK cannot see uploaded_at, so this check is Go's"
+
+	step "A36: POST /v1/photos/$arc_photo_id/refile — the occasion the client named"
+	# THE MINT PATH, which answers the WHOLE ENVELOPE because two entities
+	# moved: the photograph AND the place, whose ordinals were rewritten.
+	code="$(req -X POST "$base/v1/photos/$arc_photo_id/refile" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_r7_pin" \
+			'{placeId:$p,visitId:"arc-visit-gam-1",visitAt:"2027-09-28T09:00:00.000Z"}')")"
+	assert_eq 200 "$code" "refile that OPENS an occasion"
+	assert_eq 2 "$(jqbody .version)" "  the format version — this is an ENVELOPE and not a bare photograph"
+	assert_eq "arc-visit-gam-1" \
+		"$(in_psql "select visit_id from photos where id='$arc_photo_id'" | tr -d '[:space:]')" \
+		"  the occasion the client named"
+	assert_eq "$arc_r7_pin" \
+		"$(in_psql "select place_id from photos where id='$arc_photo_id'" | tr -d '[:space:]')" \
+		"  the pin — placeId and visitId move together, always"
+
+	# A SECOND OCCASION AT THE SAME PLACE ON THE SAME TRIP, and then a re-file
+	# naming EACH in turn. That is the whole of "the server validates and does
+	# not choose": a server picking for itself agrees with the client on ONE of
+	# them by luck and cannot agree on both.
+	code="$(req -X POST "$base/v1/photos/$arc_photo_id/refile" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_r7_pin" \
+			'{placeId:$p,visitId:"arc-visit-gam-2",visitAt:"2027-09-28T19:00:00.000Z"}')")"
+	assert_eq 200 "$code" "refile that opens a SECOND occasion the same day"
+	for occasion in arc-visit-gam-1 arc-visit-gam-2; do
+		code="$(req -X POST "$base/v1/photos/$arc_photo_id/refile" -H "$auth_header" -H "$JSON_CT" \
+			-d "$(body_json --arg p "$arc_r7_pin" --arg v "$occasion" '{placeId:$p,visitId:$v}')")"
+		assert_eq 200 "$code" "refile to the EXISTING occasion $occasion"
+		assert_eq null "$(jqbody -c .logbook)" "  .logbook — absent, because only the photograph moved"
+		assert_eq "$occasion" \
+			"$(in_psql "select visit_id from photos where id='$arc_photo_id'" | tr -d '[:space:]')" \
+			"  the occasion it landed on"
+	done
+	# THE ORDINALS ARE REWRITTEN IN `at` DESC, which is what the client reads
+	# as lastVisited.
+	assert_eq "arc-visit-gam-2" \
+		"$(in_psql "select id from visits where place_id='$arc_r7_pin' order by ordinal limit 1" | tr -d '[:space:]')" \
+		"  ordinal 0 — newest first"
+
+	step "A36b: a re-file that names no occasion is refused, and the server does not pick one"
+	code="$(req -X POST "$base/v1/photos/$arc_photo_id/refile" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_r7_pin" '{placeId:$p}')")"
+	assert_eq 422 "$code" "refile with no visitId"
+	assert_eq visitId "$(jqbody -r .field)" "  the field it names"
+	# AND A PLACE IN ANOTHER CITY. $arc_pin is in $arc_city and the photograph
+	# was taken in $arc_r7_city.
+	code="$(req -X POST "$base/v1/photos/$arc_photo_id/refile" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_pin" '{placeId:$p,visitId:"arc-visit-elsewhere",
+		                                     visitAt:"2027-09-28T09:00:00.000Z"}')")"
+	assert_eq 422 "$code" "refile to a place in ANOTHER city"
+	assert_eq placeId "$(jqbody -r .field)" "  the field it names"
+	assert_eq "$arc_r7_pin" \
+		"$(in_psql "select place_id from photos where id='$arc_photo_id'" | tr -d '[:space:]')" \
+		"  the filing after two refusals — asserted on the ROW, not on the status"
+
+	step "A37: PUT /v1/photos/$arc_photo_id with ONLY a caption — the filing does not move"
+	# DEC-89, SAF-MAJ-5. THIS IS THE ONE THE THREE STANDING GUARDS CANNOT SEE:
+	# under the whole-state convention this body nulls both columns, and the
+	# dangling check, the place-without-occasion query and the pair-agreement
+	# assertion all answer zero afterwards.
+	local filed_before
+	filed_before="$(in_psql "select count(*) from photos where place_id is not null" | tr -d '[:space:]')"
+	code="$(req -X PUT "$base/v1/photos/$arc_photo_id" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{caption:"the alleys above the harbour"}')")"
+	assert_eq 200 "$code" "PUT with only a caption"
+	assert_eq "$arc_r7_pin" "$(jqbody -r .placeId)" "  .placeId in the ANSWER"
+	assert_eq "arc-visit-gam-2" "$(jqbody -r .visitId)" "  .visitId in the ANSWER"
+	assert_eq "$filed_before" \
+		"$(in_psql "select count(*) from photos where place_id is not null" | tr -d '[:space:]')" \
+		"  THE COUNT THAT MUST NOT FALL, whole-log, after a caption-only write"
+	assert_eq 0 "$(in_psql "select count(*) from photos where (place_id is null) <> (visit_id is null)" | tr -d '[:space:]')" \
+		"  half-filed photographs — 0, and it is 0 under the defect too"
+	# AND AN EMPTY CAPTION CLEARS THE NOTE RATHER THAN STORING ''.
+	code="$(req -X PUT "$base/v1/photos/$arc_photo_id" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{caption:"   "}')")"
+	assert_eq 200 "$code" "PUT with a whitespace caption"
+	assert_eq null "$(jqbody -c .caption)" "  .caption — NULL and never the empty string"
+	assert_eq 1 "$(in_psql "select count(*) from photos where id='$arc_photo_id' and caption is null" | tr -d '[:space:]')" \
+		"  the column — photos_caption_present_ck is the guarantee under it"
+
+	step "A38: POST /v1/photos/snooze — three ids, one of them gone, ONE version bump"
+	local version_before
+	version_before="$(in_psql "select logbook_version from travellers" | tr -d '[:space:]')"
+	code="$(req -X POST "$base/v1/photos/snooze" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg p "$arc_photo_id" \
+			'{photoIds:[$p,"arc-ph-gone-1","arc-ph-gone-2"],until:"2027-10-19T00:00:00.000Z"}')")"
+	assert_eq 200 "$code" "POST /v1/photos/snooze"
+	assert_eq 1 "$(jqbody '.photos | length')" "  the rows it wrote — the two unknown ids are SKIPPED"
+	assert_eq $((version_before + 1)) "$(in_psql "select logbook_version from travellers" | tr -d '[:space:]')" \
+		"  ONE version bump for the whole group"
+	assert_eq "$filed_before" \
+		"$(in_psql "select count(*) from photos where place_id is not null" | tr -d '[:space:]')" \
+		"  the count that must not fall, after a snooze"
+
+	step "A38b: a snooze that matches nothing answers [] and moves no version"
+	version_before="$(in_psql "select logbook_version from travellers" | tr -d '[:space:]')"
+	code="$(req -X POST "$base/v1/photos/snooze" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{photoIds:["arc-ph-gone-1"],until:"2027-10-19T00:00:00.000Z"}')")"
+	assert_eq 200 "$code" "a snooze matching nothing"
+	# `jq -c` RENDERS A JSON NULL AS THE FOUR CHARACTERS `null`, so this tells
+	# `[]` from `null` — the whole distinction, and the one the client throws on.
+	assert_eq "[]" "$(jqbody -c .photos)" "  .photos — [] and NEVER null"
+	assert_eq "$version_before" "$(in_psql "select logbook_version from travellers" | tr -d '[:space:]')" \
+		"  logbook_version — a write that wrote nothing moves nothing"
+
+	step "A39: PUT /v1/walks/$arc_walk — the track survives both of N1's controls"
+	code="$(req -X PUT "$base/v1/walks/$arc_walk" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json --arg t "$ARC_TRIP" --arg c "$arc_r7_city" \
+			'{tripId:$t,cityId:$c,recordedOn:"2027-09-28T00:00:00.000Z",distanceKm:6.4,
+			  points:[{lat:35.0975,lng:129.0104},{lat:35.0981,lng:129.0117},
+			          {lat:35.0996,lng:129.0129}]}')")"
+	assert_eq 200 "$code" "PUT /v1/walks/$arc_walk"
+	assert_eq 3 "$(jqbody '.points | length')" "  the track it was given"
+	assert_eq null "$(jqbody -c .name)" "  .name — a new walk has none, which is what puts it on N1"
+
+	# N1's DISCARD AND N1's 'NAME IT', EACH SENDING WHAT THE CONTROL SENDS.
+	# Under the whole-state convention either body writes `points = '[]'`, and
+	# `walks_points_array_ck` does not refuse it because an empty array IS an
+	# array.
+	code="$(req -X PUT "$base/v1/walks/$arc_walk" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{dismissed:true}')")"
+	assert_eq 200 "$code" "PUT with ONLY {dismissed:true}"
+	assert_eq 3 "$(jqbody '.points | length')" "  .points in the answer — non-zero, never null"
+	assert_eq true "$(jqbody .dismissed)" "  .dismissed"
+	assert_eq 3 "$(in_psql "select jsonb_array_length(points) from walks where id='$arc_walk'" | tr -d '[:space:]')" \
+		"  the COLUMN after N1's Discard — a day that has passed cannot be re-recorded"
+	code="$(req -X PUT "$base/v1/walks/$arc_walk" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{name:"Gamcheon and back"}')")"
+	assert_eq 200 "$code" "PUT with ONLY {name}"
+	assert_eq 3 "$(jqbody '.points | length')" "  .points after a NAME write"
+	assert_eq "Gamcheon and back" "$(jqbody -r .name)" "  the name"
+
+	step "A39b: an empty track and an over-long one are both refused NAMING points"
+	code="$(req -X PUT "$base/v1/walks/$arc_walk" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(body_json '{points:[]}')")"
+	assert_eq 422 "$code" "PUT with points: []"
+	assert_eq points "$(jqbody -r .field)" "  the field it names"
+	# 501 POINTS, WELL INSIDE THE 1 MiB BODY CEILING — about 21 KB — so this is
+	# ValidateWalk answering and not http.MaxBytesReader, which would carry no
+	# field at all (DEC-93, DEC-106).
+	code="$(req -X PUT "$base/v1/walks/$arc_walk" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(jq -nc '{points: [range(501) | {lat:35.0975123,lng:129.0104567}]}')")"
+	assert_eq 422 "$code" "PUT with 501 points"
+	assert_eq points "$(jqbody -r .field)" "  the field it names, and NOT a body-too-large"
+	code="$(req -X PUT "$base/v1/walks/$arc_walk" -H "$auth_header" -H "$JSON_CT" \
+		-d "$(jq -nc '{points: [range(500) | {lat:35.0975123,lng:129.0104567}]}')")"
+	assert_eq 200 "$code" "PUT with 500 points — the acceptance half of the pair"
+	assert_eq 1 "$(in_psql "select count(*) from walks" | tr -d '[:space:]')" \
+		"  walks in the log — a PUT on a client-minted key is idempotent, so six writes to one id are one row"
+
+	step "A40: DELETE /v1/photos/$arc_photo_id — 204, a new ETag, and the count falls by one"
+	filed_before="$(in_psql "select count(*) from photos where place_id is not null" | tr -d '[:space:]')"
+	local visits_before
+	visits_before="$(in_psql "select count(*) from visits where place_id='$arc_r7_pin'" | tr -d '[:space:]')"
+	code="$(req -X DELETE "$base/v1/photos/$arc_photo_id" -H "$auth_header")"
+	assert_eq 204 "$code" "DELETE /v1/photos/$arc_photo_id"
+	assert_contains "$(header ETag)" 'W/"2-' "  the ETag on a 204 — the phone has a deletion to stamp"
+	assert_eq 0 "$(in_psql "select count(*) from photos where id='$arc_photo_id'" | tr -d '[:space:]')" "  the row"
+	assert_eq $((filed_before - 1)) \
+		"$(in_psql "select count(*) from photos where place_id is not null" | tr -d '[:space:]')" \
+		"  the count that must not fall — a delete lowers it by a KNOWN amount"
+	assert_eq "$visits_before" \
+		"$(in_psql "select count(*) from visits where place_id='$arc_r7_pin'" | tr -d '[:space:]')" \
+		"  the occasions — a photograph does not own the occasion it was filed to"
+	# THE REPEAT IS A SUCCESS AND MOVES NOTHING (DEC-103).
+	local after_delete
+	after_delete="$(header ETag)"
+	code="$(req -X DELETE "$base/v1/photos/$arc_photo_id" -H "$auth_header")"
+	assert_eq 204 "$code" "the SECOND DELETE of the same photograph"
 	assert_eq "$after_delete" "$(header ETag)" "  its ETag — nothing changed, so nothing moved"
 
 	step "A30: DELETE /v1/auth/session — the token stops working, and a typo'd scope is refused"

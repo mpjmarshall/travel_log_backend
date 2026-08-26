@@ -1000,3 +1000,201 @@ written first.
 
 `logbookFormatVersion` is still 2, the emitted document still has the same six
 keys, and the ETag's emitter half is still 2. What moved is the SURFACE.
+
+---
+
+# Added at R7 — M2's note, D1's delete, N1's two controls, and M2.2's 'Change'
+
+Five routes. Four of them are methods you already have; the fifth,
+`refilePhoto`, changes signature — §11 above already said so and this is what
+it changes to.
+
+## R7.1 The five routes, and what each answers
+
+```
+POST   /v1/photos/snooze          200  {"photos":[…]}   + ETag
+PUT    /v1/photos/{id}            200  a Photo          + ETag
+DELETE /v1/photos/{id}            204  no body          + ETag
+POST   /v1/photos/{id}/refile     200  a Photo, OR the WHOLE ENVELOPE
+PUT    /v1/walks/{id}             200  a Walk           + ETag
+```
+
+**There is no `DELETE /v1/walks/{id}`,** and there is not going to be one until
+a sheet says what deleting a walk means. `dismissWalk` is `PUT /v1/walks/{id}`
+with `{"dismissed": true}` and the track survives, which is what N1 already
+promises and what D2's sheet promises on both of its branches.
+
+## R7.2 `{"caption": null}` DOES NOT CLEAR A NOTE — send `{"caption": ""}`
+
+**This is the one thing in this section that will silently do nothing if you
+get it wrong.**
+
+`setPhotoCaption(photoId, null)` is M2's cleared note, and the obvious
+encoding — `{"caption": null}` — is read by the server as **"leave the caption
+alone"**. It is not a server bug and it is not fixable in the type: measured on
+go1.26, `encoding/json` cannot tell a JSON `null` from an absent key for a
+field that carries three states, so both arrive as "not sent".
+
+**Send the empty string.** The server trims it and stores NULL, which is
+exactly what your own `setPhotoCaption` does with `(caption ?? '').trim()`.
+
+```dart
+// M2's note sheet, saving
+await api.put('/v1/photos/$id', {'caption': caption ?? ''});
+```
+
+The answer comes back with `"caption": null`, which is the state M2 draws
+'Write a note' for.
+
+**The same trap applies to every nullable field on every write in this API** —
+`summary`, `coverAsset`, `plan`, `start`, `end`, `name` on a walk. Today no
+control clears any of them, which is why this is the only one written out. The
+day one does, the answer is an explicit sentinel in the body and not a change
+to the wire format.
+
+## R7.3 `PUT /v1/photos/{id}` CANNOT move a photograph's pin, by design
+
+The body has **no `placeId` and no `visitId`**. Send them and they are ignored.
+
+That is deliberate and it is the fix for a defect worth knowing about: under a
+whole-state convention a caption-only PUT would null both columns, and nothing
+anywhere — not a dangling-reference check, not a half-filed check — can see a
+photograph that has silently lost the place it was taken at.
+
+**The pin moves through `POST /v1/photos/{id}/refile` and through nothing
+else.** `DELETE /v1/places/{id}` clears it, which is D2, and that is the whole
+list.
+
+The fields the PUT does own: `tripId`, `cityId`, `takenAt`, `asset`,
+`caption`, `coordinates`, `accuracyMetres`, `filedLater`. **Send only the ones
+you are changing** — every absent key is left alone.
+
+## R7.4 `refilePhoto` sends `{placeId, visitId, visitAt}` — and the server does
+not choose
+
+**Today** (`logbook.dart:425`) you pick the occasion yourself:
+
+```dart
+final existing = place.visitsOn(photo.tripId).firstOrNull;
+```
+
+Keep doing exactly that, and **send what you picked**:
+
+```dart
+POST /v1/photos/ph-133/refile
+{"placeId": "nishiki", "visitId": "v-nishiki-3"}                  // existing
+{"placeId": "nishiki", "visitId": "<fresh>", "visitAt": "…Z"}     // new
+```
+
+- `visitId` is **required**. A body without it is `422 {"field":"visitId"}`.
+  The server will not pick one for you, and the reason is in your own fixture:
+  `nishiki` holds four occasions on `japan-2026` at **the same instant**, so
+  there is nothing for a server to pick by.
+- `visitAt` is required **only when the id is new**, and it is
+  `photo.takenAt` — the value your own `refilePhoto` already mints the visit
+  with. If the id already exists, `visitAt` is IGNORED: an occasion is shared,
+  and re-timing one would move `lastVisited` for every other photograph filed
+  there.
+- The server derives the visit's `tripId` from the photograph. Do not send it.
+
+**THE ANSWER HAS TWO SHAPES AND YOU MUST READ WHICH.** If the occasion already
+existed, one entity moved and you get a bare `Photo` to splice. If you minted
+one, the PLACE changed too — it gained a visit and every one of its ordinals
+was rewritten newest-first — so you get the **whole envelope**, exactly as
+`PUT /v1/cities/{id}` with `attachTo` does.
+
+```dart
+final body = jsonDecode(response.body);
+if (body['logbook'] != null) {
+  replaceWholeLog(body);      // an occasion was opened
+} else {
+  splicePhoto(body);          // only the photograph moved
+}
+```
+
+**Four refusals, all `422` with a `field`:**
+
+| what | field |
+|---|---|
+| no `placeId` | `placeId` |
+| no `visitId` | `visitId` |
+| the place is in a different city from the photograph | `placeId` |
+| a fresh `visitId` with no `visitAt` | `visitAt` |
+| the occasion belongs to another place, or to another trip | `visitId` |
+
+and a photograph the log does not hold is a **404**, not a create.
+
+## R7.5 `POST /v1/photos/snooze` is a BATCH, and it is all-or-nothing
+
+N1's 'Later' takes a group, so this route does too. Do not loop.
+
+```
+POST /v1/photos/snooze
+{"photoIds": ["ph-45","ph-46","ph-47"], "until": "2027-10-19T00:00:00.000Z"}
+-> 200 {"photos": [ …the rows that moved, in id order… ]}
+```
+
+- **An id the log does not hold is SKIPPED**, matching your own method. What
+  comes back in `photos` is what was written; anything you asked for and do not
+  see was skipped.
+- **A group that matches nothing is a `200` with `"photos": []`** and the ETag
+  does not move. That is your own "returns false without writing when the group
+  is empty" — it is not a failure and must not take the failure branch.
+- **`photoIds` absent is a `422`**, and it is a different request from `[]`.
+  Absent means you never named a group; `[]` means the group turned out empty.
+- **`until` is required.** There is no un-snooze.
+- **One version bump for the whole group.** Splice all of them under the one
+  ETag you got back.
+
+## R7.6 `DELETE /v1/photos/{id}` is a 204 WITH an ETag — read the header
+
+There is no body. **The ETag is the point**: you have just removed a photograph
+from your cached document, and that header is the version to stamp it with. Do
+not skip reading headers on a 204.
+
+An id the log does not hold is **also a 204**, and the ETag does not move —
+which is your own `deletePhoto` answering true. Combined with §4's
+status-branching rule: a 404 or 405 on this route is a **deployment mismatch**
+and must never take the delete-succeeded branch.
+
+## R7.7 `PUT /v1/walks/{id}` — and `points` is the field to be careful with
+
+Two controls on one route:
+
+```
+{"name": "Kibune river walk"}    // N1's 'Name it'
+{"dismissed": true}              // N1's 'Discard'
+```
+
+**Send exactly that. Do not send the whole walk.** An absent `points` key
+leaves the track alone, which is what both controls mean. A `points` key
+carrying `[]` is a `422` naming the field — an empty track is a request to
+destroy a recording of a day that has passed, and nothing can re-record it.
+
+- **An empty `name` is REFUSED** (`422`, field `name`), and that is
+  deliberately not what a caption does. Your own `setWalkName` refuses one for
+  the reason it states: `Walk.needsNaming` is `name == null && !dismissed`, so
+  an empty name puts the row straight back on N1. The control for "I am not
+  naming this" is Discard.
+- **`points` is capped at 500** — see §10, which is unchanged. 501 is a `422`
+  naming `points`, not a body-too-large.
+- The answer's `points` is always a real list and never `null`.
+
+## R7.8 A create needs every column, and a photograph needs a COMMITTED object
+
+Both PUTs are upserts on your own ids (DEC-33), so an id the log has never held
+is a **create** — and a create that omits a required field is a `422` naming
+it, not a 404.
+
+- a photograph needs `tripId`, `cityId`, `takenAt` and `asset`
+- a walk needs `tripId`, `cityId`, `recordedOn`, `distanceKm` and `points`
+
+**`asset` must name an object you have COMMITTED** — begin, PUT the bytes,
+commit (§R3.1–R3.4) — and not merely one you have begun. A begun-and-never-
+uploaded object is a `422` naming `asset`. This matters because the foreign key
+cannot see it: the row exists, the bytes do not.
+
+## R7.9 Nothing in this step changed the log's shape
+
+`logbookFormatVersion` is still 2, the emitted document still has the same six
+keys, and the ETag's emitter half is still 2. What moved is the SURFACE.

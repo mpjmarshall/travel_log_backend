@@ -115,10 +115,22 @@ type Route struct {
 	NoStore bool
 }
 
-// Routes is the whole API surface at R6: two credential routes, one
+// Routes is the whole API surface at R7: two credential routes, one
 // conditional read, one whole-state write, D3's cascade, T5's city, C1's pin,
 // D2's removal, H1's three share writes, U1's pencil, the one revocation
-// surface, and the three media routes.
+// surface, the three media routes, R7's four photograph routes and N1's one
+// walk route.
+//
+// THE COUNT IS RE-DERIVED AND NOT CARRIED, and the command is anchored so it
+// cannot match its own mention:
+//
+//	grep -cE '^\t\t\{http\.Method' internal/httpapi/routes.go
+//
+// The unanchored `grep -c http.Method` R6 used answers 22 at this commit
+// against 21 rows, because THIS SENTENCE matches it — which is rule 10's own
+// failure ("a grep matching its own replacement") turning up in a place nobody
+// was watching. TestEveryRouteInTheTableReachesTheMux is the guard that
+// depends on no pattern at all.
 func Routes(deps Deps) []Route {
 	return []Route{
 		{http.MethodPost, "/v1/auth/register", register(deps), false, LimitCredential, false},
@@ -149,6 +161,42 @@ func Routes(deps Deps) []Route {
 		{http.MethodPut, "/v1/cities/{id}", putCity(deps), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/places/{id}", putPlace(deps), true, LimitTraveller, false},
 		{http.MethodDelete, "/v1/places/{id}", removePlace(deps), true, LimitTraveller, false},
+
+		// R7's FIVE ROWS: M2's note, D1's delete, N1's 'Later', M2.2's
+		// 'Change', and N1's two walk controls on one path.
+		//
+		// NONE OF THE FIVE IS `NoStore`, for the reason none of R5's or R6's
+		// is: the flag is for a response carrying a capability the SERVER
+		// MINTED. These carry a log — a photograph, a walk, a group of
+		// photographs, or the whole document — and a photograph's `asset` is
+		// an object id rather than a URL, which is the whole of DEC-46. The
+		// URL is minted by `POST /v1/media/mint`, which IS marked.
+		//
+		// FOUR VERBS AND FOUR SHAPES, each read off what moved rather than off
+		// a resource habit. The PUTs are idempotent on client-minted keys
+		// (DEC-33). The DELETE is the only destructive route in this plan that
+		// answers 204, because nothing in this schema references a photograph
+		// and one row leaving is something a cache CAN splice — D2's and D3's
+		// envelopes exist for cascades.
+		//
+		// `/v1/photos/snooze` IS A COLLECTION PATH AND IT SITS BEFORE
+		// `/v1/photos/{id}` HERE FOR READABILITY ONLY. `http.ServeMux` does
+		// every scrap of the matching and prefers the more specific pattern
+		// regardless of registration order (Go 1.22's precedence rules), so
+		// the order of this slice decides nothing — which is exactly why the
+		// slice is a registration source and not a router.
+		//
+		// AND THERE IS DELIBERATELY NO `DELETE /v1/walks/{id}`. N1's 'Discard'
+		// is a flag, D2's sheet promises the track survives both branches, and
+		// nothing in this app authorises destroying a recording of a day. Same
+		// argument that leaves `DELETE /v1/cities/{id}` out of R6 — except
+		// that there the database is the backstop (DEC-57's three RESTRICT
+		// keys) and here it is not: `walks` simply has no route.
+		{http.MethodPost, "/v1/photos/snooze", snoozePhotos(deps), true, LimitTraveller, false},
+		{http.MethodPut, "/v1/photos/{id}", putPhoto(deps), true, LimitTraveller, false},
+		{http.MethodDelete, "/v1/photos/{id}", deletePhoto(deps), true, LimitTraveller, false},
+		{http.MethodPost, "/v1/photos/{id}/refile", refilePhoto(deps), true, LimitTraveller, false},
+		{http.MethodPut, "/v1/walks/{id}", putWalk(deps), true, LimitTraveller, false},
 
 		// H1's THREE WRITES, ON ONE PATH WITH THREE VERBS — the client's three
 		// methods rather than a REST habit. See share_handlers.go.

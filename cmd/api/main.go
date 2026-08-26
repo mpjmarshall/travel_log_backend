@@ -342,8 +342,15 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 			// price: two more `struct{ DB *sql.DB }` over the same pool, so
 			// the city handler cannot remove a place and the place handlers
 			// cannot attach anything to a trip.
-			Cities:         postgres.CityStore{DB: db},
-			Places:         postgres.PlaceStore{DB: db},
+			Cities: postgres.CityStore{DB: db},
+			Places: postgres.PlaceStore{DB: db},
+			// THE PHOTOGRAPH AND WALK PORTS (R7), same argument, same price.
+			// The walk route cannot delete a photograph and the photo routes
+			// cannot empty a track — and there is no route anywhere that can
+			// delete a walk, because nothing in this app authorises destroying
+			// a recording of a day.
+			Photos:         postgres.PhotoStore{DB: db},
+			Walks:          postgres.WalkStore{DB: db},
 			Log:            log,
 			AuthLimit:      credential,
 			TravellerLimit: traveller,

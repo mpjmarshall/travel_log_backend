@@ -53,6 +53,14 @@ type Deps struct {
 	Cities logbook.CityStore
 	Places logbook.PlaceStore
 
+	// THE PHOTOGRAPH AND WALK PORTS (R7), and they are two rather than one
+	// for the reason Cities and Places are two. The walk handler cannot delete
+	// a photograph and the photo handlers cannot empty a track — and `walks`
+	// has no `place_id` at all, so the two entities do not touch anywhere in
+	// the schema either.
+	Photos logbook.PhotoStore
+	Walks  logbook.WalkStore
+
 	AuthLimit      *httpx.Limiter
 	TravellerLimit *httpx.Limiter
 
@@ -114,6 +122,15 @@ func (d Deps) mediaService() logbook.Service {
 // nothing.
 func (d Deps) places() logbook.Service {
 	return logbook.Service{Places: d.Places}
+}
+
+// photos is the same Service built from the port M2.2's re-file needs, and it
+// is the THIRD such accessor for the reason the second exists: a
+// `Service{Media, Objects, Places, Photos}` handed to every route would let
+// the media commit reach a photograph and the re-file reach the bucket, which
+// is the exact thing the port split on Deps exists to prevent one layer up.
+func (d Deps) photos() logbook.Service {
+	return logbook.Service{Photos: d.Photos}
 }
 
 // credentials is both request bodies. DEC-61 settles the field names and
@@ -216,6 +233,18 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.Places == nil {
 		panic("httpapi: the place routes need a store; a nil one is not 'no places', " +
 			"it is a panic inside D2's removal")
+	}
+	// THE PHOTOGRAPH AND WALK PORTS PANIC FOR THE SAME REASON, and the walk
+	// one has the sharper consequence: a track is a recording of a day that
+	// has passed, so a nil store there is a panic on the one route standing
+	// between N1's two controls and the only copy of it.
+	if deps.Photos == nil {
+		panic("httpapi: the photo routes need a store; a nil one is not 'no " +
+			"photographs', it is a panic the first time M2 writes a note")
+	}
+	if deps.Walks == nil {
+		panic("httpapi: the walk route needs a store; a nil one is not 'no walks', " +
+			"it is a panic on the route that keeps a day's recording alive")
 	}
 	// THE MEDIA PORTS PANIC FOR THE REASON THE LIMITERS DO. A nil object store
 	// is not "no media": it is a nil-pointer dereference inside a handler on
