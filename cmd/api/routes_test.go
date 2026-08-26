@@ -386,7 +386,7 @@ func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 // TWO NUMBERS THAT LOOK LIKE A DISAGREEMENT AND ARE NOT, WHICH IS WORTH A LEG
 // BECAUSE THIS PROJECT HAS ALREADY HAD ONE REAL COUNT DISAGREEMENT HERE — R6's
 // unanchored `grep -c http.Method` answered 22 against 21 rows, because the
-// sentence documenting the grep matched it. `internal/httpapi.Routes()` holds
+// sentence documenting the grep matched it. `httpapi.Routes()` holds
 // 22 rows and the plan's table holds 23: the extra one is this package's
 // liveness probe, which is deliberately not in the API's table because a
 // liveness probe is not part of the API.
@@ -418,7 +418,7 @@ func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
 
 	const inTheAPITable = 22
 	if got := len(httpapi.Routes(httpapi.Deps{})); got != inTheAPITable {
-		t.Errorf("internal/httpapi.Routes() holds %d rows, want %d — with /healthz "+
+		t.Errorf("httpapi.Routes() holds %d rows, want %d — with /healthz "+
 			"that is the 23 the plan's route table names. Re-derive rather than "+
 			"remember:\n"+
 			"    grep -cE '^\\t\\t\\{http\\.Method' internal/httpapi/routes.go",

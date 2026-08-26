@@ -4,8 +4,16 @@ A Go + PostgreSQL backend for [Travel Log](https://github.com/mpjmarshall/travel
 a Flutter travel logbook — trips, the cities in them, the places you pinned, the
 photographs, and a timeline you can share.
 
-**Half built.** It boots, migrates, and answers `/healthz` with a real database check.
-There are no other routes yet. See [Status](#status).
+**Twenty-three routes.** It boots, migrates, answers `/healthz` with a real
+database check, and serves the whole API the Travel Log client needs: the
+conditional whole-log read, the entity and share writes, the three media routes,
+and one public share read that carries no credential at all. See
+[Status](#status).
+
+*(This line said "there are no other routes yet" from VS2 until R8, which is
+seven steps of a front page describing a repository that had stopped existing.
+It is corrected here rather than in the step that added the first route,
+because that is when somebody read it.)*
 
 ## Run it
 
@@ -109,7 +117,16 @@ that one — a `.env` at the repository root is silently ignored.
 
 ```
 done     repo · config · logging · HTTP layer · schema · transaction helpers
-next     auth · the read and the write · the arc end to end
+         auth · the conditional read · every write · object storage · the seed
+         the public share read · the arc end to end
+next     Caddy and TLS · the large seed generator · a rendered share page
+         — see `next_slice` in docs/plan-v7.json
+```
+
+Re-derive the surface rather than trusting this block:
+
+```bash
+grep -cE '^\t\t\{http\.Method' internal/httpapi/routes.go   # 22, plus /healthz
 ```
 
 Every step is test-first, and every test has been **broken once to prove it fails** —
