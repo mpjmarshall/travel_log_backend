@@ -172,6 +172,20 @@ func RateLimit(l *Limiter, log *slog.Logger) Middleware {
 // denial of service handed out for free. This is the same ruling DEC-48 already
 // made for a nil limiter: a misconfiguration must not read as "no limit".
 func RateLimitBy(l *Limiter, log *slog.Logger, keyName string, key func(*http.Request) (string, bool)) Middleware {
+	// A NIL LOGGER MUST NOT TURN A RATE-LIMITED REQUEST INTO A 500, and before
+	// this it did: both branches below call log.LogAttrs, and the refusal path
+	// is the one that runs when the system is already under pressure. So the
+	// symptom would have been the API answering 500 instead of 429 at exactly
+	// the moment a limiter was doing its job.
+	//
+	// The fallback rather than a panic, because this is not the wiring seam:
+	// httpapi.Mount panics on a nil logger the way it panics on a nil limiter,
+	// which is where a misconfiguration should be caught. This is the second
+	// line, for any caller that is not Mount — and it is the shape logFailure,
+	// public_handlers and the migrator all already use.
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			k, held := key(r)

@@ -322,50 +322,59 @@ func TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem(t *testing.T) {
 // not read as "no logbook" — it reads as working software until somebody asks
 // for their log and gets a 500 out of the recover middleware.
 func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
+	// EVERY ROW USED TO PANIC FOR THE SAME REASON, AND IT WAS NOT THE ONE THE
+	// ROW WAS NAMED FOR. The table built each Deps from scratch and never set
+	// PublicLimit, Share, Cities, Places, Photos, Walks or Public — so five of
+	// its seven rows tripped the PublicLimit check long before reaching the
+	// dependency they claimed to test. It had been green since the public read
+	// landed and it was proving one thing seven times.
+	//
+	// So each case now starts from a COMPLETE Deps and removes exactly one
+	// field, and asserts the panic NAMES that field. A row that trips an
+	// earlier check fails on the message rather than passing on the panic.
 	full := newHarness(t, options{}).deps
 
 	for _, tc := range []struct {
-		name string
-		deps Deps
+		name  string
+		strip func(*Deps)
+		names string
 	}{
-		{"no credential rate limiter", Deps{
-			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
-			TravellerLimit: full.TravellerLimit,
-			Media:          full.Media, Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
-		}},
-		{"no traveller rate limiter", Deps{
-			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
-			AuthLimit: full.AuthLimit,
-			Media:     full.Media, Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
-		}},
-		{"no logbook store", Deps{
-			Auth: full.Auth, Log: full.Log,
-			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
-			Media: full.Media, Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
-		}},
-		{"no media store", Deps{
-			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
-			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
-			Objects: full.Objects, MediaMaxBytes: full.MediaMaxBytes,
-		}},
-		{"no object store", Deps{
-			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
-			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
-			Media: full.Media, MediaMaxBytes: full.MediaMaxBytes,
-		}},
-		{"no MEDIA_MAX_BYTES", Deps{
-			Auth: full.Auth, Logbook: full.Logbook, Log: full.Log,
-			AuthLimit: full.AuthLimit, TravellerLimit: full.TravellerLimit,
-			Media: full.Media, Objects: full.Objects,
-		}},
+		{"no credential rate limiter", func(d *Deps) { d.AuthLimit = nil }, "auth routes need a rate limiter"},
+		{"no traveller rate limiter", func(d *Deps) { d.TravellerLimit = nil }, "authenticated routes need a rate limiter"},
+		{"no public rate limiter", func(d *Deps) { d.PublicLimit = nil }, "public read needs a rate limiter"},
+		{"no logbook store", func(d *Deps) { d.Logbook = nil }, "logbook routes need a store"},
+		{"no logger", func(d *Deps) { d.Log = nil }, "routes need a logger"},
+		{"no share store", func(d *Deps) { d.Share = nil }, "share routes need a store"},
+		{"no public store", func(d *Deps) { d.Public = nil }, "public read needs a store"},
+		{"no city store", func(d *Deps) { d.Cities = nil }, "city route needs a store"},
+		{"no place store", func(d *Deps) { d.Places = nil }, "place routes need a store"},
+		{"no photo store", func(d *Deps) { d.Photos = nil }, "photo routes need a store"},
+		{"no walk store", func(d *Deps) { d.Walks = nil }, "walk route needs a store"},
+		{"no media store", func(d *Deps) { d.Media = nil }, "media routes need a store"},
+		{"no object store", func(d *Deps) { d.Objects = nil }, "media routes need an object store"},
+		{"no MEDIA_MAX_BYTES", func(d *Deps) { d.MediaMaxBytes = 0 }, "MEDIA_MAX_BYTES is not set"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func() {
-				if recover() == nil {
-					t.Errorf("Mount with %s did not panic", tc.name)
+				r := recover()
+				if r == nil {
+					t.Fatalf("Mount with %s did not panic", tc.name)
+				}
+				msg, ok := r.(string)
+				if !ok {
+					t.Fatalf("Mount panicked with %T, want the string it writes", r)
+				}
+				// THE HALF THAT MAKES THE ROW MEAN WHAT IT SAYS. Without it a
+				// row passes on any panic at all, which is how this table came
+				// to prove one thing fourteen times.
+				if !strings.Contains(msg, tc.names) {
+					t.Errorf("Mount with %s panicked on a DIFFERENT dependency.\n"+
+						"  got:  %s\n  want it to name: %s", tc.name, msg, tc.names)
 				}
 			}()
-			Mount(http.NewServeMux(), tc.deps)
+			deps := full
+			tc.strip(&deps)
+			Mount(http.NewServeMux(), deps)
 		})
 	}
 }

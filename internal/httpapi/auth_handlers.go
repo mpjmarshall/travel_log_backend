@@ -241,6 +241,21 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
 	}
+	// THE LOGGER IS A DEPENDENCY LIKE THE REST, and it was the one this
+	// function guarded everything except. deps.Log goes to three rate
+	// limiters, and RateLimitBy logs on BOTH of its refusal branches — so a
+	// nil logger turned every rate-limited request into a recovered 500, on
+	// the path that runs when the system is already under pressure.
+	//
+	// RateLimitBy now falls back to slog.Default() as well, which is the
+	// second line rather than a reason to skip this one: a dependency left
+	// unset is a misconfiguration, and this function's whole argument is that
+	// a misconfiguration should fail at wiring time rather than read as
+	// working software.
+	if deps.Log == nil {
+		panic("httpapi: the routes need a logger; a nil one is not 'no logging', " +
+			"it is a 500 in place of every 429 the rate limiter means to send")
+	}
 	// THE SHARE PORT PANICS FOR THE REASON EVERY OTHER NIL HERE DOES: an
 	// optional field left unset reads as working software, and the first
 	// symptom would be a nil-pointer dereference inside H1's 'Stop sharing' —
