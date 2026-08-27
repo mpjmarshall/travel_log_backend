@@ -7,19 +7,18 @@
 // `{"code":"…"}` and the vocabulary is CLOSED, or it drifts into prose by
 // accretion.
 //
-// IT WAS TWELVE UNTIL DEC-103, AND THE REOPENING IS WORTH MORE THAN THE WORD.
-// The twelve were closed on ONE argument — that a client can ACT on each — and
-// `unsupported_route` is admitted on exactly that test rather than on need:
-// its action is "this needs a newer server", and no other word's is. Anything
-// reaching for a fourteenth makes the same argument in the same form, or the
-// block is closed against it. `method_not_allowed` was put and REFUSED on its
-// own merits, and that refusal survives DEC-103 unchanged: a 405 is a client
-// disagreeing about a verb, not a condition a user can be told about.
+// THE BLOCK IS CLOSED ON ONE ARGUMENT: that a client can ACT on each word.
+// `unsupported_route` (DEC-103) is admitted on exactly that test rather than
+// on need — its action is "this needs a newer server", and no other word's is.
+// Anything reaching for a fourteenth makes the same argument in the same form,
+// or the block is closed against it. `method_not_allowed` was put and REFUSED
+// on its own merits: a 405 is a client disagreeing about a verb, not a
+// condition a user can be told about.
 //
 // THE BLOCK SHIPS WHOLE EVEN THOUGH THE SLICE USES TEN. `upload_incomplete`
 // belongs to media and `forbidden` to the share path, neither of which is in
-// the slice — and they are here anyway, because v5 left an ELEVEN-code block
-// against a twelve-code decision and the sweep below is one-directional: it
+// the slice — and they are here anyway, because the sweep below is
+// one-directional: it
 // asserts every word on the wire is IN the block, so a missing word is not
 // caught until the step that needs it, at which point the sweep reddens
 // against correct code and somebody "fixes" it by growing the block.
@@ -71,10 +70,10 @@ const (
 	// CodeUnsupportedRoute is DEC-103's thirteenth word: this build does not
 	// have that route.
 	//
-	// MEASURED at R1 entry against a running container: `DELETE
+	// MEASURED against a running container: `DELETE
 	// /v1/trips/{id}` -> `405 {"code":"not_found"}`, `PATCH /v1/me` -> `404
 	// {"code":"not_found"}`, `PUT /v1/places/x` -> `404 {"code":"not_found"}`.
-	// Every route this plan has not built yet answered the SAME WORD the
+	// Every route the deployment did not carry answered the SAME WORD the
 	// vocabulary uses for "that trip is not in your log".
 	//
 	// THE BAD CONSEQUENCE IS NOT THE WRONG SENTENCE, IT IS THE WRONG BRANCH.
@@ -83,8 +82,7 @@ const (
 	// `Future<bool>.value(true)`, verified on `wipe/mock-data` at
 	// logbook.dart:119, :156 and :201 — so the obvious network mapping of that
 	// rule makes a delete against an undeployed route report success, delete
-	// nothing, and advance the client's cache. R5, R6 and R7 each ship
-	// deletes.
+	// nothing, and advance the client's cache.
 	//
 	// ITS STATUS IS 404 AND NOT 501. `Not Implemented` is the honest word for
 	// "this server does not do that", and it is wrong here twice: net/http has

@@ -8,9 +8,7 @@
 // knows the wire vocabulary. What lives here is the two things the domain
 // genuinely owns: what a bearer credential looks like, and who the request is
 // for. internal/httpapi/auth_handlers.go holds RequireTraveller, which is the
-// middleware and the only caller of both. (This said
-// internal/httpapi/middleware.go until VS8, naming a file that has never
-// existed — found by the arc's record phase, which is what that phase is for.)
+// middleware and the only caller of both.
 package auth
 
 import (

@@ -176,15 +176,15 @@ func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (au
 // TouchSession writes `last_used_at`, MOVES NO VERSION, and TAKES NO ADVISORY
 // LOCK (DEC-100).
 //
-// IT USED TO GO THROUGH WithTravellerLock AND THAT COST FOUR ROUND TRIPS PER
-// AUTHENTICATED REQUEST. Measured by the performance lens with
+// GOING THROUGH WithTravellerLock COSTS FOUR ROUND TRIPS PER AUTHENTICATED
+// REQUEST. Measured by the performance lens with
 // pg_stat_statements reset around exactly one 304: NINE round trips, five of
 // them to stamp this timestamp — `begin`, `pg_advisory_xact_lock`, `SELECT 1
 // FROM travellers`, this UPDATE, `commit` — against 0.176 ms of total server
-// exec time and a 3.0-4.0 ms wall clock. It also SERIALISED every authenticated
+// exec time and a 3.0-4.0 ms wall clock. It also SERIALISES every authenticated
 // request against the phone's own in-flight writes, through the same lock.
 //
-// WHAT THE LOCK WAS BUYING, AND WHY IT WAS NOTHING. tx.go argues at length
+// WHAT THE LOCK WOULD BUY, AND WHY IT IS NOTHING. tx.go argues at length
 // that a session write must not bump logbook_version, which is correct and is
 // a DIFFERENT QUESTION from whether it should take the write lock. What
 // WithTravellerLock protects is MULTI-STATEMENT work — a delete-then-insert, a
@@ -192,15 +192,15 @@ func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (au
 // one row keyed by session id. The row lock the UPDATE takes itself is the
 // whole of the exclusion it needs.
 //
-// THE ROW COUNT IS STILL CHECKED, and it now does the job the wrapper's
-// existence read used to do as well as its own: an UPDATE matching nothing
+// THE ROW COUNT IS CHECKED, and it does the job the wrapper's existence read
+// would do as well as its own: an UPDATE matching nothing
 // reports success, so a session that has been deleted, that belongs to
 // somebody else, or whose traveller row is gone would keep authenticating for
 // as long as the caller believed the answer. `WHERE … AND traveller_id = $2`
 // is what makes the third case a miss — the traveller's disappearance takes
 // the session with it through sessions_traveller_fk's cascade — so
 // WithTravellerLock's `SELECT 1 FROM travellers`, a whole extra row read per
-// request, was asking a question this statement already answers.
+// request, asks a question this statement already answers.
 //
 // A TRAVELLER WHO IS GONE ANSWERS auth.ErrNoSession RATHER THAN
 // auth.ErrNoTraveller, and the two are genuinely different answers here. This

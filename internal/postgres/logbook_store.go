@@ -1,10 +1,9 @@
 // The storage half of logbook.Store, and the TEN queries one read is made of.
 //
-// TEN, NOT SIX, AND THE CORRECTION IS WORTH MORE THAN THE NUMBER (DEC-102).
-// This line said "six queries" from the day it was written, and six is the
-// count of LISTS in the document rather than of statements: read_tx.go's "six
-// lists" is a fair description of the payload and this was a COUNT, so this
-// one was wrong. Measured with pg_stat_statements reset around exactly one
+// TEN STATEMENTS, AND SIX IS THE COUNT OF LISTS IN THE DOCUMENT RATHER THAN
+// OF STATEMENTS (DEC-102). read_tx.go's "six lists" describes the payload, and
+// the two numbers are easy to conflate — this one is a count of queries.
+// Measured with pg_stat_statements reset around exactly one
 // whole-log read, each `calls = 1`: photos, visits, trip_cities, places,
 // cities, trips, walk_points, walks, logbook_version, traveller name. It is
 // also what makes the ~3ms 304 legible — nine round trips at roughly 0.3ms
@@ -424,8 +423,8 @@ const upsertTripSQL = `INSERT INTO trips
 // trips_dates_ordered_ck compares the two columns after the write, so
 // `{"id":"autumn","start":"2027-12-01T00:00:00.000Z"}` against a trip that ends
 // in October is a violation ValidateTrip cannot see — it holds one date and the
-// other is in the database. This is NEW under DEC-89: a whole-state upsert
-// always carried both.
+// other is in the database. DEC-89's pointer contract is what makes that
+// reachable: a whole-state upsert always carries both dates.
 //
 // Both reads are free of races: the write already holds the traveller's
 // advisory lock, so the row cannot move between this SELECT and the INSERT.
@@ -450,8 +449,8 @@ const cityExistsSQL = `SELECT 1 FROM cities WHERE traveller_id = $1::uuid AND id
 // mediaObjectCommittedSQL is `uploaded_at IS NOT NULL`, AND THE PREDICATE IS
 // THE WHOLE OF IT.
 //
-// IT USED TO BE A BARE EXISTENCE CHECK, and DEC-58's "enforced twice" is
-// precise rather than loose about what that bought. The four foreign keys
+// A BARE EXISTENCE CHECK IS NOT THE SAME QUESTION, and DEC-58's "enforced
+// twice" is precise rather than loose about the difference. The four foreign keys
 // guarantee the ROW EXISTS and say nothing about `uploaded_at`, because an FK
 // cannot see a column it does not reference. So the schema refuses a reference
 // to an object nobody ever began; this refuses a reference to one that was

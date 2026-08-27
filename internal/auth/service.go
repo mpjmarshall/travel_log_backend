@@ -58,14 +58,10 @@ const (
 // that keeps its token in the platform keychain (DEC-45) and has no refresh
 // flow.
 //
-// IT HAS A REVOCATION SURFACE SINCE R5 AND THIS COMMENT USED TO SAY IT DID
-// NOT. `DELETE /v1/auth/session` revokes the presented token and
-// `?scope=all` revokes every one the traveller holds. The old sentence
-// ("there is no revocation UI yet — H1's 'Stop sharing' is about share links,
-// not sessions") was true when it was written and is the kind of line that
-// stays true-looking after the thing it describes has changed. The TTL is
-// still untuned; what has changed is that thirty days is no longer the only
-// bound on a stolen token.
+// THIRTY DAYS IS NOT THE ONLY BOUND ON A STOLEN TOKEN.
+// `DELETE /v1/auth/session` revokes the presented token and `?scope=all`
+// revokes every one the traveller holds, so the TTL is a backstop rather than
+// the whole of the answer.
 const DefaultSessionTTL = 30 * 24 * time.Hour
 
 // TouchInterval is how stale `last_used_at` has to be before a request writes
@@ -300,11 +296,10 @@ func (s *Service) ttl() time.Duration {
 // Register creates a traveller and MINTS NO SESSION (DEC-61), and REFUSES
 // ONCE THIS LOG HAS ONE (DEC-86).
 //
-// RULING 3 HAS ALWAYS BEEN SINGLE-USER AND THE ROUTE WAS NOT. A stranger who
-// registered first on a deployed instance got an authenticated account — and
-// since d5be39c that account carries a 600/min traveller budget, and from R6 a
-// `?photos=delete`. Closing the route removes the question rather than
-// bounding it.
+// RULING 3 IS SINGLE-USER AND AN OPEN ROUTE IS NOT. A stranger who registered
+// first on a deployed instance would hold an authenticated account, carrying a
+// 600/min traveller budget and a `?photos=delete`. Closing the route removes
+// the question rather than bounding it.
 //
 // THE REFUSAL COMES BEFORE THE ARGON2 CALL, AND THAT ORDERING IS THE POINT OF
 // ASKING THE STORE RATHER THAN LETTING THE INSERT ANSWER. Hashing is 64 MiB

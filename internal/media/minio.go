@@ -65,7 +65,7 @@ var _ Store = (*MinIO)(nil)
 // "The specified bucket does not exist" AT PRESIGN TIME, the other got a
 // perfectly-formed URL that failed on the phone — and both were right, on a
 // cold and a warm cache. Setting the region removes the branch: presigning is
-// a local HMAC from the first request, which is what R3's mint route needs
+// a local HMAC from the first request, which is what the mint route needs
 // when it signs twelve URLs for one grid.
 func New(cfg Config) (*MinIO, error) {
 	if strings.TrimSpace(cfg.Bucket) == "" {

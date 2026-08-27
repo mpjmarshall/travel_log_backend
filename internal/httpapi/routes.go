@@ -7,17 +7,16 @@
 // does every scrap of the matching — spec L18 is untouched — and what the
 // slice buys is a thing a test can iterate.
 //
-// A ROUTE'S RESPONSE POLICY AND ITS RATE BUDGET ARE FIELDS NOW, AND THE
-// MIDDLEWARE IS APPLIED FROM THE TABLE (PD-09). Both used to be DERIVED, and
-// this file said so: `Auth` decided the limiter completely, and nothing decided
-// the cache policy at all. Two findings changed that, one measured and one
-// structural.
+// A ROUTE'S RESPONSE POLICY AND ITS RATE BUDGET ARE FIELDS RATHER THAN
+// DERIVATIONS, AND THE MIDDLEWARE IS APPLIED FROM THE TABLE (PD-09). Neither
+// can be computed from `Auth`, for one measured reason and one structural
+// one.
 //
 //   - MEASURED ON THE LIVE SERVER: NO response set `Cache-Control` at all —
 //     `/healthz`, the 401s and `GET /v1/logbook` returned Content-Type,
 //     X-Request-Id and Date and nothing else. That is survivable while every
 //     route carries an Authorization header, because RFC 9111 §3.5 forbids a
-//     SHARED cache from storing such a response. R8's `GET /l/{token}` carries
+//     SHARED cache from storing such a response. `GET /l/{token}` carries
 //     no Authorization header at all, so nothing reaches it: a 200 with an
 //     ETag and no Cache-Control is heuristically cacheable by any
 //     intermediary, and after "Stop sharing" a cached envelope keeps handing
@@ -26,9 +25,7 @@
 //     derivable from anything else on the row: `POST /v1/media/mint` carries
 //     capabilities and `PUT /v1/trips/{id}` does not, and both are
 //     authenticated writes.
-//   - STRUCTURALLY: this file used to promise a per-route limit field "the day
-//     an unauthenticated route arrives that is not a credential attempt". That
-//     day is R8's public read, which needs a THIRD budget — per address,
+//   - STRUCTURALLY: the public read needs a THIRD budget — per address,
 //     generous, for a route with no identity at all — and a derivation from
 //     `Auth` cannot express three values. The consequence of getting it wrong
 //     is not cosmetic: the public read would inherit AUTH_RATE_LIMIT_PER_MIN,
@@ -36,11 +33,10 @@
 //     and sign-in, so one person browsing a shared trip locks everybody out of
 //     signing in.
 //
-// AND `Limit` IS NO LONGER DERIVABLE, WHICH IS THE ROW R8 SAID WOULD ARRIVE.
-// This block used to end "the row that cannot be derived arrives in R8"; it is
-// `GET /l/{token}`, which is `Auth: false` and is NOT `LimitCredential`. Three
-// values cannot come out of one boolean, and the leg that catches a wrong one
-// is TestEveryRouteWearsTheCeilingItsTableRowNames.
+// `GET /l/{token}` IS THE ROW THAT CANNOT BE DERIVED: it is `Auth: false` and
+// is NOT `LimitCredential`. Three values cannot come out of one boolean, and
+// the leg that catches a wrong one is
+// TestEveryRouteWearsTheCeilingItsTableRowNames.
 //
 // /healthz is unauthenticated and unlimited and is deliberately NOT in this
 // table — it is cmd/api's, because a liveness probe is not part of the API.
@@ -66,10 +62,8 @@ const (
 	// the context only after the credential has been resolved.
 	LimitTraveller
 
-	// LimitPublic is R8's third budget, and it is the row this file predicted
-	// in its own words: "the day an unauthenticated route arrives that is not
-	// a credential attempt, this becomes a sixth field rather than a
-	// derivation." That day is `GET /l/{token}`.
+	// LimitPublic is the third budget, and `GET /l/{token}` is the one route
+	// that wears it: unauthenticated, and not a credential attempt.
 	//
 	// IT KEYS ON THE ADDRESS BECAUSE THERE IS NOTHING ELSE. The request
 	// carries no credential, so there is no identity to key on — and it is not
@@ -92,22 +86,17 @@ func (l Limit) String() string {
 
 // Route is one row of the table.
 //
-// `Mutating` IS GONE (OE-10), AND R3 IS THE STEP THAT WAS TOLD TO RE-EXAMINE
-// IT. The deletion's own text said: "R3 must check whether it has acquired a
-// reader; if it has, this deletion is withdrawn". It has not. Nothing in the
-// slice read it, nothing in R1-R8 reads it, and it was guarded by a leg
-// asserting that a field equals a function of another field — decoration with
-// a test over it, by this project's own standard.
+// THERE IS NO `Mutating` FIELD (OE-10), AND THE ABSENCE IS A DECISION.
+// Nothing in this repository reads one, and the leg that would guard it can
+// only assert that a field equals a function of another field — decoration
+// with a test over it, by this project's own standard.
 //
-// THE TRIGGER THE DELETION NAMED HAS ACTUALLY FIRED AND STILL DOES NOT SAVE
-// IT, which is worth writing down because it is the closest a deleted thing
-// has come to returning. `POST /v1/media/mint` IS the POST that writes
-// nothing, so `Mutating == (Method != GET)` genuinely stops holding at this
-// step. But a field is real when something READS it, not when it would be
-// accurate: two fields arriving that are read is not an argument for keeping a
-// third that is not. It comes back the day something asks "does this route
-// change the log" — an audit line, a cache invalidation, a read-replica router
-// — and it comes back with that caller in the same commit.
+// THE ARGUMENT THAT IT WOULD AT LEAST BE ACCURATE DOES NOT CARRY EITHER.
+// `POST /v1/media/mint` IS a POST that writes nothing, so
+// `Mutating == (Method != GET)` does not even hold — and a field is real when
+// something READS it, not when it would be right. It arrives the day something
+// asks "does this route change the log" — an audit line, a cache invalidation,
+// a read-replica router — and it arrives with that caller in the same commit.
 type Route struct {
 	Method  string
 	Pattern string
@@ -129,20 +118,20 @@ type Route struct {
 	NoStore bool
 }
 
-// Routes is the whole API surface at R8: two credential routes, one
-// conditional read, one whole-state write, D3's cascade, T5's city, C1's pin,
-// D2's removal, H1's three share writes, U1's pencil, the one revocation
-// surface, the three media routes, R7's four photograph routes, N1's one walk
-// route — and R8's public read, which is the only row with no bearer token in
-// front of it.
+// Routes is the whole API surface: two credential routes, one conditional
+// read, one whole-state write, D3's cascade, T5's city, C1's pin, D2's
+// removal, H1's three share writes, U1's pencil, the one revocation surface,
+// the three media routes, the four photograph routes, N1's one walk route —
+// and the public read, which is the only row with no bearer token in front of
+// it.
 //
 // THE COUNT IS RE-DERIVED AND NOT CARRIED, and the command is anchored so it
 // cannot match its own mention:
 //
 //	grep -cE '^\t\t\{http\.Method' internal/httpapi/routes.go
 //
-// The unanchored `grep -c http.Method` R6 used answers 22 at this commit
-// against 21 rows, because THIS SENTENCE matches it — which is rule 10's own
+// The unanchored `grep -c http.Method` answers 23 against 22 rows, because
+// THIS SENTENCE matches it — which is rule 10's own
 // failure ("a grep matching its own replacement") turning up in a place nobody
 // was watching. TestEveryRouteInTheTableReachesTheMux is the guard that
 // depends on no pattern at all.
@@ -158,7 +147,7 @@ func Routes(deps Deps) []Route {
 		// writing, at the top of trip_handlers.go.
 		{http.MethodDelete, "/v1/trips/{id}", deleteTrip(deps), true, LimitTraveller, false},
 
-		// R6's THREE ROWS: T5's city, C1's pin, and D2's removal.
+		// THREE ROWS: T5's city, C1's pin, and D2's removal.
 		//
 		// NONE OF THE THREE IS `NoStore`, for the reason the share rows below
 		// are not: the flag is for a response carrying a capability the SERVER
@@ -168,7 +157,8 @@ func Routes(deps Deps) []Route {
 		//
 		// THE FIRST TWO ARE PUTs ON CLIENT-MINTED KEYS (DEC-33), idempotent by
 		// construction. THE THIRD IS A DELETE WHOSE REACH IS A REQUIRED QUERY
-		// PARAMETER, and it is worth reading beside R5's `?scope=all`, which
+		// PARAMETER, and it is worth reading beside the revocation route's
+		// `?scope=all`, which
 		// is the opposite call made on purpose: optional there, because the
 		// path is singular and the default is the smaller act; required here,
 		// because D2's two branches destroy different amounts and neither is
@@ -177,10 +167,10 @@ func Routes(deps Deps) []Route {
 		{http.MethodPut, "/v1/places/{id}", putPlace(deps), true, LimitTraveller, false},
 		{http.MethodDelete, "/v1/places/{id}", removePlace(deps), true, LimitTraveller, false},
 
-		// R7's FIVE ROWS: M2's note, D1's delete, N1's 'Later', M2.2's
-		// 'Change', and N1's two walk controls on one path.
+		// FIVE ROWS: M2's note, D1's delete, N1's 'Later', M2.2's 'Change',
+		// and N1's two walk controls on one path.
 		//
-		// NONE OF THE FIVE IS `NoStore`, for the reason none of R5's or R6's
+		// NONE OF THE FIVE IS `NoStore`, for the reason none of the rows above
 		// is: the flag is for a response carrying a capability the SERVER
 		// MINTED. These carry a log — a photograph, a walk, a group of
 		// photographs, or the whole document — and a photograph's `asset` is
@@ -204,7 +194,8 @@ func Routes(deps Deps) []Route {
 		// AND THERE IS DELIBERATELY NO `DELETE /v1/walks/{id}`. N1's 'Discard'
 		// is a flag, D2's sheet promises the track survives both branches, and
 		// nothing in this app authorises destroying a recording of a day. Same
-		// argument that leaves `DELETE /v1/cities/{id}` out of R6 — except
+		// argument that leaves `DELETE /v1/cities/{id}` out of this table —
+		// except
 		// that there the database is the backstop (DEC-57's three RESTRICT
 		// keys) and here it is not: `walks` simply has no route.
 		{http.MethodPost, "/v1/photos/snooze", snoozePhotos(deps), true, LimitTraveller, false},
@@ -226,8 +217,8 @@ func Routes(deps Deps) []Route {
 		// `POST /v1/media` and `POST /v1/media/mint`, whose presigned URLs are
 		// pure bearer capabilities with unlimited replay. Marking this row
 		// would make the flag mean two things, which is how a policy stops
-		// being readable. (R8's `GET /l/{token}` is the row that needs it
-		// most, and it is not here yet.)
+		// being readable. `GET /l/{token}` is the row that needs it most, and
+		// it is the row that carries it.
 		{http.MethodPut, "/v1/trips/{id}/share", setShareOptions(deps), true, LimitTraveller, false},
 		{http.MethodPost, "/v1/trips/{id}/share", newShareLink(deps), true, LimitTraveller, false},
 		{http.MethodDelete, "/v1/trips/{id}/share", stopSharing(deps), true, LimitTraveller, false},
@@ -258,8 +249,8 @@ func Routes(deps Deps) []Route {
 		{http.MethodPost, "/v1/media/{id}/commit", commitMedia(deps), true, LimitTraveller, false},
 		{http.MethodPost, "/v1/media/mint", mintMedia(deps), true, LimitTraveller, true},
 
-		// R8's ONE ROW, AND IT IS THE ONLY ROUTE IN THIS TABLE WITH NO BEARER
-		// TOKEN IN FRONT OF IT. Everything about it is a decision about what a
+		// THE PUBLIC READ, AND IT IS THE ONLY ROUTE IN THIS TABLE WITH NO
+		// BEARER TOKEN IN FRONT OF IT. Everything about it is a decision about what a
 		// stranger holding a URL can see, and all three of its fields differ
 		// from every other row.
 		//
@@ -267,10 +258,10 @@ func Routes(deps Deps) []Route {
 		// token lookup, through a GLOBAL unique index on the digest, because
 		// the request arrives with none in hand.
 		//
-		// `LimitPublic` — see the type. Under the derivation this table used
-		// to make, an unauthenticated route inherited the CREDENTIAL ceiling
-		// and its bucket, so one person reading a shared trip would 429
-		// everybody's sign-in.
+		// `LimitPublic` — see the type. Derived from `Auth`, an
+		// unauthenticated route would inherit the CREDENTIAL ceiling and its
+		// bucket, so one person reading a shared trip would 429 everybody's
+		// sign-in.
 		//
 		// `NoStore: true` — AND THIS IS THE ROW THE FLAG WAS ADDED FOR
 		// (PD-09). Every other capability response in this table carries an

@@ -18,24 +18,20 @@
 // ResponseWriter wrapper deciding at WriteHeader time, exactly as jsonByDefault
 // does in middleware.go.
 //
-// THE WORD IT WRITES IS `unsupported_route`, AND THAT IS DEC-103 CORRECTING
-// THIS FILE'S OWN EARLIER REASONING. This block used to say the body is "the
-// vocabulary's nearest word" and that a thirteenth "is refused by DEC-12" —
-// both stated as settled, and the first was measured to be wrong. At R1 entry
-// a running container answered `DELETE /v1/trips/{id}` -> `405
+// THE WORD IT WRITES IS `unsupported_route` AND NEVER `not_found` (DEC-103),
+// AND THE DIFFERENCE WAS MEASURED. Under the vocabulary's nearest word a
+// running container answered `DELETE /v1/trips/{id}` -> `405
 // {"code":"not_found"}`, `PATCH /v1/me` -> `404 {"code":"not_found"}` and `PUT
-// /v1/places/x` -> `404 {"code":"not_found"}`: every route this plan has not
-// built yet wearing THE SAME WORD the vocabulary uses for "that trip is not in
-// your log". A client build ahead of the server therefore tells the user their
-// trip, place, photograph or walk is GONE, on eighteen routes — and worse, the
-// client treats an unknown id as SUCCESS on all three deletes by decision, so
-// the obvious mapping makes a delete against an undeployed route report
-// success, delete nothing, and advance the cache. A comment carrying a
-// reversed decision is worse than no comment, so the reversal is written here
-// rather than left for the reader to notice.
+// /v1/places/x` -> `404 {"code":"not_found"}`: every route a deployment does
+// not carry yet wearing THE SAME WORD the vocabulary uses for "that trip is
+// not in your log". A client build ahead of the server therefore tells the
+// user their trip, place, photograph or walk is GONE, on eighteen routes — and
+// worse, the client treats an unknown id as SUCCESS on all three deletes by
+// decision, so the obvious mapping makes a delete against an undeployed route
+// report success, delete nothing, and advance the cache.
 //
-// WHAT SURVIVES THE REVERSAL IS THE REFUSAL OF `method_not_allowed`
-// SPECIFICALLY, on its own merits: a 405 is a client disagreeing about a verb,
+// `method_not_allowed` IS REFUSED AS A THIRTEENTH WORD, on its own merits: a
+// 405 is a client disagreeing about a verb,
 // not a condition a user can be told about. DEC-12's closure was never
 // "twelve"; it was "a client can act on each word", and `unsupported_route`
 // passes that test — its action is "this needs a newer server" — while
@@ -46,9 +42,9 @@
 //   - THE 405 KEEPS ITS STATUS AND ITS `Allow` HEADER. Rewriting it to a 404
 //     would tell a client the path does not exist when the mux has just said
 //     which methods it takes. The status is the stdlib's FACT about the
-//     request and `Allow` is information a 404 would throw away; what changed
-//     at DEC-103 is only the word in the body, so the status and the code stop
-//     contradicting each other.
+//     request and `Allow` is information a 404 would throw away. Only the word
+//     in the body is rewritten, so the status and the code do not contradict
+//     each other.
 //
 //   - ONE CONSTANT DOES BOTH STATUSES. `bodyUnsupportedRoute` is written only
 //     when `stdlibWroteIt` is true, so the 404 and the 405 carry the same word
@@ -59,7 +55,7 @@
 //     would throw that away. http.Error sets text/plain before WriteHeader and
 //     WriteError sets application/json before WriteHeader, so by the time this
 //     wrapper is asked, the two are already distinguishable. THAT
-//     DISCRIMINATION IS WHAT MAKES THE NEW WORD SAFE: "the mux answered"
+//     DISCRIMINATION IS WHAT MAKES THE WORD SAFE: "the mux answered"
 //     already means "this build does not have that route", and a handler's own
 //     404 for an unknown id is left alone with `not_found` and its `field` —
 //     which is the case the client's NotFoundScreen exists for.

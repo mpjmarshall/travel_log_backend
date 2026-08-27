@@ -75,10 +75,9 @@ type Deps struct {
 
 	// PublicLimit is the THIRD ceiling and a third limiter INSTANCE, which is
 	// the half that matters (PD-09). One number cannot be three, and one
-	// BUCKET cannot be shared: under the derivation this table used to make,
-	// `GET /l/{token}` counted against the same instance as register and
-	// sign-in, so one person browsing a shared trip would 429 everybody's
-	// sign-in.
+	// BUCKET cannot be shared: derived from `Auth`, `GET /l/{token}` would
+	// count against the same instance as register and sign-in, so one person
+	// browsing a shared trip would 429 everybody's sign-in.
 	PublicLimit *httpx.Limiter
 
 	// THE MEDIA GROUP (R3). Two ports and one number, and none of the three
@@ -90,7 +89,7 @@ type Deps struct {
 	// modes. `Media` is the row — what was declared, and whether it has been
 	// committed. `Objects` is the bucket — what is actually there, and the
 	// only thing that can mint a capability. `logbook.Service` is what spans
-	// them, and it is the ONLY thing in R1-R8 that does (PD-05).
+	// them, and it is the ONLY thing in this repository that does (PD-05).
 	Media   logbook.MediaStore
 	Objects media.Store
 
@@ -190,17 +189,16 @@ type sessionBody struct {
 // wiring leg for cmd/api: apiRoutes forgetting to build it is a panic at boot
 // rather than a route served with no ceiling.
 //
-// RATE LIMITING AND AUTHENTICATION ARE COMPOSED, NOT ALTERNATED, AND THAT IS
-// THE FIX FOR A DEFECT THIS FUNCTION SHIPPED. It read:
+// RATE LIMITING AND AUTHENTICATION ARE COMPOSED, NOT ALTERNATED. The
+// alternation is the shape this reaches for on its own:
 //
 //	if route.Auth { handler = authed(handler) } else { handler = limited(handler) }
 //
-// so every authenticated route had no ceiling whatever — measured against the
-// running stack at 7b47bee: the credential routes 429 after their burst, and
-// 60 concurrent GET /v1/logbook drew 60 200s. Against a thirty-day untuned
-// session TTL with no revocation surface, that is unlimited whole-log reads
-// for a stolen token, and unlimited cascading deletes once the write routes
-// land.
+// and it leaves every authenticated route with no ceiling whatever — measured
+// against the running stack: the credential routes 429 after their burst, and
+// 60 concurrent GET /v1/logbook drew 60 200s. Against a thirty-day session
+// TTL that is unlimited whole-log reads for a stolen token, and unlimited
+// cascading deletes.
 //
 // THE TWO CEILINGS ARE TWO LIMITERS BECAUSE THEY BOUND TWO THINGS. The
 // credential limiter bounds an unauthenticated 64 MiB-per-attempt Argon2
@@ -241,13 +239,12 @@ func Mount(mux *http.ServeMux, deps Deps) {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
 	}
-	// THE LOGGER IS A DEPENDENCY LIKE THE REST, and it was the one this
-	// function guarded everything except. deps.Log goes to three rate
+	// THE LOGGER IS A DEPENDENCY LIKE THE REST. deps.Log goes to three rate
 	// limiters, and RateLimitBy logs on BOTH of its refusal branches — so a
-	// nil logger turned every rate-limited request into a recovered 500, on
+	// nil logger turns every rate-limited request into a recovered 500, on
 	// the path that runs when the system is already under pressure.
 	//
-	// RateLimitBy now falls back to slog.Default() as well, which is the
+	// RateLimitBy falls back to slog.Default() as well, which is the
 	// second line rather than a reason to skip this one: a dependency left
 	// unset is a misconfiguration, and this function's whole argument is that
 	// a misconfiguration should fail at wiring time rather than read as
@@ -439,14 +436,13 @@ func signIn(deps Deps) http.HandlerFunc {
 // thirty-day untuned TTL it is the only recovery a user has.
 //
 // WHY `?scope=all` AND NOT `DELETE /v1/auth/sessions`. A plural path would be
-// a route the plan's own table does not hold — the surface is counted at 23 at
-// the end of R8 and this step is allotted six rows — and, more usefully, the
-// two are one decision with two answers rather than two resources. The
-// precedent is R6's `?photos=keep|delete` on D2's delete, which is the same
-// shape: one destructive act, a parameter choosing how far it reaches.
+// a second row in the route table for what is one decision with two answers
+// rather than two resources. The precedent is `?photos=keep|delete` on D2's
+// delete, which is the same shape: one destructive act, a parameter choosing
+// how far it reaches.
 //
 // WHERE IT DIFFERS FROM THAT PRECEDENT IS THAT THE PARAMETER IS OPTIONAL, and
-// the reason is which way the default is safe. R6's is REQUIRED because "a
+// the reason is which way the default is safe. D2's is REQUIRED because "a
 // default is a silent answer to the question D2 makes the user answer on
 // screen" — there the two branches destroy different amounts and neither is
 // the obvious one. Here the route's name is singular, the default is the
@@ -526,7 +522,7 @@ func revokeScope(r *http.Request) (everywhere, ok bool) {
 }
 
 // RequireTraveller resolves the bearer token and puts the traveller on the
-// context. VS7's routes wear it; VS6 builds it and proves it.
+// context. Every authenticated route in the table wears it.
 //
 // THE 401 AND THE 500 ARE DIFFERENT ANSWERS AND THE DIFFERENCE MATTERS TO THE
 // CLIENT. A credential that is not live is a 401 and the phone's answer is to

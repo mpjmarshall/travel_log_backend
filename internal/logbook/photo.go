@@ -2,17 +2,18 @@
 //
 // ------------------------------------------------------------------------
 // `PhotoWrite` HAS NO `placeId` AND NO `visitId`, AND THAT ABSENCE IS THE
-// WHOLE OF THIS STEP'S WORST DEFECT MADE UNREACHABLE (DEC-89, SAF-MAJ-5).
+// WHOLE OF THE WORST DEFECT IN THIS AREA MADE UNREACHABLE (DEC-89,
+// SAF-MAJ-5).
 //
 // The defect, measured by the safety lens against the client's own fixture on
 // postgres:17.11: `ph-0` carried `place_id=bukchon, visit_id=v-bukchon-0` and
 // a caption. Under the whole-state convention a body of `{caption}` — M2's
 // 'Write a note', which owns the note and nothing else — writes
 // `place_id=NULL, visit_id=NULL` alongside it, and the log has no record that
-// the photograph was ever at Bukchon. ALL THREE OF THIS PLAN'S STANDING
-// GUARDS PASS ON IT: the dangling check sees no dangling reference (the
-// reference is GONE), R6's place-without-occasion query sees no place, and the
-// pair-agreement assertion sees two NULLs, which agree. The client's own
+// the photograph was ever at Bukchon. ALL THREE STANDING GUARDS PASS ON IT:
+// the dangling check sees no dangling reference (the reference is GONE), the
+// place-without-occasion query sees no place, and the pair-agreement assertion
+// sees two NULLs, which agree. The client's own
 // sentence about the half-state is "a photograph naming a place but no
 // occasion is half a record… and it is the half a count cannot see"; both
 // halves gone is a state no count can see at all.

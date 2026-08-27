@@ -127,7 +127,8 @@ func beginMedia(deps Deps) http.HandlerFunc {
 			// `expiresAt` IS READ BACK OFF THE URL THE SIGNER PRODUCED, not
 			// computed from a second copy of the lifetime. A `PresignTTL`
 			// field on Deps would be two variables holding one fact — the
-			// mistake R2 refused for `Key.Object` and `Upload.SHA256` — and
+			// same mistake `Key.Object` and `Upload.SHA256` are shaped to
+			// refuse — and
 			// the one that goes wrong here is silent: the client is told a
 			// window that is not the window the signature carries, and the
 			// upload fails with SignatureDoesNotMatch some minutes later.
@@ -144,7 +145,7 @@ func beginMedia(deps Deps) http.HandlerFunc {
 }
 
 // commitMedia is `POST /v1/media/{id}/commit` — PD-05's first Service
-// operation, and the only route in R1-R8 that spans the bucket and the
+// operation, and the only route in this API that spans the bucket and the
 // database.
 //
 // A SECOND COMMIT IS 200 AND NOT 409 (SAF-MIN-12). The bucket-versus-database
@@ -196,7 +197,7 @@ func commitMedia(deps Deps) http.HandlerFunc {
 //
 // THE LOOP IS HERE AND NOT IN THE STORE (OE-2). Presigning is a local HMAC
 // with no network call once the region is pinned (internal/media's New says
-// why, and R2 measured the branch), so a batch method on the object store would
+// why, and carries the measurement), so a batch method on the object store would
 // save nothing a loop does not while adding a second site where the lifetime
 // choice can diverge from PresignGet's. The DATABASE read is the opposite case
 // and IS batched: a hundred ids is a hundred round trips.

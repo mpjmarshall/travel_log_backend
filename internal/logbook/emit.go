@@ -34,12 +34,11 @@ import "errors"
 // differently moves no data, so every phone holding a cached body gets 304 for
 // ever and keeps serving the OLD SHAPE until somebody happens to write.
 //
-// IT IS 2 FROM R1, AND THAT INSTRUCTION IS WHY. It was 1, with the note "the
-// shape is final at VS7 ... so the re-plan inherits it without a bump" — and
-// then DEC-91 added `shared` to every emitted trip, which is precisely "adds a
-// field". A phone holding a body cached under `W/"1-<n>"` must be told the
-// shape moved even though its log did not, or H1 keeps reading a document with
-// no `shared` in it and `Trip.isShared` is false on a trip that is shared.
+// IT IS 2, AND `shared` IS WHY. DEC-91 added `shared` to every emitted trip,
+// which is precisely "adds a field". A phone holding a body cached under
+// `W/"1-<n>"` must be told the shape moved even though its log did not, or H1
+// keeps reading a document with no `shared` in it and `Trip.isShared` is false
+// on a trip that is shared.
 //
 // FormatVersion did NOT move with it: the key is additive with a default, and
 // the client's own rule is that such a key needs no bump

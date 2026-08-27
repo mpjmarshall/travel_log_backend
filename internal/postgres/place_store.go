@@ -136,7 +136,8 @@ const occasionsAtPlaceSQL = `SELECT count(*) FROM visits
 	WHERE traveller_id = $1::uuid AND place_id = $2`
 
 // occupiedDepartingVisitsSQL is the guard that keeps the pair coherent, and it
-// is R6's own addition rather than something the plan names — see PutPlace.
+// is this file's own addition rather than something the plan names — see
+// PutPlace.
 const occupiedDepartingVisitsSQL = `SELECT v.id, count(*) FROM visits v
 	JOIN photos p ON (p.traveller_id, p.visit_id) = (v.traveller_id, v.id)
 	WHERE v.traveller_id = $1::uuid AND v.place_id = $2 AND v.id <> ALL($3)

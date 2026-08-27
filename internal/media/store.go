@@ -29,10 +29,11 @@
 //
 // WHAT THIS PACKAGE DELIBERATELY CANNOT DO. There is no method that deletes an
 // object (OE-12). The sweep that would call one is out of scope, and its shape
-// is not knowable until the liveness query exists — an object is live iff some
-// photograph's `asset` equals its id, and no step before R7 can ask that. The
-// consequence is written down rather than left implicit: nothing in R1-R8
-// reclaims an object, so a successful upload that is never committed stays in
+// is not knowable from here — an object is live iff some photograph's `asset`
+// equals its id, and this package knows nothing about photographs. The
+// consequence is written down rather than left implicit: nothing in this
+// repository reclaims an object, so a successful upload that is never
+// committed stays in
 // the bucket for ever. docs/BEFORE-A-PUBLIC-DEPLOY.md carries the arithmetic
 // and the deferred answer.
 package media
@@ -43,7 +44,7 @@ import (
 )
 
 // ErrNoSuchObject is what Stat answers for a key the bucket does not hold. It
-// is a sentinel rather than a bare error because the commit path in R3 has to
+// is a sentinel rather than a bare error because the commit path has to
 // tell "the upload has not landed" (a 409 the client can act on) from "the
 // bucket is unreachable" (a 503), and the two arrive through the same call.
 var ErrNoSuchObject = errors.New("media: no such object")

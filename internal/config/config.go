@@ -35,9 +35,7 @@ import (
 	"time"
 )
 
-// Config is the whole of what the binary reads. The parent plan's S03 lists
-// fifteen variables; VS2 named seven, the limiter fix added an eighth, and the
-// rest arrive with the steps that read them.
+// Config is the whole of what the binary reads.
 //
 // Port is kept as a string because that is what it is used as — ":"+Port. It is
 // nonetheless parsed and range-checked by loader.port, so "http" and "65536"
@@ -47,8 +45,8 @@ import (
 // TravellerRateLimitPerMin is a second variable rather than a second use of
 // AuthRateLimitPerMin. The credential ceiling bounds an unauthenticated
 // 64 MiB-per-attempt Argon2 surface and is deliberately low; the authenticated
-// one bounds a stolen token against a thirty-day session TTL with no revocation
-// surface, so it has to be high enough that no honest client ever meets it. One
+// one bounds a stolen token over a thirty-day session TTL, so it has to be
+// high enough that no honest client ever meets it. One
 // number cannot be both, and reusing the low one is a phone that stops syncing.
 type Config struct {
 	DatabaseURL              string
@@ -160,13 +158,13 @@ const (
 // MinMediaMaxBytes is a MEASUREMENT and not a round number. The fixture's
 // larger object is `internal/logbook/testdata/imagery/hero-mountain.png` at
 // 555,376 bytes, so a ceiling below a megabyte is a build that cannot store
-// its own seed data — and R4's `make seed` is where that would be discovered,
+// its own seed data — and `make seed` is where that would be discovered,
 // as an upload refused by the API that wrote the refusal.
 //
 // THERE IS NO CEILING ON THE CEILING, deliberately. The API never buffers a
 // photograph — DEC-36's whole point is that the bytes go straight to the
 // bucket — so a large value costs bucket space rather than memory, and nothing
-// in R1-R8 reclaims an object (OE-12). docs/BEFORE-A-PUBLIC-DEPLOY.md carries
+// in this repository reclaims an object (OE-12). docs/BEFORE-A-PUBLIC-DEPLOY.md carries
 // that arithmetic; a number invented here would not be one anybody chose.
 const MinMediaMaxBytes = 1 << 20
 

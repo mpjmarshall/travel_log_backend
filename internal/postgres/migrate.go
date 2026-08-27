@@ -1,5 +1,5 @@
-// Package postgres applies the schema. VS4 is the runner and nothing else: the
-// two transaction helpers (DEC-06) land at VS5 and are deliberately absent.
+// Package postgres applies the schema. This file is the runner and nothing
+// else.
 //
 // PostgreSQL 15 is a hard floor (DEC-66) because migrations/0001_init.up.sql
 // uses the column-list form of ON DELETE SET NULL, which 14 cannot parse.
@@ -88,10 +88,10 @@ const noTransactionDirective = "-- migrate:no-transaction"
 // noTransactionReRunnable is the SECOND header line such a file must carry,
 // and the runner REFUSES one that does not (DEC-99(b)).
 //
-// THE REQUIREMENT WAS ALREADY WRITTEN ABOVE AND ENFORCED BY NOTHING, which is
-// the sharp half of the ruling: "such a file must be written to be
-// re-runnable" has been in this file since VS4 with no test, no lint and no
-// acceptance check behind it. Measured against this Migrator with a
+// A REQUIREMENT IN A HEADER AND ENFORCED BY NOTHING IS THE SHARP HALF OF THE
+// RULING: "such a file must be written to be re-runnable" is a sentence no
+// test, no lint and no acceptance check can stand behind. Measured against
+// this Migrator with a
 // three-statement file that fails at statement 3: run 1 reported
 // `statement 3 … ERROR: division by zero`; runs 2 and 3, byte-identical file,
 // both reported `statement 2 … ERROR: relation "probe_half_applied" already
