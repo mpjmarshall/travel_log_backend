@@ -274,6 +274,68 @@ func TestRateLimitBySpendsTheAllowancePerKeyTheFunctionReturns(t *testing.T) {
 // request yet — a wiring defect, not a client fault — so it is a 500 and it is
 // loud. Failing OPEN here would remove the ceiling in exactly the case nobody
 // notices: the app works, and the guard is not there.
+func TestARefusalWithNoLoggerIsStillARefusal(t *testing.T) {
+	// BOTH REFUSAL BRANCHES LOG, AND BEFORE THIS BOTH PANICKED ON A NIL
+	// LOGGER — which the recover middleware turned into a 500. So a nil
+	// logger answered 500 in place of every 429, on the one path that runs
+	// when the system is already under pressure and the limiter is doing
+	// exactly what it is for.
+	//
+	// httpapi.Mount panics on a nil logger now, which is where a
+	// misconfiguration should be caught. This is the second line, for a
+	// caller that is not Mount, and it is the shape logFailure and the
+	// migrator already use.
+	c := newClock()
+
+	t.Run("the limited branch answers 429", func(t *testing.T) {
+		l := httpx.NewLimiter(1, c.now)
+		h := httpx.Chain(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}),
+			httpx.RateLimitBy(l, nil, "traveller", func(*http.Request) (string, bool) {
+				return "one", true
+			}),
+		)
+
+		first := httptest.NewRecorder()
+		h.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+		if first.Code != http.StatusOK {
+			t.Fatalf("the allowance = %d, want 200", first.Code)
+		}
+
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+		if rec.Code != http.StatusTooManyRequests {
+			t.Errorf("a refusal with no logger = %d, want 429", rec.Code)
+		}
+		if got := rec.Body.String(); got != `{"code":"rate_limited"}` {
+			t.Errorf("body = %s, want the rate_limited envelope", got)
+		}
+	})
+
+	t.Run("the unkeyable branch still answers 500, for its own reason", func(t *testing.T) {
+		// Not a regression: an unkeyable request IS a 500. The point is that
+		// it is a 500 because the limiter could not key it, not because the
+		// logger was nil.
+		l := httpx.NewLimiter(60, c.now)
+		h := httpx.Chain(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}),
+			httpx.RateLimitBy(l, nil, "traveller", func(*http.Request) (string, bool) {
+				return "", false
+			}),
+		)
+
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/logbook", nil))
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("an unkeyable request with no logger = %d, want 500", rec.Code)
+		}
+	})
+}
+
 func TestRateLimitByRefusesARequestItCannotKey(t *testing.T) {
 	log, _ := testLogger()
 	c := newClock()
