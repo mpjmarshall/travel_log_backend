@@ -59,7 +59,7 @@ import (
 	"strings"
 )
 
-// MaxNoteBytes bounds the two free-text fields this step introduces —
+// MaxNoteBytes bounds the two free-text fields —
 // `places.plan` and `visits.note` — and it is THIS BUILD'S POLICY rather than
 // schema, in exactly the sense MaxNameBytes and MaxSummaryBytes are.
 //
@@ -234,7 +234,8 @@ func ValidatePlace(p PlaceWrite) error {
 // checkVisits is the field the whole step is about, and it checks the SHAPE of
 // the array rather than what writing it would destroy.
 //
-// THE EMPTY ARRAY IS NOT REFUSED HERE, AND IT USED TO BE. PD-06's upsert fix
+// THE EMPTY ARRAY IS NOT REFUSED HERE, AND THE REFUSAL BELONGS ELSEWHERE.
+// PD-06's upsert fix
 // closes a no-op re-send of an UNCHANGED array and does not close the empty
 // one: the mandated shape ends "DELETE only the ids absent from the incoming
 // array", and when the array is empty every id is absent, so it does exactly
@@ -242,12 +243,12 @@ func ValidatePlace(p PlaceWrite) error {
 // the numbers are in the file comment — but it is a fact about the place's
 // CURRENT OCCASIONS, and this function cannot see them.
 //
-// Refusing it here refused more than the destruction. NINE OF THE SEVENTEEN
+// Refusing it here refuses more than the destruction. NINE OF THE SEVENTEEN
 // places in the client's own log are wishlist places, so `Emit` writes
-// `"visits": []` for them and the document the server produces was one it
+// `"visits": []` for them and the document the server produces would be one it
 // would not accept back; C1's pin — the single control that creates a place —
 // serialises the same way through the client's generated `toJson()`. The
-// refusal now lives in `postgres.writeVisits`, where the count is one query
+// refusal lives in `postgres.writeVisits`, where the count is one query
 // away: `[]` against a place with occasions is a 422, and against a place with
 // none it is the no-op it describes. Refuse the destruction, not the shape.
 func checkVisits(visits []Visit, placeID string) error {

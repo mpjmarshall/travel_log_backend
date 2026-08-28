@@ -110,17 +110,15 @@ func FromDocument(tr Traveller, objects []MediaObject, doc logbook.Document) (*D
 			})
 		}
 		// THE SHARE LINK IS THE CAPTURED TOKEN'S DIGEST, AND THIS LINE IS
-		// WHERE THE PLAINTEXT STOPS. R4 wrote the plaintext straight into the
-		// column and said in this comment that it was "the LAST release in
-		// which that sentence is true"; 0004 is that release (DEC-85). The
-		// captured `shareLinkId` is still what the fixture holds — it has to
-		// be, because `/l/{token}` has to resolve for the token the client
-		// document names — and `HashShareToken` is the only thing that leaves
-		// this scope with it.
+		// WHERE THE PLAINTEXT STOPS. The column holds a digest and never the
+		// token (DEC-85). The captured `shareLinkId` is what the fixture holds
+		// — it has to be, because `/l/{token}` has to resolve for the token
+		// the client document names — and `HashShareToken` is the only thing
+		// that leaves this scope with it.
 		//
-		// WHAT SURVIVES THE CHANGE IS `shared`, derived from this row's
-		// existence and its `revoked_at`, which is why the round-trip leg
-		// substitutes `Shared = ShareLinkID != nil` and then nils the token.
+		// `shared` IS DERIVED from this row's existence and its `revoked_at`,
+		// which is why the round-trip leg substitutes
+		// `Shared = ShareLinkID != nil` and then nils the token.
 		if t.ShareLinkID != nil {
 			d.ShareLinks = append(d.ShareLinks, ShareLink{
 				TravellerID: tr.ID, TripID: t.ID,

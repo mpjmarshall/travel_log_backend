@@ -46,13 +46,13 @@ import (
 	"time"
 )
 
-// LoadOptions is deliberately EMPTY, and the two fields it used to declare are
-// deleted rather than left unimplemented.
+// LoadOptions is deliberately EMPTY, and it carries no `Force` and no
+// `Reset`.
 //
-// `Force` and `Reset` were a stub's guess at overrides. DEC-97 makes the
-// refusal the whole point of this function, so a Force flag on the same struct
-// is a switch whose only use is to defeat it — and `Reset` is `DROP` wearing a
-// friendlier word, against the one volume that now holds the record. The
+// DEC-97 makes the refusal the whole point of this function, so a Force flag
+// on the same struct is a switch whose only use is to defeat it — and `Reset`
+// is `DROP` wearing a friendlier word, against the one volume that holds the
+// record. The
 // dev-database marker that DOES gate this lives in cmd/seed, where an operator
 // types it, rather than in a struct a future caller can set to true.
 type LoadOptions struct{}

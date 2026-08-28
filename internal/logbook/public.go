@@ -2,11 +2,10 @@
 //
 // IT IS AN ALLOWLIST AND NOT A SET OF THINGS TO HIDE, and that is the whole
 // design. docs/PUBLIC-ENVELOPE.md §1 is the specification these types are
-// written against; it was drafted at R5, three steps before this file, by
-// somebody holding the three sharing flags and the schema and NOT holding this
-// handler — because an allowlist derived from a handler is a description of
-// what the handler happens to emit, which is the one thing an allowlist must
-// not be.
+// written against, and it was written from the three sharing flags and the
+// schema rather than from this handler — an allowlist derived from a handler
+// is a description of what the handler happens to emit, which is the one thing
+// an allowlist must not be.
 //
 // SO THESE ARE SEPARATE TYPES AND NOT THE DOCUMENT'S OWN WITH TAGS ADDED.
 // `omitempty`, a second set of tags or a marshaller that drops fields would

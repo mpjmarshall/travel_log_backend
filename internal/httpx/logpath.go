@@ -13,7 +13,7 @@
 // attribute KEY — `token`, `passphrase`, `authorization`. The key here is
 // `path` and the capability is inside the VALUE, so that mechanism can never
 // fire on this and adding `path` to its list would blank every path in the
-// file. Measured on the running container at R8 entry:
+// file. Measured on the running container:
 //
 //	{"msg":"request","method":"GET","path":"/l/CAPABILITY7XY","status":404}
 //
@@ -38,7 +38,7 @@ const SharePathPrefix = "/l/"
 // IT NAMES THE ROUTE AND HIDES ONLY THE SEGMENT THAT IS A SECRET. A blanked
 // path — `[redacted]` alone — would make "how many public reads were there,
 // and how many 404ed" unanswerable, which is the operational question this
-// route raises most. And it is greppable: R8's acceptance check counts
+// route raises most. And it is greppable: the acceptance check counts
 // occurrences of it as the POSITIVE CONTROL for the absence check beside it.
 const RedactedSharePath = "/l/[redacted]"
 

@@ -29,6 +29,9 @@ import (
 
 const urlVar = "TEST_DATABASE_URL"
 
+// skipVar is the opt-out, and it is written down rather than inferred.
+const skipVar = "TRAVELLOG_SKIP_DB"
+
 // minServerVersionNum is PostgreSQL 15, and it is a HARD FLOOR (DEC-66).
 //
 // migrations/0001_init.up.sql uses the COLUMN-LIST form of ON DELETE SET NULL
@@ -59,16 +62,38 @@ type TB interface {
 // which is what a Migrator's Schema field wants. The schema is dropped when
 // the test finishes.
 //
-// It SKIPS, never fails, when TEST_DATABASE_URL is unset: `make check` has to
-// stay green on a machine with no Docker. It FAILS on a server older than 15,
-// because that is a database that is present and wrong rather than absent.
+// WITHOUT A DATABASE IT FAILS, UNLESS SOMEBODY HAS SAID IN WRITING THAT THEY
+// MEAN IT. It used to skip unconditionally so `make check` stayed green on a
+// machine with no Docker, and the cost of that was measured rather than
+// argued: the whole of internal/postgres skips — every cascade, snapshot,
+// advisory-lock and schema leg, which is where the hardest reasoning in this
+// repository lives — and the gate goes green anyway. A default green that says
+// nothing about the layer most likely to break is worse than a red one,
+// because it is believed.
+//
+// TRAVELLOG_SKIP_DB=1 is the opt-out, and it is deliberately a second variable
+// rather than a looser reading of the first. Unset TEST_DATABASE_URL is
+// ambiguous — it is equally "I have no Docker" and "I forgot" — and only one
+// of those should pass. This is the same ruling DEC-48 already made about a
+// nil limiter: a missing dependency must not read as a decision.
+//
+// It FAILS on a server older than 15, because that is a database that is
+// present and wrong rather than absent.
 func Open(t TB) (*sql.DB, string) {
 	t.Helper()
 
 	dsn := os.Getenv(urlVar)
 	if strings.TrimSpace(dsn) == "" {
-		t.Skipf("%s is not set, so there is no database to run against.\n"+
-			"    Bring one up and export it:  make test-db", urlVar)
+		if os.Getenv(skipVar) == "1" {
+			t.Skipf("%s is unset and %s=1, so this tier is skipped ON PURPOSE.\n"+
+				"    Nothing below this line has been checked against a database.",
+				urlVar, skipVar)
+			return nil, ""
+		}
+		t.Fatalf("%s is not set, so the database tier cannot run — and it is the "+
+			"tier that holds the cascades, the snapshots and the locks.\n"+
+			"    Bring one up:            make test-db\n"+
+			"    Or say you mean it:      %s=1 make check", urlVar, skipVar)
 		return nil, ""
 	}
 

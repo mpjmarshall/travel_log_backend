@@ -1,8 +1,7 @@
 // Command api is the travellog HTTP server.
 //
-// VS2 replaced VS1's placeholder. What VS1 wrote and this file keeps, because
-// both are load-bearing for the `scratch` runtime image rather than
-// conveniences:
+// TWO THINGS IN THIS FILE ARE LOAD-BEARING FOR THE `scratch` RUNTIME IMAGE
+// RATHER THAN CONVENIENCES:
 //
 //   - the blank import of time/tzdata. Stage 2 of the Dockerfile is `scratch`,
 //     which carries no zoneinfo, so without this every time.LoadLocation fails
@@ -10,9 +9,9 @@
 //   - the -healthcheck flag. scratch has no shell and no curl, so a Docker
 //     HEALTHCHECK has nothing to invoke except this binary.
 //
-// WHAT VS2 CHANGED, AND THE TWO CALLS THAT ARE DECISIONS:
+// AND TWO CALLS ARE DECISIONS:
 //
-//   - THE -addr FLAG IS GONE. The listen address is ":"+cfg.Port and PORT comes
+//   - THERE IS NO -addr FLAG. The listen address is ":"+cfg.Port and PORT comes
 //     from the environment, because go_backend.md L30 says configuration —
 //     naming ports specifically — is read "strictly via os.Getenv()". A flag
 //     setting the port is a second configuration path for the same value, and
@@ -22,8 +21,8 @@
 //     environment, and a config the server could not load is a server that is
 //     not running.
 //
-//   - /healthz PINGS THE DATABASE. VS1's answered a constant, so a container
-//     whose database had gone was reported healthy by Docker and kept taking
+//   - /healthz PINGS THE DATABASE. One that answers a constant reports a
+//     container whose database has gone as healthy, so Docker keeps sending it
 //     traffic. Nothing else in the repository can tell those two states apart.
 //
 // go_backend.md L20 asks for pgx "solely as a blank import driver". This is the
@@ -164,9 +163,9 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 
 	pingCtx, cancel := context.WithTimeout(context.Background(), startupPingTimeout)
 	defer cancel()
-	// THE ELAPSED TIME, NOT ONLY THE BUDGET (OPS-MIN-11). This used to answer
-	// "the database did not answer within 10s" for a DNS failure that took
-	// 250ms, so a fast failure read as a slow one and the first thing an
+	// THE ELAPSED TIME, NOT ONLY THE BUDGET (OPS-MIN-11). The budget alone
+	// answers "the database did not answer within 10s" for a DNS failure that
+	// took 250ms, so a fast failure reads as a slow one and the first thing an
 	// operator does is go looking for a network stall that is not there. The
 	// budget stays as a second field, because "247ms" alone does not say
 	// whether it gave up or was refused.
@@ -188,13 +187,11 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 
 	// THE BUCKET, ON THE SAME ARGUMENT AS THE PING ABOVE (DEC-98).
 	//
-	// R2 DISCARDED THE STORE THIS ANSWERS AND R3 KEEPS IT. R2's own comment
-	// said the discard was honest rather than sloppy, and gave the reason it
-	// cost nothing: the region is pinned, so there is no location cache to
-	// warm and a second store would be as cold and as offline as this one.
-	// That reasoning still holds — what changed is that there are now three
-	// routes that presign, so a second construction would be a second place
-	// for the nine S3_* values to be read.
+	// THE STORE IT BUILDS IS KEPT RATHER THAN DISCARDED. Three routes presign,
+	// so a second construction would be a second place the nine S3_* values
+	// are read. Nothing else is bought by holding it: the region is pinned, so
+	// there is no location cache to warm and a second store would be as cold
+	// and as offline as this one.
 	//
 	// What it buys is the two things a healthcheck cannot see. Nothing else
 	// creates the bucket: the official image auto-creates nothing and
@@ -227,8 +224,8 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 // pinger is the half of *sql.DB that /healthz needs.
 //
 // The narrow interface is what makes the database-down branch reachable from a
-// test WITHOUT a database, and that branch is the entire point of VS2's
-// /healthz. A handler taking *sql.DB would put its only interesting leg behind
+// test WITHOUT a database, and that branch is the entire point of a /healthz
+// that pings. A handler taking *sql.DB would put its only interesting leg behind
 // a TEST_DATABASE_URL skip, which is where legs go to stop being run.
 type pinger interface {
 	PingContext(ctx context.Context) error
@@ -283,9 +280,9 @@ func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
 
 // newMux builds the server's routing table.
 //
-// EXTRACTED FROM serve AT VS1-BACKFILL because serve blocks until a signal and
-// hands its listener to ListenAndServe, so there is no way to reach the handler
-// from a test without signalling the test process itself. newMux is what
+// IT IS SEPARATE FROM serve because serve blocks until a signal and hands its
+// listener to ListenAndServe, so there is no way to reach the handler from a
+// test without signalling the test process itself. newMux is what
 // httptest.NewServer takes.
 // THE VARIADIC IS WHAT KEPT TWELVE LEGS FROM BEING REWRITTEN. newMux is called
 // from a dozen places in this package's tests, every one of them about
@@ -390,8 +387,8 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 // Mount's nil panic is what guards the wiring; this is what guards the
 // arithmetic.
 //
-// THREE AND NOT TWO SINCE R8, AND THEY ARE THREE INSTANCES AND NOT ONLY THREE
-// NUMBERS (PD-09). `GET /l/{token}` is unauthenticated and is not a credential
+// THEY ARE THREE INSTANCES AND NOT ONLY THREE NUMBERS (PD-09). `GET
+// /l/{token}` is unauthenticated and is not a credential
 // attempt, so it needs its own budget AND its own bucket: sharing the
 // credential instance would put one person browsing a shared trip in the same
 // 10/min allowance as everybody's sign-in.
@@ -438,8 +435,8 @@ func mediaStore(ctx context.Context, cfg config.Config, log *slog.Logger) (media
 	if err := store.EnsureBucket(ctx); err != nil {
 		// The elapsed time as well as the budget, for the reason the startup
 		// ping carries both (OPS-MIN-11): a DNS failure that took 250ms and a
-		// server that never answered are different problems, and only the
-		// budget was ever printed.
+		// server that never answered are different problems, and the budget
+		// alone cannot tell them apart.
 		return nil, fmt.Errorf("the bucket %q at %s did not answer (waited %s of a %s budget): %w",
 			cfg.S3Bucket, cfg.S3InternalEndpoint,
 			time.Since(started).Round(time.Millisecond), bucketTimeout, err)
@@ -453,15 +450,11 @@ func mediaStore(ctx context.Context, cfg config.Config, log *slog.Logger) (media
 
 // serverChain is httpx.Base plus two, and every position in it is a decision.
 //
-// TIMEOUT IS FINALLY IN IT. This comment used to explain the SUBTRACTION —
-// "Timeout takes a duration this build cannot read: there is no REQUEST_TIMEOUT
-// in internal/config, and inventing one here would be a configuration value
-// nobody chose" — and that was correct and stayed true for four steps, during
-// which `httpx.Timeout` had ZERO production call sites. DEC-96 adds the
-// variable, so the reason is discharged rather than restated: the duration
-// comes from config and the middleware is wired.
+// TIMEOUT TAKES ITS DURATION FROM THE CONFIG (DEC-96) and never from a
+// constant here: a request budget invented in this file is a configuration
+// value nobody chose.
 //
-// Recover, RequestID and AccessLog were already here because the auth routes
+// Recover, RequestID and AccessLog are here because the auth routes
 // are the first thing a client can reach with a body: without Recover a
 // panicking handler closes the connection with no response at all, and without
 // RequestID the detail httpx sends to the log has nothing to tie it to.
@@ -533,9 +526,9 @@ func healthzHandler(db pinger, log *slog.Logger) http.HandlerFunc {
 // writeTimeout IS A PROMISE ABOUT THE CLIENT'S DOWNLINK, AND THAT IS WHY IT IS
 // NAMED AND ARGUED RATHER THAN INLINE (DEC-94).
 //
-// It was 15s. At 15s the server was promising that no log will ever exceed
-// fifteen seconds of the client's downlink, and NOTHING ENFORCED THAT. The
-// performance lens measured what the broken promise looks like: against an
+// A 15s ceiling promises that no log will ever exceed fifteen seconds of the
+// client's downlink, and NOTHING ENFORCES THAT. The performance lens
+// measured what the broken promise looks like: against an
 // 11,102,597-byte log, `GET /v1/logbook` answers HTTP 200 with a VALID ETag and
 // a body cut mid-token — at 400 kB/s, 8,371,312 bytes received, curl exit 18,
 // `json.load` -> "Unterminated string starting at char 8371258"; at 500 kB/s,

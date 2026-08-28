@@ -1,5 +1,5 @@
 // The middleware chain, outermost first: recover, request id, access log,
-// timeout — and then auth, which lands at VS6 and slots in below these four.
+// timeout — and then auth, which slots in below these four.
 //
 // THE ORDER IS THE DESIGN, and each position is load-bearing:
 //
@@ -57,8 +57,7 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 	return h
 }
 
-// Base is the four VS3 fixes plus DEC-96's Retry-After, in order. Auth appends
-// to it:
+// Base is the four, plus DEC-96's Retry-After, in order. Auth appends to it:
 //
 //	httpx.Chain(mux, append(httpx.Base(log, d), auth.Require(store))...)
 //
@@ -170,10 +169,9 @@ func newRequestID() string {
 // AccessLog writes one line per request: what was asked, what was answered,
 // how long it took, and the id that joins it to everything else.
 //
-// THE QUERY STRING IS NOT LOGGED. DEC-10 and DEC-11's public share path is
-// deferred, but its shape is settled — a capability lives in the URL — and a
-// logger that records query strings records capabilities, in plain text,
-// for as long as the logs are kept.
+// THE QUERY STRING IS NOT LOGGED. DEC-10 and DEC-11 put a capability in the
+// public share URL, and a logger that records query strings records
+// capabilities, in plain text, for as long as the logs are kept.
 //
 // `durationUs` AND NOT `durationMs`, WHICH IS ONE WORD AND THE DIFFERENCE
 // BETWEEN HAVING LATENCY DATA AND NOT (DEC-101). Measured over 21.35 hours of
@@ -331,7 +329,7 @@ func (w *jsonByDefault) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 //   - AN INTERMEDIARY CACHE. Measured on the live server: NO response set
 //     Cache-Control at all. That is survivable while every route carries an
 //     Authorization header, because RFC 9111 §3.5 forbids a shared cache from
-//     storing such a response — and R8's `GET /l/{token}` carries none, so a
+//     storing such a response — and `GET /l/{token}` carries none, so a
 //     200 with an ETag is heuristically cacheable by anything in front of it,
 //     and a cached envelope keeps serving live capabilities after "Stop
 //     sharing" for as long as it survives. `private` is belt and braces for a
@@ -344,7 +342,7 @@ func (w *jsonByDefault) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // IT IS APPLIED FROM THE ROUTE TABLE AND NOT FROM A PATH PREFIX (PD-09). A
 // prefix guess in middleware is a rule the next route inherits by silence,
 // which is how `/v1/media/{id}/commit` — which answers a row and no capability
-// — would have got a policy nobody chose, and how R8's `/l/{token}` would have
+// — would have got a policy nobody chose, and how `/l/{token}` would have
 // missed one.
 //
 // IT SETS THE HEADERS BEFORE THE HANDLER RUNS, so they are on the 4xx and the

@@ -60,20 +60,20 @@ func (e InvalidFieldError) Error() string { return "logbook: " + e.Field + ": " 
 // TripWrite is the body of PUT /v1/trips/{id}, and EVERY FIELD IS A POINTER
 // BECAUSE ABSENT MEANS LEAVE ALONE (DEC-89).
 //
-// IT USED TO BE A WHOLE-STATE UPSERT AND THAT ANSWERED 200 WHILE DESTROYING AN
-// ITINERARY. Measured against a real build at 89fc93f, and again from outside
-// the test binary at R1 entry: PUT /v1/trips/autumn with three cities and both
+// A WHOLE-STATE UPSERT HERE ANSWERS 200 WHILE DESTROYING AN ITINERARY, and
+// that is what the pointers prevent. Measured against a real build, and again
+// from outside the test binary: PUT /v1/trips/autumn with three cities and both
 // dates leaves trip_cities at kyoto:0/osaka:1/seoul:2; a body of `{id, name}`
 // — which is EXACTLY what T4's pencil sends, because renameTrip owns the name
 // and nothing else — then answers 200 with `"cityIds":[],"start":null,
 // "end":null` and `SELECT count(*) FROM trip_cities` -> 0.
 //
-// THE AUTHOR HAD ALREADY REASONED THIS OUT ONE LINE ABOVE THE STATEMENT, for
-// three columns: share_photos, share_notes and share_coordinates are left out
-// of the SET clause because "naming them in EXCLUDED-form would silently reset
-// a group this route does not own". Five columns on the same statement got the
-// other answer, because `CityIDs []string` made absence and emptiness the same
-// value and `checkCityIDs(nil)` loops zero times.
+// THE SAME REASONING SITS ONE LINE ABOVE THE STATEMENT, for three columns:
+// share_photos, share_notes and share_coordinates are left out of the SET
+// clause because "naming them in EXCLUDED-form would silently reset a group
+// this route does not own". Five columns on the same statement need the same
+// answer, and a `CityIDs []string` cannot give it — absence and emptiness are
+// one value, and `checkCityIDs(nil)` loops zero times.
 //
 // THE DOUBLE POINTERS ARE NOT DECORATION, AND WHAT THEY BUY IS SMALLER THAN IT
 // LOOKS. A `*T` field already distinguishes sent from absent for a

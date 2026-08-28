@@ -31,31 +31,57 @@ func (r *recorder) Fatalf(format string, args ...any) {
 }
 func (r *recorder) Cleanup(func()) {}
 
-func TestOpenSkipsWhenTheDatabaseURLIsUnset(t *testing.T) {
+func TestOpenFailsWhenThereIsNoDatabaseAndNobodySaidSo(t *testing.T) {
+	// THIS LEG USED TO ASSERT THE OPPOSITE, and it was right until the cost
+	// was measured: an unset TEST_DATABASE_URL skipped the whole of
+	// internal/postgres — every cascade, snapshot, advisory-lock and schema
+	// leg — and `make check` went green anyway. A default green that says
+	// nothing about the layer most likely to break is worse than a red one,
+	// because it is believed.
 	t.Setenv(urlVar, "")
+	t.Setenv(skipVar, "")
+	r := &recorder{}
+	if db, _ := Open(r); db != nil {
+		t.Errorf("Open returned a *sql.DB with %s unset", urlVar)
+	}
+	if len(r.fatals) != 1 {
+		t.Fatalf("Open recorded %d fatals with %s unset, want exactly 1 (skips: %v)",
+			len(r.fatals), urlVar, r.skips)
+	}
+	if len(r.skips) != 0 {
+		t.Errorf("Open skipped rather than failing: %v", r.skips)
+	}
+	// The message has to carry both ways out, or the developer it stops is
+	// left guessing which one they wanted.
+	for _, want := range []string{urlVar, "make test-db", skipVar} {
+		if !strings.Contains(r.fatals[0], want) {
+			t.Errorf("the failure %q does not name %q", r.fatals[0], want)
+		}
+	}
+}
+
+func TestOpenSkipsWhenSomebodyOptedOutInWriting(t *testing.T) {
+	// The other half, and it is why the opt-out is a SECOND variable rather
+	// than a looser reading of the first: an unset TEST_DATABASE_URL is
+	// equally "I have no Docker" and "I forgot", and only one of those should
+	// pass.
+	t.Setenv(urlVar, "")
+	t.Setenv(skipVar, "1")
 	r := &recorder{}
 	if db, _ := Open(r); db != nil {
 		t.Errorf("Open returned a *sql.DB with %s unset", urlVar)
 	}
 	if len(r.skips) != 1 {
-		t.Fatalf("Open recorded %d skips with %s unset, want exactly 1 (fatals: %v)", len(r.skips), urlVar, r.fatals)
+		t.Fatalf("Open recorded %d skips under %s=1, want exactly 1 (fatals: %v)",
+			len(r.skips), skipVar, r.fatals)
 	}
 	if len(r.fatals) != 0 {
-		t.Errorf("Open failed the test rather than skipping it: %v", r.fatals)
+		t.Errorf("Open failed despite the opt-out: %v", r.fatals)
 	}
-}
-
-func TestTheSkipReasonNamesTheVariableAndTheMakeTarget(t *testing.T) {
-	t.Setenv(urlVar, "")
-	r := &recorder{}
-	Open(r)
-	if len(r.skips) != 1 {
-		t.Fatalf("no skip recorded")
-	}
-	for _, want := range []string{urlVar, "make test-db"} {
-		if !strings.Contains(r.skips[0], want) {
-			t.Errorf("skip reason %q does not name %q", r.skips[0], want)
-		}
+	// It must say that nothing below was checked. A skip that reads like a
+	// pass is the thing this whole change is about.
+	if !strings.Contains(r.skips[0], "ON PURPOSE") {
+		t.Errorf("the skip %q does not say it was deliberate", r.skips[0])
 	}
 }
 

@@ -16,8 +16,7 @@ import (
 // changes.
 const Redacted = "[redacted]"
 
-// secretKeys is the closed list VS2's step text names: token, passphrase,
-// authorization.
+// secretKeys is a closed list: token, passphrase, authorization.
 //
 // "password" is deliberately NOT here, and the absence is a decision rather
 // than an oversight: DEC-61 settles the field's name as `passphrase`, and this
