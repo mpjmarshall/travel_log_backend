@@ -11,20 +11,19 @@
 # `gofmt -l .` is in the chain and MUST PRINT NOTHING, so the target inspects
 # its output — a plain `gofmt -l .` in a && chain is a check that cannot fail.
 #
-# CORRECTION (VS1-FIXES). This comment used to justify inspecting the output by
-# saying "gofmt exits 0 whether or not it lists files". That premise holds ONLY
-# for input gofmt can parse. On a SYNTAX ERROR gofmt exits **2** and writes to
-# **stderr**, so stdout is empty, `[ -n "$out" ]` is false, and the recipe line
-# succeeded — `make check` exited **0** with an unparseable .go file in the
-# tree. Measured at ee543b9 on a copy: `.tools/broken.go`, a hidden directory
-# that `./...` does not match and that internal/config's AST sweep skips, gave
-# `gofmt exit=2` and `MAKE EXIT=0`. So the status is now captured as well as
-# the output, and both are checked, in that order.
+# THE STATUS IS CHECKED AS WELL AS THE OUTPUT, AND IN THAT ORDER. "gofmt exits
+# 0 whether or not it lists files" holds only for input gofmt can PARSE. On a
+# syntax error it exits 2 and writes to stderr, so stdout is empty,
+# `[ -n "$out" ]` is false, and the recipe line succeeds — `make check` exiting
+# 0 with an unparseable .go file in the tree. Measured at ee543b9 on a copy:
+# `.tools/broken.go`, in a hidden directory `./...` does not match and
+# internal/config's AST sweep skips, gave `gofmt exit=2` and `MAKE EXIT=0`.
 #
-# THE LESSON, which is worth more than the fix: VS1 proved this step with ONE
-# mutation (a badly formatted but parseable file) and recorded the class as
-# closed. That mutation still reddens. A guard proven once against one mutation
-# is proven against that mutation, not against its class.
+# THE LESSON IS WORTH MORE THAN THE FIX, and it is why the paragraph above
+# names two mutations rather than one: this step was once proven with a single
+# mutation — a badly formatted but parseable file — and the class recorded as
+# closed. That mutation still reddens. A guard proven against one mutation is
+# proven against that mutation, not against its class.
 
 SHELL := /bin/bash
 
@@ -35,8 +34,7 @@ BIN     := bin/api
 # SLICE is a variable so the wiring can be tested without recursion: the arc's
 # own record phase runs `make slice SLICE=<stub>` and asserts the exit code
 # comes back out. A target that exits 0 having done nothing is indistinguishable
-# from one that succeeded (VS1-FIXES finding 7), and that is the class it
-# guards.
+# from one that succeeded, and that is the class it guards.
 SLICE   := scripts/slice-arc.sh
 
 .PHONY: build run check fmt up down logs test-db test-s3 migrate slice seed backup
@@ -209,10 +207,9 @@ seed:
 
 ## backup — a custom-format pg_dump of the stack's database, keeping 7 (DEC-92).
 ##
-## R4 IS WHERE THE VOLUME STOPS BEING DISPOSABLE, and this is the target that
-## says so. The plan's own premise is that PostgreSQL is the record and the
-## phone is a cache; before this, `pg_dump` had zero hits across the whole plan
-## and `make slice`'s first step destroyed the volume the record lives in.
+## THE VOLUME IS NOT DISPOSABLE, and this is the target that says so. The
+## premise is that PostgreSQL is the record and the phone is a cache, so the
+## volume holds the only copy — and `make slice`'s first step destroys it.
 ##
 ## `-Fc` AND NOT PLAIN SQL. Custom format is what `pg_restore` reads, and
 ## pg_restore is version-tolerant in the direction that matters: a dump taken by
@@ -266,9 +263,9 @@ backup:
 ## already held the row proves nothing.
 ##
 ## SO IT REFUSES THE DEFAULT PROJECT (DEC-92, and it is the whole reason this
-## guard exists). Before R4 the volume held nothing anybody would miss and the
-## only protection was a paragraph in this file; R4 is the step that puts a
-## record in it, and five of the eight steps' acceptance checks read
+## guard exists). The volume used to hold nothing anybody would miss and the
+## only protection was a paragraph in this file. It holds a record now, and
+## five of the eight steps' acceptance checks read
 ## `make seed && make check && make slice` — a documented procedure teaching a
 ## developer that seeding and then wiping is normal. The arc already ran two of
 ## its five phases under their own COMPOSE_PROJECT_NAME, so the main phase using
