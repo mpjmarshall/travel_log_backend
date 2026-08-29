@@ -225,6 +225,39 @@ path_exemption() {
 phase_record() {
 	phase "record — every path a comment names, and the Makefile's own wiring"
 
+	########################################################################
+	# THE FOUR VALUES THE CLIENT MIRRORS, PINNED ON THIS SIDE TOO.
+	#
+	# The client pins all four by literal already. That proves the CLIENT did
+	# not drift on its own and says nothing about this side — and pinning is
+	# not agreement: a server that lowers one of these makes the client wrong
+	# and green. It goes on accepting a 30 MiB photograph, or asking for a
+	# hundred ids, and finds out as a 422 in somebody's hand.
+	#
+	# THE HONEST SEAM IS CROSS-REPO AND NEITHER SIDE CAN REACH IT. This arc
+	# cannot read the Flutter tree (a separate repository, and often absent),
+	# and `flutter test` opens no socket. So this is deliberately TWO PINS
+	# rather than one comparison: each side reddens its own gate when it
+	# moves, which does not prove they agree but does make a silent drift
+	# impossible. Somebody changing one gets a red and has to go and look.
+	#
+	# Closing it properly is a feature rather than a test — the server would
+	# serve its own limits and the client would assert against them at
+	# runtime. Recorded rather than done.
+	########################################################################
+	step "R0: the four values the client mirrors have not moved on this side"
+	assert_eq 100 "$(grep -oE 'MaxMintIDs = [0-9]+' internal/logbook/validate.go | grep -oE '[0-9]+')" \
+		"MaxMintIDs (client: mediaMintBatchLimit)"
+	assert_eq 2 "$(grep -oE 'FormatVersion = [0-9]+' internal/logbook/emit.go | grep -oE '[0-9]+')" \
+		"FormatVersion (client: logbookFormatVersion)"
+	assert_eq 500 "$(grep -oE 'MaxWalkPoints = [0-9]+' internal/logbook/walk.go | grep -oE '[0-9]+')" \
+		"MaxWalkPoints (client: walkTrackCap)"
+	# MEDIA_MAX_BYTES is the odd one: a DEPLOYMENT value rather than a
+	# compile-time constant, so what is pinned here is the shipped default in
+	# the compose file, which is what the client's 25 MiB was written against.
+	assert_eq 26214400 "$(grep -oE 'MEDIA_MAX_BYTES:-[0-9]+' deploy/docker-compose.yml | grep -oE '[0-9]+$')" \
+		"MEDIA_MAX_BYTES default (client: mediaMaxBytes)"
+
 	step "R1: repo-relative paths named in comments exist"
 	local missing=0 candidate
 	# Comments only, and code lines are excluded on purpose: an import path or a
