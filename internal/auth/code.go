@@ -51,6 +51,22 @@ const (
 	// MaxCodeAttempts is how many wrong guesses a single code survives before
 	// it is dead and a new one must be requested.
 	MaxCodeAttempts = 5
+
+	// CodeRequestInterval is the least time between two codes going to one
+	// address, and it is a throttle on the MAIL rather than on the caller.
+	//
+	// THE EXISTING LIMITER CANNOT DO THIS JOB. internal/httpx keys on the
+	// client address, and an attacker asking for a victim's code a thousand
+	// times rotates those; what has to be rate-limited is the inbox being
+	// written to, which is a property of the request body and not of the
+	// connection. It needs no new state: one row per traveller means
+	// issued_at already records when the last code went out.
+	//
+	// SIXTY SECONDS IS A BACKSTOP AND NOT THE USER-FACING COOLDOWN. A
+	// traveller who did not receive the first one should be looking at a
+	// Resend that is visibly disabled for a minute, so they never reach this.
+	// This is what a script hits.
+	CodeRequestInterval = 60 * time.Second
 )
 
 // ErrMalformedCode is a presented code that is not the shape this package
@@ -138,6 +154,25 @@ func (s *Service) RequestCode(ctx context.Context, email string) (code string, t
 		return "", Traveller{}, false, nil
 	case err != nil:
 		return "", Traveller{}, false, err
+	}
+
+	// THROTTLED IS ANSWERED EXACTLY AS UNKNOWN IS, and that costs something
+	// real: a traveller who taps Resend too soon is told nothing and gets
+	// nothing. The alternative leaks. A distinguishable "too soon" turns two
+	// quick requests into a test for whether an address has a log here, which
+	// is the oracle this whole method is shaped to avoid. The cooldown
+	// belongs in the interface, where it can be shown.
+	//
+	// AND IT MUST NOT TOUCH THE LIVE CODE. Replacing or burning it here would
+	// let anybody stop a traveller signing in at all, by asking for codes in
+	// a loop until every one the traveller receives is dead on arrival.
+	switch held, err := s.Store.CodeFor(ctx, tr.ID); {
+	case errors.Is(err, ErrNoCode):
+		// Nothing outstanding, so nothing to throttle against.
+	case err != nil:
+		return "", Traveller{}, false, err
+	case s.now().Sub(held.IssuedAt) < CodeRequestInterval:
+		return "", Traveller{}, false, nil
 	}
 
 	code, hash, err := NewCode(tr.ID)
