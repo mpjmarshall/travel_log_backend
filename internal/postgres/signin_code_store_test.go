@@ -23,14 +23,14 @@ import (
 	"travellog/migrations"
 )
 
-func codeStore(t *testing.T) (SignInCodeStore, *sql.DB, string) {
+func codeStore(t *testing.T) (AuthStore, *sql.DB, string) {
 	t.Helper()
 	db, schema := testdb.Open(t)
 	if _, err := (Migrator{Schema: schema, Logger: quietLogger()}).
 		Migrate(context.Background(), db, migrations.FS); err != nil {
 		t.Fatalf("migrating: %v", err)
 	}
-	return SignInCodeStore{DB: db}, db, schema
+	return AuthStore{DB: db}, db, schema
 }
 
 func TestACodeIsIssuedAndFoundByItsDigest(t *testing.T) {

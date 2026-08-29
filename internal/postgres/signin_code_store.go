@@ -10,7 +10,12 @@ import (
 	"travellog/internal/auth"
 )
 
-// SignInCodeStore is the sign_in_codes table.
+// The sign_in_codes table, on AuthStore.
+//
+// THEY ARE ONE STORE AND NOT TWO. auth.Store is a single interface and
+// cmd/api wires a single AuthStore into it; a second type would have to be
+// composed into that one to satisfy it, which is a name and an indirection
+// for no boundary. The file is separate because the table is.
 //
 // EVERY METHOD HERE IS A SINGLE STATEMENT AND NONE TAKES THE TRAVELLER LOCK.
 // DEC-50 exempts auth from `pg_advisory_xact_lock` because a sign-in is not a
@@ -21,8 +26,6 @@ import (
 // AND NOTHING HERE TOUCHES logbook_version, which is the other half of DEC-50
 // and is asserted rather than trusted — a bump would make every device
 // re-fetch the whole log because somebody typed a code.
-type SignInCodeStore struct{ DB *sql.DB }
-
 // IssueCode stores a freshly minted code, REPLACING whatever that traveller
 // held.
 //
@@ -34,7 +37,7 @@ type SignInCodeStore struct{ DB *sql.DB }
 // IT ALSO RESETS `attempts`, deliberately and in the same statement: a
 // traveller who mistyped five times has to be able to ask for a new code and
 // use it, or the cap locks them out of their own account permanently.
-func (s SignInCodeStore) IssueCode(ctx context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
+func (s AuthStore) IssueCode(ctx context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO sign_in_codes (traveller_id, code_hash, issued_at, expires_at, attempts)
 		VALUES ($1, $2, now(), $3, 0)
@@ -57,7 +60,7 @@ func (s SignInCodeStore) IssueCode(ctx context.Context, travellerID string, hash
 // "ask for another", the other means "you never asked" — and a store that
 // hid the difference would make the service unable to say which. Expiry is
 // decided where the clock is injected.
-func (s SignInCodeStore) CodeFor(ctx context.Context, travellerID string) (auth.SignInCode, error) {
+func (s AuthStore) CodeFor(ctx context.Context, travellerID string) (auth.SignInCode, error) {
 	var c auth.SignInCode
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT code_hash, issued_at, expires_at, attempts
@@ -77,7 +80,7 @@ func (s SignInCodeStore) CodeFor(ctx context.Context, travellerID string) (auth.
 // IT INCREMENTS AND READS IN ONE STATEMENT. Read-then-write would let two
 // concurrent guesses both read four and both write five, which is six guesses
 // against a cap of five — the exact shape the cap exists to prevent.
-func (s SignInCodeStore) CountAttempt(ctx context.Context, travellerID string) (int, error) {
+func (s AuthStore) CountAttempt(ctx context.Context, travellerID string) (int, error) {
 	var attempts int
 	err := s.DB.QueryRowContext(ctx, `
 		UPDATE sign_in_codes SET attempts = attempts + 1
@@ -97,7 +100,7 @@ func (s SignInCodeStore) CountAttempt(ctx context.Context, travellerID string) (
 // replay be told apart from a code that never existed, and the caller must
 // not be able to tell those apart — the same call Service.Authenticate makes
 // about a token nobody holds.
-func (s SignInCodeStore) BurnCode(ctx context.Context, travellerID string) error {
+func (s AuthStore) BurnCode(ctx context.Context, travellerID string) error {
 	if _, err := s.DB.ExecContext(ctx,
 		`DELETE FROM sign_in_codes WHERE traveller_id = $1`, travellerID); err != nil {
 		return fmt.Errorf("postgres: burning a sign-in code: %w", err)

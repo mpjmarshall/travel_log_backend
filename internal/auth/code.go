@@ -22,6 +22,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
@@ -113,4 +114,117 @@ func HashCode(travellerID, plaintext string) ([]byte, error) {
 	}
 	sum := sha256.Sum256([]byte(travellerID + ":" + plaintext))
 	return sum[:], nil
+}
+
+// RequestCode mints a sign-in code for an address and answers the plaintext
+// to mail, the traveller to mail it to, and whether there is anybody to mail.
+//
+// AN UNKNOWN ADDRESS ANSWERS NO ERROR AND NOTHING TO SEND, and that is the
+// whole shape of this method. Erroring would make the route an account
+// oracle: anybody could ask it which addresses have a log here. THE CALLER IS
+// REQUIRED TO ANSWER THE SAME THING EITHER WAY — this method makes that
+// possible and cannot enforce it.
+func (s *Service) RequestCode(ctx context.Context, email string) (code string, tr Traveller, ok bool, err error) {
+	// The shape of the address is a field error and not a credentials one,
+	// the same call SignIn makes: it says nothing about who has an account.
+	if err := checkEmail(email); err != nil {
+		return "", Traveller{}, false, err
+	}
+	// TravellerByEmail resolves any casing itself, through DEC-65's index on
+	// lower(email); there is no normalisation to do here.
+	tr, _, err = s.Store.TravellerByEmail(ctx, email)
+	switch {
+	case errors.Is(err, ErrNoTraveller):
+		return "", Traveller{}, false, nil
+	case err != nil:
+		return "", Traveller{}, false, err
+	}
+
+	code, hash, err := NewCode(tr.ID)
+	if err != nil {
+		return "", Traveller{}, false, err
+	}
+	if err := s.Store.IssueCode(ctx, tr.ID, hash, s.now().Add(CodeTTL)); err != nil {
+		return "", Traveller{}, false, err
+	}
+	return code, tr, true, nil
+}
+
+// SignInWithCode exchanges a mailed code for a session.
+//
+// EVERY REFUSAL IS ErrBadCredentials AND THE CALLER CANNOT TELL THEM APART:
+// an unknown address, a traveller who never asked, an expired code, a code
+// whose budget is spent, and simply the wrong digits. Distinguishing any of
+// them hands an attacker a step of the answer.
+//
+// THE CAP BURNS THE CODE RATHER THAN LOCKING THE ACCOUNT. After
+// MaxCodeAttempts the row goes, so the right code stops working too and the
+// traveller asks for another — which resets the budget. Locking the account
+// instead would make the endpoint a way to lock anybody out of theirs.
+func (s *Service) SignInWithCode(ctx context.Context, email, code string) (Issued, error) {
+	if err := checkEmail(email); err != nil {
+		return Issued{}, err
+	}
+	tr, _, err := s.Store.TravellerByEmail(ctx, email)
+	switch {
+	case errors.Is(err, ErrNoTraveller):
+		return Issued{}, ErrBadCredentials
+	case err != nil:
+		return Issued{}, err
+	}
+
+	held, err := s.Store.CodeFor(ctx, tr.ID)
+	switch {
+	case errors.Is(err, ErrNoCode):
+		return Issued{}, ErrBadCredentials
+	case err != nil:
+		return Issued{}, err
+	}
+
+	// Expiry and an exhausted budget are both "this code is finished", and
+	// both take the row with them so the next guess finds nothing.
+	if !s.now().Before(held.ExpiresAt) || held.Attempts >= MaxCodeAttempts {
+		if err := s.Store.BurnCode(ctx, tr.ID); err != nil {
+			return Issued{}, err
+		}
+		return Issued{}, ErrBadCredentials
+	}
+
+	// HashCode refuses a malformed code, and a malformed one still costs an
+	// attempt: not charging for it would let an attacker probe the shape for
+	// free and would make the budget depend on what they sent.
+	presented, hashErr := HashCode(tr.ID, code)
+	if hashErr != nil || !SameHash(presented, held.Hash) {
+		n, err := s.Store.CountAttempt(ctx, tr.ID)
+		if err != nil && !errors.Is(err, ErrNoCode) {
+			return Issued{}, err
+		}
+		if n >= MaxCodeAttempts {
+			if err := s.Store.BurnCode(ctx, tr.ID); err != nil {
+				return Issued{}, err
+			}
+		}
+		return Issued{}, ErrBadCredentials
+	}
+
+	// Right. Burn before issuing: a session that exists while its code still
+	// does is a code somebody can use twice.
+	if err := s.Store.BurnCode(ctx, tr.ID); err != nil {
+		return Issued{}, err
+	}
+
+	// The same three lines SignIn ends on. NO DECOY IS NEEDED HERE and that
+	// is a difference worth naming: SignIn runs a throwaway Argon2 verify for
+	// an unknown address so the timing does not answer the question. A code
+	// is a SHA-256 compare, which is far too cheap for the missing work to be
+	// measurable over a network.
+	plaintext, hash, err := NewToken()
+	if err != nil {
+		return Issued{}, err
+	}
+	expires := s.now().Add(s.ttl())
+	if _, err := s.Store.CreateSession(ctx, tr.ID, hash, expires); err != nil {
+		return Issued{}, err
+	}
+	return Issued{Token: plaintext, ExpiresAt: expires, Traveller: tr}, nil
 }

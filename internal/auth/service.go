@@ -232,6 +232,28 @@ type Store interface {
 	// security control with a race nobody named is worse than one with a race
 	// somebody did.
 	TravellerExists(ctx context.Context) (bool, error)
+
+	// IssueCode stores a freshly minted sign-in code, REPLACING whatever that
+	// traveller held and resetting the attempt count. One live code per
+	// traveller is not a convenience: five guesses is a bound only while a
+	// traveller cannot hold two hundred codes at once.
+	IssueCode(ctx context.Context, travellerID string, hash []byte, expiresAt time.Time) error
+
+	// CodeFor answers the traveller's live code, or ErrNoCode.
+	//
+	// IT DOES NOT FILTER ON EXPIRY. An expired code and no code are different
+	// facts and the service decides between them, because the service is
+	// where the clock is injected.
+	CodeFor(ctx context.Context, travellerID string) (SignInCode, error)
+
+	// CountAttempt records one wrong guess and answers the new total. It must
+	// increment and read in one statement, or two concurrent guesses both
+	// read four and both write five.
+	CountAttempt(ctx context.Context, travellerID string) (int, error)
+
+	// BurnCode removes the code. The row goes rather than being marked, so a
+	// replay cannot be told from a code that never existed.
+	BurnCode(ctx context.Context, travellerID string) error
 }
 
 // Service is DEC-62's one real addition: the business rules, so a handler
