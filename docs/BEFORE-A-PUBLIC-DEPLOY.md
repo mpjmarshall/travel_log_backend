@@ -19,6 +19,17 @@ must stay honest about that.
 
 ---
 
+> **This file is the operational half of a public deploy, and it assumes one
+> traveller.** The product decision to become a hosted multi-tenant service is
+> in `HOSTED-MULTI-TENANT.md`, settled 29 August 2026. Everything below still
+> applies — sizing, the bucket's absent lifecycle rules, restore ordering, the
+> S3 secret, TLS — and three sections are named by that document as unchanged
+> by it: §3 the tile source, §4 and §5 the bucket, §8 the proxy and the rate
+> limiter's `RemoteAddr` key.
+
+---
+
+
 ## 1. Sizing — the three numbers, and where they came from
 
 Measured (DEC-95), on the running stack rather than estimated:
