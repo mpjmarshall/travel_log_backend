@@ -946,6 +946,13 @@ func TestTheDeleteActionsAreWhatTheSheetsSay(t *testing.T) {
 		"walks_city_fk":              deleteRestrict,
 		"share_links_traveller_fk":   deleteCascade,
 		"share_links_trip_fk":        deleteCascade,
+
+		// No sheet says this one, because no sheet can: a sign-in code is not
+		// part of anybody's log and never appears on a screen. Its line is the
+		// deletion decision instead — deletion is immediate and total, and a
+		// live code is exactly what a hand-written delete forgets and a
+		// foreign key remembers.
+		"sign_in_codes_traveller_fk": deleteCascade,
 	}
 
 	db := migrated(t)
@@ -1079,7 +1086,7 @@ func TestEveryConstraintWasNamedDeliberately(t *testing.T) {
 // and under en_US.utf8 punctuation is ignored at the primary level — so
 // `trip_cities` and `trips` would sort in an order that is a fact about the
 // container's locale rather than about this schema.
-func TestTheMigrationCreatesExactlyTheElevenTablesAndTheLedger(t *testing.T) {
+func TestTheMigrationCreatesExactlyTheTwelveTablesAndTheLedger(t *testing.T) {
 	db := migrated(t)
 	rows, err := db.Query(`SELECT table_name FROM information_schema.tables
 		WHERE table_schema = current_schema() AND table_type='BASE TABLE'`)
@@ -1098,8 +1105,8 @@ func TestTheMigrationCreatesExactlyTheElevenTablesAndTheLedger(t *testing.T) {
 	sort.Strings(got)
 	want := []string{
 		"cities", "media_objects", "photos", "places", "schema_migrations",
-		"sessions", "share_links", "travellers", "trip_cities", "trips",
-		"visits", "walks",
+		"sessions", "share_links", "sign_in_codes", "travellers",
+		"trip_cities", "trips", "visits", "walks",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("tables = %v\nwant     %v", got, want)

@@ -303,3 +303,18 @@ you.
 - Whether the free tier converts, which is unknowable until phase 0 answers.
 - **Apple's current rules on external checkout**, which decision 11 rests on
   and which nobody has verified.
+- **A super-user or admin role.** Raised 29 August 2026 and deliberately not
+  designed here. Several decisions above already imply one — minting invite
+  codes, killing a share link, suspending an account, answering a report — and
+  each is currently "a Make target you run against the database". That is
+  honest at ten users and stops being honest well before ten thousand.
+
+  Three things will have to be decided together when it is taken, and none of
+  them is obvious: **whether an admin is a traveller with a flag or a separate
+  identity** (a flag means the admin's own logbook lives in the same table as
+  the ones they can reach into, which is exactly the shape that produces an
+  accident); **what an admin can see** — a report about a photograph is
+  useless without looking at it, and looking at it is reading somebody's
+  private log; and **whether admin actions are audited**, which is the only
+  one with a clear answer, because an unlogged power to read private data is
+  indistinguishable from not having the power until it is abused.
