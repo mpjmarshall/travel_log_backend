@@ -13,6 +13,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 // separately and on purpose — this file is about the service's decisions and
 // internal/postgres is about the schema's.
 type fakeStore struct {
+	codes      map[string]*SignInCode
 	travellers map[string]storedTraveller // keyed by lower(email)
 	sessions   map[string]storedSession   // keyed by string(tokenHash)
 	nextID     int
@@ -37,6 +39,12 @@ type fakeStore struct {
 	// every request — which is exactly the behaviour the granularity leg
 	// exists to refuse, passing.
 	clock func() time.Time
+}
+
+// fakeUUID is a valid uuid shape that encodes its counter, so a failure
+// message still says which traveller it was about.
+func fakeUUID(n int) string {
+	return fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
 }
 
 func (f *fakeStore) now() time.Time {
@@ -72,7 +80,12 @@ func (f *fakeStore) CreateTraveller(_ context.Context, email, hash string) (Trav
 		return Traveller{}, ErrEmailTaken
 	}
 	f.nextID++
-	tr := Traveller{ID: string(rune('a' + f.nextID)), Email: email}
+	// UUID-SHAPED, AND NOT 'a', 'b', 'c'. The real column is a uuid and
+	// HashCode salts with it, refusing anything else — so a fake handing out
+	// single letters makes every code leg fail for a reason that is about the
+	// fake. This is the smallest change that keeps the fake faithful where it
+	// is now load-bearing.
+	tr := Traveller{ID: fakeUUID(f.nextID), Email: email}
 	f.travellers[key] = storedTraveller{Traveller: tr, hash: hash}
 	return tr, nil
 }

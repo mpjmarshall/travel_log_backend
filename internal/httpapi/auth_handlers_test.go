@@ -972,3 +972,21 @@ func TestMountRefusesToRunWithoutARateLimiter(t *testing.T) {
 	}()
 	Mount(http.NewServeMux(), Deps{Auth: &auth.Service{}, Log: slog.Default()})
 }
+
+// The code methods, so this file's fake still satisfies auth.Store. They are
+// unreachable from the handlers tested here — the code routes arrive with
+// step 7 — and answering ErrNoCode is the honest stand-in until they do: a
+// fake that pretended to hold codes would be asserting itself.
+func (f *fakeStore) IssueCode(context.Context, string, []byte, time.Time) error {
+	return nil
+}
+
+func (f *fakeStore) CodeFor(context.Context, string) (auth.SignInCode, error) {
+	return auth.SignInCode{}, auth.ErrNoCode
+}
+
+func (f *fakeStore) CountAttempt(context.Context, string) (int, error) {
+	return 0, auth.ErrNoCode
+}
+
+func (f *fakeStore) BurnCode(context.Context, string) error { return nil }
