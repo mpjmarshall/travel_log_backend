@@ -60,6 +60,24 @@ func TestOpenFailsWhenThereIsNoDatabaseAndNobodySaidSo(t *testing.T) {
 	}
 }
 
+func TestTheOptOutReadsTheUsualSpellings(t *testing.T) {
+	// EXACTLY "1" IS A GUARD THAT LOOKS BROKEN. A developer reads the failure,
+	// exports TRAVELLOG_SKIP_DB=true, and gets the identical failure back
+	// telling them to set the variable they have just set.
+	for _, yes := range []string{"1", "true", "TRUE", "yes", "y", "on", " true "} {
+		if !optedOut(yes) {
+			t.Errorf("optedOut(%q) = false, want true", yes)
+		}
+	}
+	// And still strict where it matters: an unset or empty variable is not an
+	// opt-out, because unset is equally "I have no Docker" and "I forgot".
+	for _, no := range []string{"", "  ", "0", "false", "no", "maybe"} {
+		if optedOut(no) {
+			t.Errorf("optedOut(%q) = true, want false", no)
+		}
+	}
+}
+
 func TestOpenSkipsWhenSomebodyOptedOutInWriting(t *testing.T) {
 	// The other half, and it is why the opt-out is a SECOND variable rather
 	// than a looser reading of the first: an unset TEST_DATABASE_URL is

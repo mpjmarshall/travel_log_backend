@@ -32,6 +32,21 @@ const urlVar = "TEST_DATABASE_URL"
 // skipVar is the opt-out, and it is written down rather than inferred.
 const skipVar = "TRAVELLOG_SKIP_DB"
 
+// optedOut reads the opt-out generously, because the alternative is a guard
+// that appears broken. Exactly "1" sends a developer who exported
+// TRAVELLOG_SKIP_DB=true straight back to the identical failure, telling them
+// to set the variable they have just set.
+//
+// Generous on the way OUT and strict on the way IN: an unset variable is still
+// a failure, because unset is equally "I have no Docker" and "I forgot".
+func optedOut(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	}
+	return false
+}
+
 // minServerVersionNum is PostgreSQL 15, and it is a HARD FLOOR (DEC-66).
 //
 // migrations/0001_init.up.sql uses the COLUMN-LIST form of ON DELETE SET NULL
@@ -84,7 +99,12 @@ func Open(t TB) (*sql.DB, string) {
 
 	dsn := os.Getenv(urlVar)
 	if strings.TrimSpace(dsn) == "" {
-		if os.Getenv(skipVar) == "1" {
+		// ANY OF THE USUAL SPELLINGS, and not just "1". A developer who reads
+		// the failure and exports TRAVELLOG_SKIP_DB=true gets the identical
+		// failure back, telling them to set the variable they have just set —
+		// which reads as the guard being broken rather than as a value it did
+		// not recognise.
+		if optedOut(os.Getenv(skipVar)) {
 			t.Skipf("%s is unset and %s=1, so this tier is skipped ON PURPOSE.\n"+
 				"    Nothing below this line has been checked against a database.",
 				urlVar, skipVar)

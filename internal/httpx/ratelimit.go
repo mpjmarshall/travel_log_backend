@@ -183,14 +183,24 @@ func RateLimitBy(l *Limiter, log *slog.Logger, keyName string, key func(*http.Re
 	// which is where a misconfiguration should be caught. This is the second
 	// line, for any caller that is not Mount — and it is the shape logFailure,
 	// public_handlers and the migrator all already use.
-	if log == nil {
-		log = slog.Default()
+	//
+	// RESOLVED AT USE AND NOT HERE. Capturing slog.Default() when the
+	// middleware is built freezes whatever was installed at wiring time, so a
+	// later slog.SetDefault — a test installing a capturing handler, or
+	// logging configured after the mux — would be followed by logFailure and
+	// the migrator and ignored by this one. The three siblings all resolve per
+	// call; this now does too.
+	logger := func() *slog.Logger {
+		if log != nil {
+			return log
+		}
+		return slog.Default()
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			k, held := key(r)
 			if !held {
-				log.LogAttrs(r.Context(), slog.LevelError, "the rate limiter could not key this request",
+				logger().LogAttrs(r.Context(), slog.LevelError, "the rate limiter could not key this request",
 					slog.String("key", keyName),
 					slog.String("path", LoggedPath(r)),
 					slog.String("requestId", RequestIDFrom(r.Context())),
@@ -199,7 +209,7 @@ func RateLimitBy(l *Limiter, log *slog.Logger, keyName string, key func(*http.Re
 				return
 			}
 			if !l.Allow(k) {
-				log.LogAttrs(r.Context(), slog.LevelWarn, "rate limited",
+				logger().LogAttrs(r.Context(), slog.LevelWarn, "rate limited",
 					slog.String(keyName, k),
 					slog.String("path", LoggedPath(r)),
 					slog.String("requestId", RequestIDFrom(r.Context())),

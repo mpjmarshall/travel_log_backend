@@ -246,12 +246,24 @@ phase_record() {
 	# runtime. Recorded rather than done.
 	########################################################################
 	step "R0: the four values the client mirrors have not moved on this side"
-	assert_eq 100 "$(grep -oE 'MaxMintIDs = [0-9]+' internal/logbook/validate.go | grep -oE '[0-9]+')" \
-		"MaxMintIDs (client: mediaMintBatchLimit)"
-	assert_eq 2 "$(grep -oE 'FormatVersion = [0-9]+' internal/logbook/emit.go | grep -oE '[0-9]+')" \
-		"FormatVersion (client: logbookFormatVersion)"
-	assert_eq 500 "$(grep -oE 'MaxWalkPoints = [0-9]+' internal/logbook/walk.go | grep -oE '[0-9]+')" \
-		"MaxWalkPoints (client: walkTrackCap)"
+	# READ FROM THE PACKAGE, NOT FROM ONE NAMED FILE, and asserted to be found
+	# EXACTLY ONCE. Pinning `internal/logbook/walk.go` means a constant moved to
+	# a new file reports `= <empty>, want 500` — a red about a value that did
+	# not change, which sends a reader hunting for a drift that did not happen.
+	# And a doc line repeating the literal would make the grep answer twice, so
+	# the count is checked before the value.
+	mirrored() {
+		local name="$1" hits
+		hits="$(grep -rhoE "\b${name} +(int +)?= +[0-9]+" internal/ --include='*.go' |
+			grep -v '_test.go' | grep -oE '[0-9]+$' | sort -u)"
+		if [ "$(printf '%s\n' "$hits" | grep -c .)" -ne 1 ]; then
+			fail "${name} is declared $(printf '%s\n' "$hits" | grep -c .) times in internal/ — this check reads one declaration, not several"
+		fi
+		printf '%s' "$hits"
+	}
+	assert_eq 100 "$(mirrored MaxMintIDs)" "MaxMintIDs (client: mediaMintBatchLimit)"
+	assert_eq 2 "$(mirrored FormatVersion)" "FormatVersion (client: logbookFormatVersion)"
+	assert_eq 500 "$(mirrored MaxWalkPoints)" "MaxWalkPoints (client: walkTrackCap)"
 	# MEDIA_MAX_BYTES is the odd one: a DEPLOYMENT value rather than a
 	# compile-time constant, so what is pinned here is the shipped default in
 	# the compose file, which is what the client's 25 MiB was written against.
