@@ -252,3 +252,145 @@ func TestACodeFoundAlreadyAtTheCapIsRefusedOnSight(t *testing.T) {
 		t.Fatal("a code found at the cap was not burned")
 	}
 }
+
+// === THE MAIL CANNON ===
+
+func TestASecondRequestInsideTheIntervalSendsNothing(t *testing.T) {
+	// WITHOUT THIS THE ROUTE IS A WEAPON POINTED AT SOMEBODY ELSE'S INBOX.
+	// A script asks for a code for a victim's address a thousand times and a
+	// thousand mails arrive. The existing limiter cannot stop it: it keys on
+	// the CLIENT address, and the attacker rotates those. The throttle has to
+	// key on the address being MAILED, which is what this does.
+	store := newFakeStore()
+	now := at(t, testNow)
+	s := newServiceAtClock(t, store, func() time.Time { return now })
+	ctx := context.Background()
+	aRegistered(t, s, store, "matt@example.com")
+
+	first, _, ok, err := s.RequestCode(ctx, "matt@example.com")
+	if err != nil || !ok || first == "" {
+		t.Fatalf("the first request did not send: %q ok=%v err=%v", first, ok, err)
+	}
+
+	now = now.Add(CodeRequestInterval - time.Second)
+	second, _, ok, err := s.RequestCode(ctx, "matt@example.com")
+	if err != nil {
+		t.Fatalf("a throttled request errored, which is an oracle: %v", err)
+	}
+	if ok || second != "" {
+		t.Fatalf("a second request inside the interval produced %q to mail", second)
+	}
+}
+
+func TestThrottlingIsIndistinguishableFromAnUnknownAddress(t *testing.T) {
+	// The same answer, or asking twice quickly tells an attacker which
+	// addresses have a log here — which is the whole thing RequestCode's
+	// shape exists to prevent.
+	store := newFakeStore()
+	now := at(t, testNow)
+	s := newServiceAtClock(t, store, func() time.Time { return now })
+	ctx := context.Background()
+	aRegistered(t, s, store, "matt@example.com")
+	if _, _, _, err := s.RequestCode(ctx, "matt@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	throttledCode, _, throttledOK, throttledErr := s.RequestCode(ctx, "matt@example.com")
+	unknownCode, _, unknownOK, unknownErr := s.RequestCode(ctx, "nobody@example.com")
+
+	if throttledOK != unknownOK || throttledCode != unknownCode {
+		t.Fatalf("throttled answered (%q,%v) and unknown answered (%q,%v)",
+			throttledCode, throttledOK, unknownCode, unknownOK)
+	}
+	if (throttledErr == nil) != (unknownErr == nil) {
+		t.Fatalf("throttled errored %v and unknown errored %v", throttledErr, unknownErr)
+	}
+}
+
+func TestAThrottledRequestDOESNOTDisturbTheLiveCode(t *testing.T) {
+	// THE SHARPEST OF THE THREE. If a throttled request replaced or burned
+	// the code, an attacker could stop a traveller signing in AT ALL by
+	// asking for codes in a loop: every one the traveller received would be
+	// dead before they finished typing it.
+	store := newFakeStore()
+	now := at(t, testNow)
+	s := newServiceAtClock(t, store, func() time.Time { return now })
+	ctx := context.Background()
+	aRegistered(t, s, store, "matt@example.com")
+	code, _, _, _ := s.RequestCode(ctx, "matt@example.com")
+
+	for i := 0; i < 20; i++ {
+		if _, _, _, err := s.RequestCode(ctx, "matt@example.com"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := s.SignInWithCode(ctx, "matt@example.com", code); err != nil {
+		t.Fatalf("the code a traveller was mailed stopped working because somebody else asked for one: %v", err)
+	}
+}
+
+func TestAfterTheIntervalANewCodeIsSent(t *testing.T) {
+	// The throttle is a delay and not a lock: a traveller who genuinely did
+	// not receive the first one has to be able to ask again.
+	store := newFakeStore()
+	now := at(t, testNow)
+	s := newServiceAtClock(t, store, func() time.Time { return now })
+	ctx := context.Background()
+	aRegistered(t, s, store, "matt@example.com")
+	first, _, _, _ := s.RequestCode(ctx, "matt@example.com")
+
+	now = now.Add(CodeRequestInterval)
+	second, _, ok, err := s.RequestCode(ctx, "matt@example.com")
+	if err != nil || !ok {
+		t.Fatalf("a request after the interval did not send: ok=%v err=%v", ok, err)
+	}
+	// And the new one replaces the old, which is the one-live-code rule.
+	if _, err := s.SignInWithCode(ctx, "matt@example.com", first); !errors.Is(err, ErrBadCredentials) {
+		t.Fatal("the superseded code still worked")
+	}
+	if _, err := s.SignInWithCode(ctx, "matt@example.com", second); err != nil {
+		t.Fatalf("the newly sent code did not work: %v", err)
+	}
+}
+
+func TestTheCodeConstantsAreDelaysAndNotLocks(t *testing.T) {
+	// THE LEG A SURVIVING MUTATION FOUND, AND IT IS THE CLASS THAT HIDES.
+	// Every other test here advances the clock BY CodeRequestInterval, so it
+	// passes whatever that constant is — a hundred-year interval, which makes
+	// the throttle a permanent lock on signing in, reddened nothing at all.
+	// A relative assertion cannot see a value that moves both of its terms.
+	//
+	// So these are fixed references rather than the constants restated.
+
+	if CodeRequestInterval <= 0 {
+		t.Fatal("a non-positive interval is no throttle: the mail cannon is loaded")
+	}
+	if CodeRequestInterval > 5*time.Minute {
+		t.Fatalf("CodeRequestInterval is %v, which is a lock rather than a delay — "+
+			"a traveller who did not receive the first code waits that long "+
+			"before they can ask again", CodeRequestInterval)
+	}
+
+	// THE RELATIONSHIP IS THE SHARPER OF THE TWO. If the interval ever
+	// reached the TTL there would be a window in which a traveller's code has
+	// expired AND they are still throttled from asking for another, which is
+	// an account nobody can sign in to for as long as the gap lasts.
+	if CodeRequestInterval >= CodeTTL {
+		t.Fatalf("CodeRequestInterval %v >= CodeTTL %v: a traveller whose code "+
+			"expires cannot ask for another until the throttle clears, and in "+
+			"between they cannot sign in at all", CodeRequestInterval, CodeTTL)
+	}
+
+	if CodeTTL <= 0 || CodeTTL > time.Hour {
+		t.Fatalf("CodeTTL is %v: a mailed code should be worth typing for "+
+			"minutes, not for an hour", CodeTTL)
+	}
+	if MaxCodeAttempts < 1 {
+		t.Fatal("a code nobody may guess cannot be used by its owner either")
+	}
+	if MaxCodeAttempts > 20 {
+		t.Fatalf("MaxCodeAttempts is %d against a million possibilities, which "+
+			"is a budget rather than a bound", MaxCodeAttempts)
+	}
+}
