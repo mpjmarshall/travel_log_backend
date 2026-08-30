@@ -1,0 +1,8 @@
+{{define "content" -}}
+<h1>Travellers</h1>
+{{if .Failed}}<p class="warn">That list could not be read.</p>{{end}}
+<input type="search" name="q" placeholder="Search by email" value="{{.Query}}"
+       hx-get="/admin/travellers" hx-trigger="input changed delay:300ms, search"
+       hx-target="#travellers" hx-swap="outerHTML">
+<div id="travellers">{{template "rows" .}}</div>
+{{- end}}

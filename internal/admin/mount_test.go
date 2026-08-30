@@ -25,6 +25,7 @@ func mounted(t *testing.T, password string) (*http.ServeMux, admin.Deps) {
 		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Render:   &stubRenderer{},
+		Store:    &fakeStore{},
 	}
 	mux := http.NewServeMux()
 	admin.Mount(mux, deps)
@@ -39,6 +40,16 @@ func get(mux *http.ServeMux, path string, cookies ...*http.Cookie) *httptest.Res
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
+}
+
+func TestMountingWithoutAStoreFailsAtOnce(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Mount accepted a nil Store, so the first request to any page " +
+				"would be a nil dereference instead of a refusal at boot")
+		}
+	}()
+	admin.Mount(http.NewServeMux(), admin.Deps{Password: goodPassword, Render: &stubRenderer{}})
 }
 
 func TestNoPasswordMountsNothing(t *testing.T) {

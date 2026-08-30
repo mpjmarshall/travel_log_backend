@@ -23,6 +23,11 @@ func (s *stubRenderer) Page(w http.ResponseWriter, status int, name string, _ an
 	w.WriteHeader(status)
 }
 
+func (s *stubRenderer) Fragment(w http.ResponseWriter, status int, name string, _ any) {
+	s.last = name
+	w.WriteHeader(status)
+}
+
 type clock struct{ at time.Time }
 
 func (c *clock) now() time.Time { return c.at }

@@ -1,0 +1,6 @@
+{{define "content" -}}
+<h1>Sessions</h1>
+{{if .Failed}}<p class="warn">Those sessions could not be read.</p>{{end}}
+<p class="note">Live sessions only. An expired one is not somebody signed in.</p>
+{{template "sessiontable" .}}
+{{- end}}

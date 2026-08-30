@@ -1,0 +1,20 @@
+{{define "content" -}}
+<h1>Invites</h1>
+{{if .Failed}}<p class="warn">Those invites could not be read.</p>{{end}}
+<table>
+<thead><tr><th>Note</th><th>Minted</th><th>Claimed by</th><th></th></tr></thead>
+<tbody>
+{{range .Invites}}
+  <tr>
+    <td>{{if .Note}}{{.Note}}{{else}}<span class="note">no note</span>{{end}}</td>
+    <td>{{.CreatedAt}}</td>
+    <td>{{if .Used}}{{if .UsedBy}}{{.UsedBy}}{{else}}<span class="note">a deleted traveller</span>{{end}}
+        {{else}}<span class="note">unused</span>{{end}}</td>
+    <td></td>
+  </tr>
+{{else}}
+  <tr><td colspan="4" class="note">No invites yet.</td></tr>
+{{end}}
+</tbody>
+</table>
+{{- end}}

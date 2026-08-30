@@ -1,0 +1,12 @@
+{{define "sessiontable" -}}
+<table>
+<thead><tr><th>Traveller</th><th>Signed in</th><th>Last used</th><th></th></tr></thead>
+<tbody>
+{{range .Sessions}}
+  <tr><td>{{.Email}}</td><td>{{.CreatedAt}}</td><td>{{.LastUsedAt}}</td><td></td></tr>
+{{else}}
+  <tr><td colspan="4" class="note">Nobody is signed in.</td></tr>
+{{end}}
+</tbody>
+</table>
+{{- end}}

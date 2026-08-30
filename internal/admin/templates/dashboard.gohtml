@@ -5,15 +5,7 @@
   <div class="card"><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>
 {{end}}
 </div>
-{{if .Sessions}}
+{{if .Failed}}<p class="warn">The overview could not be read.</p>{{end}}
 <h2>Recent sign-ins</h2>
-<table>
-<thead><tr><th>Traveller</th><th>Signed in</th><th>Last used</th></tr></thead>
-<tbody>
-{{range .Sessions}}
-  <tr><td>{{.Email}}</td><td>{{.CreatedAt}}</td><td>{{.LastUsedAt}}</td></tr>
-{{end}}
-</tbody>
-</table>
-{{end}}
+{{template "sessiontable" .}}
 {{- end}}
