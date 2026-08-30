@@ -1,0 +1,28 @@
+{{define "rows" -}}
+<div id="travellers">
+<table>
+<thead><tr><th>Email</th><th>Name</th><th class="numeric">Trips</th>
+<th class="numeric">Photos</th><th>Joined</th></tr></thead>
+<tbody>
+{{range .Travellers}}
+  <tr>
+    <td><a href="/admin/travellers/{{.ID}}">{{.Email}}</a></td>
+    <td>{{if .Name}}{{.Name}}{{else}}<span class="note">no name</span>{{end}}</td>
+    <td class="numeric">{{.Trips}}</td>
+    <td class="numeric">{{.Photos}}</td>
+    <td>{{.CreatedAt.Format "2 Jan 2006"}}</td>
+  </tr>
+{{else}}
+  <tr><td colspan="5" class="note">Nobody matches that.</td></tr>
+{{end}}
+</tbody>
+</table>
+<div class="pager">
+  <span class="note">{{if .Travellers}}{{.FirstShown}}–{{.LastShown}} of {{end}}{{.Total}}</span>
+  {{if .HasPrev}}<button class="quiet" hx-get="/admin/travellers?q={{.Query}}&offset={{.PrevOffset}}"
+    hx-target="#travellers" hx-swap="outerHTML">Previous</button>{{end}}
+  {{if .HasNext}}<button class="quiet" hx-get="/admin/travellers?q={{.Query}}&offset={{.NextOffset}}"
+    hx-target="#travellers" hx-swap="outerHTML">Next</button>{{end}}
+</div>
+</div>
+{{- end}}

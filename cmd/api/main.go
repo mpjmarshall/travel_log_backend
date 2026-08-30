@@ -139,7 +139,7 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	panel, err := adminPanel(cfg, log)
+	panel, err := adminPanel(cfg, db, log)
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
 
 // adminPanel is the /admin mount, or a mount that registers nothing when no
 // password is configured.
-func adminPanel(cfg config.Config, log *slog.Logger) (func(*http.ServeMux), error) {
+func adminPanel(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.ServeMux), error) {
 	if cfg.AdminPassword == "" {
 		return func(*http.ServeMux) {}, nil
 	}
@@ -203,6 +203,7 @@ func adminPanel(cfg config.Config, log *slog.Logger) (func(*http.ServeMux), erro
 			Log:      log,
 			Dev:      cfg.Development,
 			Render:   pages,
+			Store:    postgres.AdminStore{DB: db},
 		})
 	}, nil
 }

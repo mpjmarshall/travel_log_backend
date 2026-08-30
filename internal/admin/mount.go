@@ -20,15 +20,23 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.Password == "" {
 		return
 	}
+	if deps.Store == nil || deps.Render == nil {
+		panic("admin: Mount needs a Store and a Renderer, or every page is a nil " +
+			"dereference on the first request rather than a refusal here")
+	}
 
 	login := Login(deps)
 	mux.Handle("GET "+loginPath, deps.open(login))
 	mux.Handle("POST "+loginPath, deps.open(login))
 	mux.Handle("POST /admin/logout", deps.guarded(logout(deps)))
 	mux.Handle("GET /admin/static/", StaticHandler())
-	home := deps.guarded(dashboard(deps))
+	home := deps.guarded(overview(deps))
 	mux.Handle("GET "+rootPath, home)
 	mux.Handle("GET "+rootPath+"/{$}", home)
+	mux.Handle("GET /admin/travellers", deps.guarded(travellers(deps)))
+	mux.Handle("GET /admin/travellers/{id}", deps.guarded(traveller(deps)))
+	mux.Handle("GET /admin/sessions", deps.guarded(sessionsPage(deps)))
+	mux.Handle("GET /admin/invites", deps.guarded(invitesPage(deps)))
 }
 
 // open is a page nobody has to be signed in for, which is the login alone.
@@ -96,16 +104,5 @@ func logout(d Deps) http.HandlerFunc {
 		expired.MaxAge = -1
 		http.SetCookie(w, expired)
 		http.Redirect(w, r, loginPath, http.StatusSeeOther)
-	}
-}
-
-// dashboard is a placeholder until task 6 gives it its counts.
-func dashboard(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		d.Render.Page(w, http.StatusOK, "dashboard", PageData{
-			Title:    "Overview",
-			CSRF:     csrfFrom(r.Context()),
-			SignedIn: true,
-		})
 	}
 }

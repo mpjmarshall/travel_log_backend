@@ -1,0 +1,25 @@
+{{define "content" -}}
+{{if .Traveller}}
+{{with .Traveller}}
+<h1>{{.Email}}</h1>
+<p class="note">{{if .Name}}{{.Name}}{{else}}No name set{{end}} · joined
+{{.CreatedAt.Format "2 Jan 2006"}} · logbook version {{.LogbookVersion}}</p>
+<div class="cards">
+  <div class="card"><div class="label">Trips</div><div class="value">{{.Trips}}</div></div>
+  <div class="card"><div class="label">Cities</div><div class="value">{{.Cities}}</div></div>
+  <div class="card"><div class="label">Places</div><div class="value">{{.Places}}</div></div>
+  <div class="card"><div class="label">Visits</div><div class="value">{{.Visits}}</div></div>
+  <div class="card"><div class="label">Photos</div><div class="value">{{.Photos}}</div></div>
+  <div class="card"><div class="label">Walks</div><div class="value">{{.Walks}}</div></div>
+</div>
+{{end}}
+<div class="cards">
+  <div class="card"><div class="label">Storage</div><div class="value">{{.Storage}}</div></div>
+</div>
+<h2>Sessions</h2>
+{{template "sessiontable" .}}
+{{else}}
+<h1>Not found</h1>
+<p class="note">No traveller with that id.</p>
+{{end}}
+{{- end}}

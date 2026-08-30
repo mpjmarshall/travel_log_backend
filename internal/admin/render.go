@@ -21,8 +21,9 @@ var staticFS embed.FS
 // Templates is one parsed set per page, each page sharing the layout. One set
 // per page because every page defines a block called content.
 type Templates struct {
-	pages map[string]*template.Template
-	log   *slog.Logger
+	pages    map[string]*template.Template
+	partials *template.Template
+	log      *slog.Logger
 }
 
 func NewTemplates(log *slog.Logger) (*Templates, error) {
@@ -31,13 +32,26 @@ func NewTemplates(log *slog.Logger) (*Templates, error) {
 		return nil, err
 	}
 
-	t := &Templates{pages: map[string]*template.Template{}, log: log}
+	shared := []string{"templates/layout.gohtml"}
 	for _, file := range names {
-		name := strings.TrimSuffix(path.Base(file), ".gohtml")
-		if name == "layout" {
+		if strings.HasPrefix(path.Base(file), "_") {
+			shared = append(shared, file)
+		}
+	}
+
+	partials, err := template.New("layout").ParseFS(templateFS, shared...)
+	if err != nil {
+		return nil, err
+	}
+
+	t := &Templates{pages: map[string]*template.Template{}, partials: partials, log: log}
+	for _, file := range names {
+		base := path.Base(file)
+		name := strings.TrimSuffix(base, ".gohtml")
+		if name == "layout" || strings.HasPrefix(base, "_") {
 			continue
 		}
-		set, err := template.New("layout").ParseFS(templateFS, "templates/layout.gohtml", file)
+		set, err := template.New("layout").ParseFS(templateFS, append(shared, file)...)
 		if err != nil {
 			return nil, err
 		}
@@ -81,6 +95,17 @@ func (t *Templates) Page(w http.ResponseWriter, status int, name string, data an
 	if err := t.Execute(w, name, d); err != nil {
 		t.log.Error("admin: rendering a page",
 			slog.String("page", name), slog.String("err", err.Error()))
+	}
+}
+
+// Fragment writes one shared block with no layout, which is what an htmx swap
+// replaces. The whole page would nest a second nav inside the table.
+func (t *Templates) Fragment(w http.ResponseWriter, status int, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := t.partials.ExecuteTemplate(w, name, data); err != nil {
+		t.log.Error("admin: rendering a fragment",
+			slog.String("fragment", name), slog.String("err", err.Error()))
 	}
 }
 

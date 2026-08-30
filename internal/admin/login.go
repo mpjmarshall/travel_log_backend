@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"travellog/internal/httpx"
+	"travellog/internal/postgres"
 )
 
 // CookieName carries the session id and nothing else.
@@ -23,6 +24,7 @@ const (
 // Renderer is what draws a page. Task 5 supplies the real one.
 type Renderer interface {
 	Page(w http.ResponseWriter, status int, name string, data any)
+	Fragment(w http.ResponseWriter, status int, name string, data any)
 }
 
 // Deps is everything the panel is given. Password empty means no panel.
@@ -33,6 +35,7 @@ type Deps struct {
 	Log      *slog.Logger
 	Dev      bool
 	Render   Renderer
+	Store    Store
 }
 
 type attempts struct {
@@ -151,8 +154,42 @@ type PageData struct {
 	Failed   bool
 	Locked   bool
 
-	Cards    []Card
-	Sessions []SessionRow
+	Cards      []Card
+	Sessions   []SessionRow
+	Invites    []InviteRow
+	Travellers []postgres.TravellerRow
+	Traveller  *postgres.TravellerDetail
+	Storage    string
+
+	Query    string
+	Total    int
+	Offset   int
+	PageSize int
+}
+
+// HasPrev and HasNext drive the pager, so a template never does arithmetic.
+func (d PageData) HasPrev() bool { return d.Offset > 0 }
+func (d PageData) HasNext() bool { return d.Offset+d.PageSize < d.Total }
+func (d PageData) PrevOffset() int {
+	if d.Offset < d.PageSize {
+		return 0
+	}
+	return d.Offset - d.PageSize
+}
+func (d PageData) NextOffset() int { return d.Offset + d.PageSize }
+func (d PageData) FirstShown() int { return d.Offset + 1 }
+func (d PageData) LastShown() int {
+	last := d.Offset + len(d.Travellers)
+	return last
+}
+
+// InviteRow is one invite as the page shows it.
+type InviteRow struct {
+	Hash      string
+	Note      string
+	CreatedAt string
+	Used      bool
+	UsedBy    string
 }
 
 // Card is one figure on the overview.
@@ -163,6 +200,7 @@ type Card struct {
 
 // SessionRow is one live session, named by its traveller.
 type SessionRow struct {
+	ID         string
 	Email      string
 	CreatedAt  string
 	LastUsedAt string
