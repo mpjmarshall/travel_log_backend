@@ -17,6 +17,14 @@ func atoi(s string) int {
 	return n
 }
 
+// plural writes a count with its noun, adding the s only when it is needed.
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
 // humanBytes is for reading, never for arithmetic.
 func humanBytes(n int64) string {
 	const unit = 1024
