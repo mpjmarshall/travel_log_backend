@@ -165,7 +165,7 @@ Every task inherits these.
 
 ---
 
-## 6. Task 1 — Config takes ADMIN_PASSWORD
+## 6. Task 1 — Config takes ADMIN_PASSWORD ✅
 
 **Files:** modify `internal/config/config.go`, `internal/config/config_test.go`,
 `deploy/docker-compose.yml`, `deploy/.env.example`.
@@ -235,7 +235,7 @@ Wire it as `AdminPassword: l.optional("ADMIN_PASSWORD", MinAdminPassword)` with
 
 ---
 
-## 7. Task 2 — The session store
+## 7. Task 2 — The session store ✅
 
 **Files:** create `internal/admin/session.go`, `internal/admin/session_test.go`.
 
@@ -287,7 +287,7 @@ func TestTwoSessionsNeverShareATokenOrACSRF(t *testing.T) {
 
 ---
 
-## 8. Task 3 — Login, the lockout, and the cookie
+## 8. Task 3 — Login, the lockout, and the cookie ✅
 
 **Files:** create `internal/admin/login.go`, `internal/admin/login_test.go`.
 
@@ -328,7 +328,7 @@ if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode {
 
 ---
 
-## 9. Task 4 — Middleware, and mounting nothing
+## 9. Task 4 — Middleware, and mounting nothing ✅
 
 **Files:** create `internal/admin/middleware.go`, `internal/admin/admin.go`,
 and their tests. Modify `cmd/api/main.go`.
@@ -373,7 +373,7 @@ func TestEveryAdminResponseCarriesItsSecurityHeaders(t *testing.T)
 
 ---
 
-## 10. Task 5 — Templates, tokens and the vendored assets
+## 10. Task 5 — Templates, tokens and the vendored assets ✅
 
 **Files:** create `internal/admin/render.go`, `templates/layout.gohtml`,
 `static/admin.css`, and add the vendored htmx and font files.
@@ -416,7 +416,7 @@ func TestEveryTemplateParsesAndExecutes(t *testing.T) {
 
 ---
 
-## 11. Tasks 6 to 11 — The pages
+## 11. Tasks 6 to 11 — The pages ✅
 
 Each follows one rhythm: a store method with a test against the test database,
 a handler with an `httptest` test, a template, and a line in the template
@@ -458,7 +458,7 @@ if versionOf(t, db, id) <= before {
 
 ---
 
-## 12. Task 12 — Delete a traveller
+## 12. Task 12 — Delete a traveller ✅
 
 **Files:** modify `internal/media/store.go` and its S3 implementation; create
 `AdminStore.DeleteTraveller`; add the confirm template and the action.
@@ -494,7 +494,7 @@ photograph pointing at bytes that are gone.
 
 ---
 
-## 13. Task 13 — Verify it against a running stack
+## 13. Task 13 — Verify it against a running stack ✅
 
 Not a test — the third evidence tier, a human at a browser.
 
@@ -509,12 +509,30 @@ Not a test — the third evidence tier, a human at a browser.
 - [ ] Delete a traveller created for the purpose, and confirm with `mc ls` or
   the MinIO console that their objects left the bucket.
 
-Record the htmx version vendored, and the exact commit, in
-`docs/EVIDENCE.md` alongside the other tier-three runs.
+**Run on 30 August 2026 against `travellog-fresh` on :8095**, thirteen
+travellers in it. What it found and what it proved:
+
+- The panel is unreachable with `ADMIN_PASSWORD` unset and the API boots.
+- The login renders in the app's palette with Playfair, and `Secure` is
+  correctly relaxed under `DEVELOPMENT`, or no cookie would stick over http.
+- Every figure on the overview matched the database exactly: 13 travellers,
+  12 trips, 0 photos, 0 places, 16 live sessions, 0 B.
+- The four security headers are on the wire, and the three vendored assets
+  serve from this origin: htmx 50,917 bytes, the stylesheet, the font.
+- The htmx live search filtered to one row **and left exactly one `<nav>` in
+  the document**, which is the fragment decision proved in a browser.
+- CSRF on the wire: 403 with no token, 303 with no cookie.
+- An invite minted through the panel, shown once, stored with its note.
+- **The delete, in full.** A throwaway traveller with one trip and one real
+  object in MinIO: the wrong email answered 400 and left them standing, the
+  right one removed the traveller, the trip, the media row **and the object
+  from the bucket**, with the other thirteen travellers untouched.
+
+**And it found the defect the plan said it would.** See §15.
 
 ---
 
-## 14. Task 14 — Documentation
+## 14. Task 14 — Documentation ✅
 
 - [x] **`BEFORE-A-PUBLIC-DEPLOY.md` §10 is written**, ahead of the code and
   marked as such, covering the four firsts, the shared port, the three things
@@ -541,9 +559,14 @@ Checked against §1 before this plan was handed over.
 - The names used late are defined early: `Sessions` in Task 2 is what Task 3
   consumes, `Mount` and `Deps` in Task 4 are what `cmd/api` calls, `Delete` on
   `media.Store` is added in Task 12 and nowhere before it.
-- **One thing this plan cannot promise.** The panel is the first browser
-  surface in this repository, so nothing in `make check` has ever rendered
-  HTML, set a cookie, or evaluated a CSP. Task 5's render pass is real
-  coverage; a Content-Security-Policy that is present but wrong will still pass
-  every test in this plan. That is tier three, and Task 13 is where it is
-  caught.
+- **One thing this plan cannot promise, and it came true.** The panel is the
+  first browser surface here, so nothing in `make check` has ever rendered
+  HTML, set a cookie, or evaluated a CSP. This plan said a policy that is
+  present but wrong would pass every test in it, and that task 13 was where it
+  would be caught. **It was.** `default-src 'self'` blocked the `<style>`
+  element htmx injects for its own indicator: two console violations on every
+  page, indicators that never worked, and a search that went on working, so
+  nothing looked broken. Fixed to `style-src 'self' 'unsafe-inline'` with
+  script left at `'self'`, and now guarded in both directions — but the guard
+  was written **after** a browser found it, which is the whole point of the
+  third tier.
