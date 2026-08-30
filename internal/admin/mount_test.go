@@ -157,6 +157,22 @@ func TestEveryAdminResponseCarriesItsSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestTheCSPKeepsScriptToThisOriginAndAllowsHtmxItsStyle(t *testing.T) {
+	mux, _ := mounted(t, goodPassword)
+
+	got := get(mux, "/admin/login").Header().Get("Content-Security-Policy")
+	if !strings.Contains(got, "default-src 'self'") {
+		t.Errorf("CSP = %q, want default-src 'self'", got)
+	}
+	if !strings.Contains(got, "style-src 'self' 'unsafe-inline'") {
+		t.Errorf("CSP = %q, and without an inline style-src htmx's own indicator\n"+
+			"    style element is blocked in every browser, which no test here sees", got)
+	}
+	if strings.Contains(got, "script-src") && strings.Contains(got, "unsafe-inline") {
+		t.Error("the policy loosened script as well as style, which is the half that matters")
+	}
+}
+
 func TestLogoutEndsTheSession(t *testing.T) {
 	mux, deps := mounted(t, goodPassword)
 	id, csrf, err := deps.Sessions.New(deps.Now())
