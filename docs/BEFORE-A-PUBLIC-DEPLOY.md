@@ -282,3 +282,68 @@ performs — nothing below is guarded by a leg.
 **And one thing this route does NOT change**: nothing here reclaims a media
 object, and the bucket is still not backed up. §4 and §5 are unchanged and both
 still apply.
+
+---
+
+## 10. The admin panel, and the four ways it contradicts this document
+
+*Planned 30 August 2026. `ADMIN-PANEL.md` is the design; this section is what
+it costs a public deploy.* **Nothing here is built yet** — this section exists
+so that whoever deploys it is choosing rather than discovering, which is what
+this whole file is for.
+
+This document opens by saying the target is local only, everything is
+loopback-bound, and every password is guessable on purpose. The panel is the
+first thing in this repository that contradicts all three, and it does so at
+`/admin` on **the same port as the API**. There is no separate listener to
+firewall: wherever the API is reachable, the panel is reachable, and the only
+thing between the internet and every traveller's account is one password.
+
+**Four firsts, each of which this file has no other entry for.**
+
+1. **The first credential that is not a traveller's.** `ADMIN_PASSWORD`, twelve
+   characters minimum, refused at boot if shorter. It administers *every*
+   account, so it is a different class of secret from §6's S3 keys: those let
+   you read the bucket, this one lets you delete a person.
+
+2. **The first cookie, and the first browser surface.** Nothing in this
+   repository has ever sent `Set-Cookie`, and the API is JSON only. So the
+   panel is also the first place a `Content-Security-Policy`, an
+   `X-Frame-Options` and a `SameSite` attribute matter at all — and **`make
+   check` cannot see any of them.** A CSP that is present and wrong passes every
+   test in the plan. This is the same third evidence tier as §1's sizing and
+   the iOS manifest keys: guarded by nothing but a human with a browser.
+
+3. **The first thing that deletes from the bucket** — and it is worth saying
+   why that is new. **Nothing in this codebase has ever deleted a media
+   object.** `media.Store` has four methods and none of them removes anything,
+   so a traveller deleted today by hand in `psql` leaves their bytes in storage
+   permanently: unreferenced, unreachable, and still present after the account
+   is gone. The panel's delete adds a fifth method and cleans up after itself,
+   rows first so a storage failure leaves a recoverable orphan rather than a
+   live photograph pointing at nothing.
+
+   **It does not sweep the orphans that already exist.** Measured on the live
+   stack on 30 August 2026: 4 objects, 5,175,532 bytes, and no code path that
+   could ever have removed one. §4 and §5 are unchanged and both still apply.
+
+4. **`ADMIN_PASSWORD` is the first variable in this stack with no safe
+   default**, deliberately. Every other password here is guessable on purpose
+   because the target is local; this one has no value in `.env.example` and
+   none in compose, so a stack that has not been told a password **mounts no
+   panel at all** and boots exactly as it does today. That is the failure mode
+   chosen: absent rather than open.
+
+**Before exposing it, three things this stack does not do for you:**
+
+- [ ] **TLS.** The session cookie is `Secure`, which means the panel is unusable
+      over plain http — by design. §8's proxy is not optional here the way it is
+      for the API.
+- [ ] **`RemoteAddr` behind that proxy.** The lockout counts failures per client
+      key, and §8 already records that the rate limiter keys on `RemoteAddr`. A
+      proxy that does not set the forwarded header collapses **every** admin
+      login attempt onto one key, so one attacker locks the real operator out.
+- [ ] **Recovery from that lockout.** The lockout and the sessions are both in
+      memory, so the only way out is a restart of the API container — which
+      also signs out every logged-in operator. Acceptable for one person, and
+      worth knowing before it happens at an inconvenient moment.
