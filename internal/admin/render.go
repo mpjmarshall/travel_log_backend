@@ -12,6 +12,9 @@ import (
 	"strings"
 )
 
+// funcs is what a template may call. Keep it small: logic belongs in Go.
+var funcs = template.FuncMap{"plural": plural}
+
 //go:embed templates/*.gohtml
 var templateFS embed.FS
 
@@ -39,7 +42,7 @@ func NewTemplates(log *slog.Logger) (*Templates, error) {
 		}
 	}
 
-	partials, err := template.New("layout").ParseFS(templateFS, shared...)
+	partials, err := template.New("layout").Funcs(funcs).ParseFS(templateFS, shared...)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +54,7 @@ func NewTemplates(log *slog.Logger) (*Templates, error) {
 		if name == "layout" || strings.HasPrefix(base, "_") {
 			continue
 		}
-		set, err := template.New("layout").ParseFS(templateFS, append(shared, file)...)
+		set, err := template.New("layout").Funcs(funcs).ParseFS(templateFS, append(shared, file)...)
 		if err != nil {
 			return nil, err
 		}

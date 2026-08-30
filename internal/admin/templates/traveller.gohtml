@@ -26,8 +26,9 @@
 {{template "sessiontable" .}}
 <h2>Delete</h2>
 <p class="note">This removes {{.Traveller.Email}} and everything of theirs:
-{{.Traveller.Trips}} trips, {{.Traveller.Photos}} photos, {{.Traveller.Places}} places,
-{{.Traveller.Walks}} walks, and their {{.Storage}} of pictures. It cannot be undone.</p>
+{{plural .Traveller.Trips "trip"}}, {{plural .Traveller.Photos "photo"}},
+{{plural .Traveller.Places "place"}}, {{plural .Traveller.Walks "walk"}}, and their
+{{.Storage}} of pictures. It cannot be undone.</p>
 <form hx-post="/admin/travellers/{{.Traveller.ID}}/delete" hx-target="body" class="pager">
   <input type="text" name="email" placeholder="Type {{.Traveller.Email}} to confirm"
          autocomplete="off">

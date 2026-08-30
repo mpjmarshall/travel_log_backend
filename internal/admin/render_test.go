@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"travellog/internal/admin"
+	"travellog/internal/postgres"
 )
 
 func templates(t *testing.T) *admin.Templates {
@@ -130,5 +132,41 @@ func TestTheStylesheetColoursLinksItself(t *testing.T) {
 			t.Errorf("the stylesheet has no %q rule, so links render in the browser's\n"+
 				"    default blue and purple on a near-black background", rule)
 		}
+	}
+}
+
+func TestOneOfAThingIsSingular(t *testing.T) {
+	data := sample()
+	data.Traveller = &postgres.TravellerDetail{
+		TravellerRow: postgres.TravellerRow{
+			ID: "id-1", Email: "ada@example.com", Trips: 1, Photos: 0,
+			CreatedAt: time.Now(),
+		},
+		Places: 2, Walks: 1,
+	}
+
+	var out strings.Builder
+	if err := templates(t).Execute(&out, "traveller", data); err != nil {
+		t.Fatal(err)
+	}
+
+	got := out.String()
+	for _, want := range []string{"1 trip,", "0 photos,", "2 places,", "1 walk"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the delete sentence does not say %q. It is the one sentence an\n"+
+				"    operator reads carefully before removing somebody, and it should not\n"+
+				"    read '1 trips' while it does it", want)
+		}
+	}
+}
+
+func TestTheStylesheetRingsAFocusedFieldItself(t *testing.T) {
+	rec := httptest.NewRecorder()
+	admin.StaticHandler().ServeHTTP(rec,
+		httptest.NewRequest(http.MethodGet, "/admin/static/admin.css", nil))
+
+	if !strings.Contains(rec.Body.String(), ":focus") {
+		t.Error("the stylesheet has no :focus rule, so every field you type into rings " +
+			"in the browser's default blue against a near-black panel")
 	}
 }
