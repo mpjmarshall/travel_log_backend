@@ -58,10 +58,14 @@ func complete() map[string]string {
 	}
 }
 
+// optionalVars are read by Load but never required, so they are absent from
+// allVars and must still be cleared or a developer's shell leaks into a run.
+var optionalVars = []string{"ADMIN_PASSWORD"}
+
 // setEnv makes `vars` the whole of what Load can see.
 func setEnv(t *testing.T, vars map[string]string) {
 	t.Helper()
-	for _, k := range allVars {
+	for _, k := range append(append([]string{}, allVars...), optionalVars...) {
 		t.Setenv(k, "")
 		if v, ok := vars[k]; ok {
 			t.Setenv(k, v)
@@ -320,3 +324,46 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 }
 
 // measured, in $(go env goroot)/src/database/sql/sql.go, SetMaxIdleConns.
+
+// ADMIN_PASSWORD is optional, so an empty environment must not name it, and a
+// value under the floor must refuse rather than mount a weak panel.
+func TestAdminPasswordIsOptionalButNotShort(t *testing.T) {
+	setEnv(t, complete())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() with no ADMIN_PASSWORD = %v, want no error", err)
+	}
+	if cfg.AdminPassword != "" {
+		t.Errorf("AdminPassword = %q with the variable unset, want empty", cfg.AdminPassword)
+	}
+
+	setEnv(t, with("ADMIN_PASSWORD", strings.Repeat("a", config.MinAdminPassword-1)))
+	if _, err := config.Load(); err == nil {
+		t.Error("Load() = nil error with a short ADMIN_PASSWORD, want a refusal")
+	} else if !strings.Contains(err.Error(), "ADMIN_PASSWORD") {
+		t.Errorf("the refusal does not name the variable:\n%s", err)
+	}
+
+	setEnv(t, with("ADMIN_PASSWORD", strings.Repeat("a", config.MinAdminPassword)))
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatalf("Load() at exactly the floor = %v, want no error", err)
+	}
+	if len(cfg.AdminPassword) != config.MinAdminPassword {
+		t.Errorf("AdminPassword length = %d, want %d", len(cfg.AdminPassword), config.MinAdminPassword)
+	}
+}
+
+// An empty environment names every required variable, and never this one.
+func TestAnEmptyEnvironmentDoesNotAskForAdminPassword(t *testing.T) {
+	setEnv(t, map[string]string{})
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() = nil error with an empty environment")
+	}
+	if strings.Contains(err.Error(), "ADMIN_PASSWORD") {
+		t.Errorf("the error asks for ADMIN_PASSWORD, which is optional:\n%s", err)
+	}
+}

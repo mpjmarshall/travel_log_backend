@@ -39,6 +39,8 @@ type Config struct {
 
 	MediaMaxBytes int64
 
+	AdminPassword string
+
 	Development bool
 }
 
@@ -55,6 +57,10 @@ const (
 	MinPresignTTL = time.Second
 	MaxPresignTTL = 7 * 24 * time.Hour
 )
+
+// MinAdminPassword is the floor for ADMIN_PASSWORD. Unset mounts no panel at
+// all; set but shorter than this refuses to boot.
+const MinAdminPassword = 12
 
 // MinMediaMaxBytes is a measurement and not a round number.
 const MinMediaMaxBytes = 1 << 20
@@ -84,6 +90,7 @@ func Load() (Config, error) {
 		S3PresignTTLPrivate:      l.duration("S3_PRESIGN_TTL_PRIVATE", MinPresignTTL, MaxPresignTTL),
 		S3PresignTTLPublic:       l.duration("S3_PRESIGN_TTL_PUBLIC", MinPresignTTL, MaxPresignTTL),
 		MediaMaxBytes:            l.bytes("MEDIA_MAX_BYTES", MinMediaMaxBytes),
+		AdminPassword:            l.optional("ADMIN_PASSWORD", MinAdminPassword),
 	}
 
 	l.refuseSilentIdleClamp(cfg)
@@ -138,6 +145,19 @@ func (l *loader) required(name string) string {
 	v := strings.TrimSpace(os.Getenv(name))
 	if v == "" {
 		l.add(name, "not set")
+	}
+	return v
+}
+
+// optional reads a variable that may be absent. Absent is empty and no fault;
+// present but shorter than minLength is a fault naming itself.
+func (l *loader) optional(name string, minLength int) string {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return ""
+	}
+	if len(v) < minLength {
+		l.add(name, fmt.Sprintf("%d characters, and the floor is %d", len(v), minLength))
 	}
 	return v
 }
