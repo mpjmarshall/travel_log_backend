@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,10 @@ type Store interface {
 
 	TravellerExists(ctx context.Context) (bool, error)
 
+	MintInvite(ctx context.Context, hash []byte, note string) error
+
+	ClaimInvite(ctx context.Context, hash []byte, travellerID string) error
+
 	IssueCode(ctx context.Context, travellerID string, hash []byte, expiresAt time.Time) error
 
 	CodeFor(ctx context.Context, travellerID string) (SignInCode, error)
@@ -140,18 +145,34 @@ func (s *Service) Register(ctx context.Context, email, passphrase string) (Trave
 		return Traveller{}, err
 	}
 
-	switch held, err := s.Store.TravellerExists(ctx); {
-	case err != nil:
-		return Traveller{}, err
-	case held:
-		return Traveller{}, ErrRegistrationClosed
-	}
-
 	encoded, err := s.Hasher.Hash(passphrase)
 	if err != nil {
 		return Traveller{}, err
 	}
 	return s.Store.CreateTraveller(ctx, email, encoded)
+}
+
+// RegisterWithInvite is Register behind a single-use invite. The claim comes
+// after the create, because the claim records who spent it.
+func (s *Service) RegisterWithInvite(ctx context.Context, email, passphrase, invite string) (Traveller, error) {
+	if err := checkEmail(email); err != nil {
+		return Traveller{}, err
+	}
+	if err := checkPassphrase(passphrase); err != nil {
+		return Traveller{}, err
+	}
+	if strings.TrimSpace(invite) == "" {
+		return Traveller{}, InvalidFieldError{Field: "invite", Why: "an invite is required"}
+	}
+
+	tr, err := s.Register(ctx, email, passphrase)
+	if err != nil {
+		return Traveller{}, err
+	}
+	if err := s.Store.ClaimInvite(ctx, HashInvite(invite), tr.ID); err != nil {
+		return Traveller{}, err
+	}
+	return tr, nil
 }
 
 // SignIn resolves an address in any casing and answers a fresh opaque token.

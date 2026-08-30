@@ -75,6 +75,7 @@ type credentials struct {
 	Email      string `json:"email"`
 	Passphrase string `json:"passphrase"`
 	Code       string `json:"code"`
+	Invite     string `json:"invite"`
 }
 
 // travellerBody is register's 201.
@@ -206,7 +207,7 @@ func register(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		tr, err := deps.Auth.Register(r.Context(), body.Email, body.Passphrase)
+		tr, err := deps.Auth.RegisterWithInvite(r.Context(), body.Email, body.Passphrase, body.Invite)
 		if err != nil {
 			writeAuthFailure(w, r, deps.Log, err)
 			return
@@ -335,6 +336,8 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 		httpx.WriteFieldError(w, r, invalid.Field)
 	case errors.Is(err, auth.ErrEmailTaken), errors.Is(err, auth.ErrRegistrationClosed):
 		httpx.WriteError(w, r, httpx.CodeConflict)
+	case errors.Is(err, auth.ErrInviteSpent):
+		httpx.WriteFieldError(w, r, "invite")
 	case errors.Is(err, auth.ErrBadCredentials), errors.Is(err, auth.ErrNoSession):
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)
 	case errors.Is(err, auth.ErrBusy):

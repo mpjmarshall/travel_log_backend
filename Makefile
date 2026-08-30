@@ -206,6 +206,17 @@ seed:
 		-s3-access-key "$$s3user" \
 		-s3-secret-key "$$s3pass"
 
+## invite — mint a single-use invite and print it once.
+##
+## The plaintext is never stored, so the line this prints is the only copy.
+## Every value comes from the running container rather than being restated
+## here, which is the correction `make seed` already carries.
+invite:
+	@user="$$($(COMPOSE) exec -T postgres printenv POSTGRES_USER)"; \
+	db="$$($(COMPOSE) exec -T postgres printenv POSTGRES_DB)"; \
+	port="$$($(COMPOSE) port postgres 5432 | cut -d: -f2)"; \
+	go run ./cmd/invite -dsn "postgres://$$user:$$user@127.0.0.1:$$port/$$db?sslmode=disable" -note "$(NOTE)"
+
 ## backup — a custom-format pg_dump of the stack's database, keeping 7 (DEC-92).
 ##
 ## THE VOLUME IS NOT DISPOSABLE, and this is the target that says so. The

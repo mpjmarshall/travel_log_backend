@@ -37,7 +37,7 @@ func TestAnAuthenticatedRouteRunsOutOfItsOwnAllowance(t *testing.T) {
 func TestOneTravellerRunningOutDoesNotRefuseAnotherAtTheSameAddress(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
 	first := bearerFor(t, h, "matt@example.com")
-	second := aSecondTravellerBehindTheClosedRoute(t, h, "kit@example.com")
+	second := aSecondTravellerBehindTheInvite(t, h, "kit@example.com")
 
 	spent := 0
 	for range 4 {
@@ -160,9 +160,9 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 	}
 }
 
-// aSecondTravellerBehindTheClosedRoute puts a traveller into the store
-// directly and signs them in through the real routes.
-func aSecondTravellerBehindTheClosedRoute(t *testing.T, h *harness, email string) string {
+// aSecondTravellerBehindTheInvite puts a traveller into the store directly and
+// signs them in through the real routes.
+func aSecondTravellerBehindTheInvite(t *testing.T, h *harness, email string) string {
 	t.Helper()
 	hash, err := cheapArgon.Hash("a long enough passphrase")
 	if err != nil {
@@ -172,10 +172,10 @@ func aSecondTravellerBehindTheClosedRoute(t *testing.T, h *harness, email string
 		t.Fatalf("putting %s into the store directly: %v", email, err)
 	}
 	if got := h.post(t, "/v1/auth/register",
-		credentialsFor("a-third@example.com")); got.status != http.StatusConflict {
-		t.Fatalf("the premise of this helper failed: registration answered %d rather "+
-			"than 409, so the route is not closed and the helper is unnecessary",
-			got.status)
+		withoutAnInvite("a-third@example.com")); got.status != http.StatusUnprocessableEntity {
+		t.Fatalf("the premise of this helper failed: registration with no invite "+
+			"answered %d rather than 422, so the route is open to anybody and "+
+			"the invite is not a guard", got.status)
 	}
 	return signInAs(t, h, email)
 }

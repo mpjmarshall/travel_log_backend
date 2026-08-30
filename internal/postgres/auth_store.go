@@ -193,3 +193,32 @@ func named(tr auth.Traveller, name sql.NullString) auth.Traveller {
 	}
 	return tr
 }
+
+// MintInvite records a new invite by its digest. The plaintext is never
+// stored: a dump holding live invites in the clear admits its reader.
+func (s AuthStore) MintInvite(ctx context.Context, hash []byte, note string) error {
+	_, err := s.DB.ExecContext(ctx,
+		`INSERT INTO invite_codes (code_hash, note) VALUES ($1, NULLIF($2, ''))`,
+		hash, note)
+	if err != nil {
+		return fmt.Errorf("postgres: minting an invite: %w", err)
+	}
+	return nil
+}
+
+// ClaimInvite spends an invite, or answers auth.ErrInviteSpent. One statement,
+// because read-then-write lets two registrations spend the same invite.
+func (s AuthStore) ClaimInvite(ctx context.Context, hash []byte, travellerID string) error {
+	var claimed string
+	err := s.DB.QueryRowContext(ctx, `
+		UPDATE invite_codes SET used_at = now(), used_by = $2
+		WHERE code_hash = $1 AND used_at IS NULL
+		RETURNING code_hash`, hash, travellerID).Scan(&claimed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return auth.ErrInviteSpent
+	}
+	if err != nil {
+		return fmt.Errorf("postgres: claiming an invite: %w", err)
+	}
+	return nil
+}

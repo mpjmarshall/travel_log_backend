@@ -178,7 +178,12 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 	server := httptest.NewServer(httpx.Chain(mux, httpx.Base(log, requestTimeout)...))
 	t.Cleanup(server.Close)
 
-	const credentials = `{"email":"lock@travellog.test","passphrase":"correct-horse-battery-staple"}`
+	const invite = "LOCKTESTINVITE"
+	if err := (postgres.AuthStore{DB: db}).MintInvite(context.Background(), auth.HashInvite(invite), "the lock leg"); err != nil {
+		t.Fatalf("minting an invite: %v", err)
+	}
+
+	const credentials = `{"email":"lock@travellog.test","passphrase":"correct-horse-battery-staple","invite":"` + invite + `"}`
 	post := func(path string) map[string]any {
 		t.Helper()
 		resp, err := server.Client().Post(server.URL+path, "application/json",
