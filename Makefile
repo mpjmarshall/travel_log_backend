@@ -217,6 +217,24 @@ invite:
 	port="$$($(COMPOSE) port postgres 5432 | cut -d: -f2)"; \
 	go run ./cmd/invite -dsn "postgres://$$user:$$user@127.0.0.1:$$port/$$db?sslmode=disable" -note "$(NOTE)"
 
+## sweep — bucket objects the database no longer references (DEC-21).
+##
+## Reports by default and removes nothing. Add DELETE=1 to remove what it
+## finds. Objects newer than 24 hours are left alone whatever the rows say.
+.PHONY: sweep
+sweep:
+	@user="$$($(COMPOSE) exec -T postgres printenv POSTGRES_USER)"; \
+	db="$$($(COMPOSE) exec -T postgres printenv POSTGRES_DB)"; \
+	port="$$($(COMPOSE) port postgres 5432 | cut -d: -f2)"; \
+	s3="$$($(COMPOSE) port minio 9000)"; \
+	go run ./cmd/sweep \
+		-dsn "postgres://$$user:$$user@127.0.0.1:$$port/$$db?sslmode=disable" \
+		-endpoint "http://$$s3" \
+		-bucket "$${S3_BUCKET:-travellog-media}" \
+		-access-key "$${S3_ACCESS_KEY:-travellog}" \
+		-secret-key "$${S3_SECRET_KEY:-travellogsecret}" \
+		$$([ "$$DELETE" = "1" ] && echo -delete)
+
 ## backup — a custom-format pg_dump of the stack's database, keeping 7 (DEC-92).
 ##
 ## THE VOLUME IS NOT DISPOSABLE, and this is the target that says so. The

@@ -329,3 +329,30 @@ func TestDeletingATravellerWhoIsNotThereIsAnError(t *testing.T) {
 		t.Error("deleting a traveller that does not exist reported success")
 	}
 }
+
+func TestKnownObjectsIncludesRowsWhoseBytesHaveNotLanded(t *testing.T) {
+	store, db := adminStore(t)
+	ctx := context.Background()
+	ada := makeTraveller(t, db, "ada@example.com")
+
+	uploaded := strings.Repeat("a", 64)
+	begun := strings.Repeat("b", 64)
+	if _, err := db.Exec(
+		`INSERT INTO media_objects (traveller_id, id, byte_size, content_type, uploaded_at)
+		 VALUES ($1::uuid, $2, 100, 'image/jpeg', now()),
+		        ($1::uuid, $3, 100, 'image/jpeg', NULL)`,
+		ada, uploaded, begun); err != nil {
+		t.Fatal(err)
+	}
+
+	known, err := store.KnownObjects(ctx)
+	if err != nil {
+		t.Fatalf("KnownObjects() = %v", err)
+	}
+	for _, want := range []string{ada + "/" + uploaded, ada + "/" + begun} {
+		if _, ok := known[want]; !ok {
+			t.Errorf("%s is missing. A row whose bytes have not landed still names an\n"+
+				"    object, and leaving it out lets a sweep delete an upload in flight", want)
+		}
+	}
+}
