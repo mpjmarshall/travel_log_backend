@@ -78,3 +78,53 @@ func TestEveryComposeOverrideIsDocumentedInTheEnvTemplate(t *testing.T) {
 			"    knows they can turn.", missing)
 	}
 }
+
+// readsVariable finds every environment variable named in Load's body, so
+// this list cannot drift from the one the package actually reads.
+var readsVariable = regexp.MustCompile(`"([A-Z][A-Z0-9_]{2,})"`)
+
+func variablesLoadReads(t *testing.T) []string {
+	t.Helper()
+	path := filepath.Join(moduleRoot(t), "internal", "config", "config.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	body := string(raw)
+	start := strings.Index(body, "func Load() (Config, error) {")
+	if start < 0 {
+		t.Fatal("internal/config/config.go has no func Load")
+	}
+	end := strings.Index(body[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("cannot find the end of func Load")
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range readsVariable.FindAllStringSubmatch(body[start:start+end], -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		names = append(names, m[1])
+	}
+	if len(names) == 0 {
+		t.Fatal("found no environment variables in Load, so this test proves nothing")
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestComposeSetsEveryVariableLoadReads(t *testing.T) {
+	env := composeAPIEnvironment(t)
+
+	for _, name := range variablesLoadReads(t) {
+		if !strings.Contains(env, name+":") {
+			t.Errorf("config.Load reads %s and deploy/docker-compose.yml does not set\n"+
+				"    it on the api service. A variable read through os.Getenv rather than\n"+
+				"    the loader is one no required-variable list mentions, so the stack\n"+
+				"    starts and behaves as though it were unset.", name)
+		}
+	}
+}
