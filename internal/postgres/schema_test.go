@@ -56,7 +56,7 @@ func seeded(t *testing.T) *sql.DB {
 	db := migrated(t)
 	ctx := context.Background()
 
-	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'Matt@Example.COM','x')`, tid)
+	mustExec(t, db, `INSERT INTO travellers (id, email) VALUES ($1,'Matt@Example.COM')`, tid)
 	mustExec(t, db, `INSERT INTO media_objects (traveller_id, id, byte_size, content_type) VALUES ($1,$2,10,'image/jpeg'),($1,$3,20,'image/jpeg')`, tid, assetA, assetB)
 	mustExec(t, db, `INSERT INTO cities (traveller_id, id, name, country_code, country_name, centre_lat, centre_lng)
 		VALUES ($1,'kyoto','Kyoto','JP','Japan',35.01,135.76),
@@ -359,7 +359,7 @@ func TestDeletingATravellerWorksDespiteEveryRestrict(t *testing.T) {
 
 func TestTwoAddressesDifferingOnlyInCaseAreRefusedByTheDatabase(t *testing.T) {
 	db := seeded(t) // already holds Matt@Example.COM
-	_, err := db.Exec(`INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'matt@example.com','x')`, otherT)
+	_, err := db.Exec(`INSERT INTO travellers (id, email) VALUES ($1,'matt@example.com')`, otherT)
 	if err == nil {
 		t.Fatal("a second registration differing only in case was accepted")
 	}
@@ -542,7 +542,7 @@ func TestStopSharingThenNewLinkWorksAndOnlyOneLinkIsEverLive(t *testing.T) {
 // with no traveller in hand.
 func TestATokenIsUniqueAcrossEveryTraveller(t *testing.T) {
 	db := seeded(t)
-	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'other@example.com','x')`, otherT)
+	mustExec(t, db, `INSERT INTO travellers (id, email) VALUES ($1,'other@example.com')`, otherT)
 	mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1,'their-trip','Theirs')`, otherT)
 	_, err := db.Exec(`INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,'their-trip',$2)`,
 		otherT, logbook.HashShareToken(tokenMay))
@@ -666,8 +666,6 @@ func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 			`INSERT INTO sessions (id,traveller_id,token_hash,expires_at) VALUES ('33333333-3333-3333-3333-333333333333',$1,'\x00'::bytea,'2099-01-01T00:00:00Z')`, nil, false},
 		{"a session that expired before it was made", "sessions_expires_after_created_ck",
 			`INSERT INTO sessions (id,traveller_id,token_hash,created_at,expires_at) VALUES ('33333333-3333-3333-3333-333333333333',$1,repeat('a',32)::bytea,'2027-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, nil, false},
-		{"an empty passphrase hash", "travellers_passphrase_hash_present_ck",
-			`INSERT INTO travellers (id,email,passphrase_hash) VALUES ($1,'a@b.example','')`, []any{otherT}, true},
 		{"a trip ending before it starts", "trips_dates_ordered_ck",
 			`INSERT INTO trips (traveller_id,id,name,started_on,ended_on) VALUES ($1,'backwards','Backwards','2027-05-10','2027-05-01')`, nil, false},
 		{"a negative ordinal in a trip's city list", "trip_cities_ordinal_ck",
@@ -1022,7 +1020,7 @@ func TestMigration0002BackfillsTheTripsThatWereAlreadyThere(t *testing.T) {
 	if _, err := m.Migrate(ctx, db, onlyMigration(t, "0001")); err != nil {
 		t.Fatalf("applying 0001 alone: %v", err)
 	}
-	id := aTraveller(t, db)
+	id := aTravellerUnder0001(t, db)
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO trips (traveller_id, id, name) VALUES ($1::uuid, 'before', 'Before 0002')`,
 		id); err != nil {
@@ -1217,7 +1215,7 @@ func TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet(t *testing.T) {
 	for _, mediaType := range logbook.AllowedContentTypes() {
 		id := strings.Repeat(fmt.Sprintf("%x", len(mediaType)%16), 64)
 		if _, err := db.ExecContext(context.Background(),
-			`INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,$2,'x')
+			`INSERT INTO travellers (id, email) VALUES ($1,$2)
 			 ON CONFLICT DO NOTHING`, tid, "allow@example.test"); err != nil {
 			t.Fatalf("seeding a traveller: %v", err)
 		}
@@ -1259,7 +1257,7 @@ func TestMigration0004HashesTheTokensThatWereAlreadyThere(t *testing.T) {
 	if _, err := m.Migrate(ctx, db, migrationsUpTo(t, "0003")); err != nil {
 		t.Fatalf("applying 0001 through 0003: %v", err)
 	}
-	id := aTraveller(t, db)
+	id := aTravellerUnder0001(t, db)
 	mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1::uuid,'before','Before 0004')`, id)
 	mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1::uuid,'before',$2)`,
 		id, tokenMay)
@@ -1403,7 +1401,7 @@ func TestTheDownOf0004RefusesWhileALinkExistsAndIsExactWhenNoneDoes(t *testing.T
 		if err := applySQL(context.Background(), db, down); err != nil {
 			t.Fatalf("the down of 0004 failed on an empty share_links: %v", err)
 		}
-		mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'m@e.com','x')`, tid)
+		mustExec(t, db, `INSERT INTO travellers (id, email) VALUES ($1,'m@e.com')`, tid)
 		mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1,'t','T')`, tid)
 		mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'t',$2)`, tid, tokenMay)
 		if _, err := db.Exec(`SELECT token_hash FROM share_links`); err == nil {
@@ -1440,4 +1438,18 @@ func applySQL(ctx context.Context, db *sql.DB, body string) error {
 		}
 	}
 	return nil
+}
+
+// aTravellerUnder0001 inserts with raw SQL: these legs stop at a migration
+// where passphrase_hash still exists, and the store targets the schema after 0007.
+func aTravellerUnder0001(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(
+		`INSERT INTO travellers (id, email, passphrase_hash)
+		 VALUES (gen_random_uuid(), 'early@example.com', 'x') RETURNING id`).
+		Scan(&id); err != nil {
+		t.Fatalf("inserting a traveller under an early migration: %v", err)
+	}
+	return id
 }

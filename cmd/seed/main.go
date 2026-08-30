@@ -24,6 +24,7 @@ import (
 	"travellog/internal/auth"
 	"travellog/internal/logbook"
 	"travellog/internal/media"
+	"travellog/internal/postgres"
 	"travellog/internal/seed"
 )
 
@@ -141,19 +142,13 @@ func run() error {
 		return err
 	}
 
-	passphrase, err := newPassphrase()
+	invite, inviteHash, err := auth.NewInvite()
 	if err != nil {
 		return err
 	}
-	hash, err := auth.Argon2id{Params: auth.DefaultParams}.Hash(passphrase)
-	if err != nil {
-		return fmt.Errorf("hashing the generated passphrase: %w", err)
-	}
 
 	now := time.Now().UTC()
-	traveller := seed.Traveller{
-		ID: travellerID, Email: o.email, PassphraseHash: hash, CreatedAt: now,
-	}
+	traveller := seed.Traveller{ID: travellerID, Email: o.email, CreatedAt: now}
 	dataset, err := seed.FromDocument(traveller, objectsOf(travellerID, assets, now), document)
 	if err != nil {
 		return err
@@ -169,7 +164,11 @@ func run() error {
 		return err
 	}
 
-	printReport(o, travellerID, passphrase, report)
+	if err := (postgres.AuthStore{DB: db}).MintInvite(ctx, inviteHash, "make seed"); err != nil {
+		return fmt.Errorf("minting the seeded traveller's invite: %w", err)
+	}
+
+	printReport(o, travellerID, invite, report)
 	return nil
 }
 

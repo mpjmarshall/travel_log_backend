@@ -40,8 +40,8 @@ func withTravellers(t *testing.T) (*sql.DB, string) {
 		Migrate(context.Background(), db, migrations.FS); err != nil {
 		t.Fatalf("applying 0001: %v", err)
 	}
-	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash)
-		VALUES ($1,'matt@example.com','x'), ($2,'other@example.com','x')`, tid, otherT)
+	mustExec(t, db, `INSERT INTO travellers (id, email)
+		VALUES ($1,'matt@example.com'), ($2,'other@example.com')`, tid, otherT)
 	return db, schema
 }
 

@@ -164,11 +164,7 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 // signs them in through the real routes.
 func aSecondTravellerBehindTheInvite(t *testing.T, h *harness, email string) string {
 	t.Helper()
-	hash, err := cheapArgon.Hash("a long enough passphrase")
-	if err != nil {
-		t.Fatalf("hashing the second traveller's passphrase: %v", err)
-	}
-	if _, err := h.store.CreateTraveller(context.Background(), email, hash); err != nil {
+	if _, err := h.store.CreateTraveller(context.Background(), email); err != nil {
 		t.Fatalf("putting %s into the store directly: %v", email, err)
 	}
 	if got := h.post(t, "/v1/auth/register",

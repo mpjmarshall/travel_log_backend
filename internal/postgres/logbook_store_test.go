@@ -29,8 +29,7 @@ func logbookStore(t *testing.T) (LogbookStore, *sql.DB, string) {
 // the running server makes it — logbook_version and all.
 func aTraveller(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(),
-		"matt@example.com", "$argon2id$stub")
+	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), "matt@example.com")
 	if err != nil {
 		t.Fatalf("creating a traveller: %v", err)
 	}
@@ -1007,7 +1006,7 @@ func TestADeleteThatRemovesNothingIsSuccessAndMovesNoVersion(t *testing.T) {
 func TestOneTravellerCannotDeleteAnothersTrip(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
-	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'other@example.com','x')`, otherT)
+	mustExec(t, db, `INSERT INTO travellers (id, email) VALUES ($1,'other@example.com')`, otherT)
 
 	snap, err := (LogbookStore{DB: db}).DeleteTrip(ctx, otherT, "kyoto-in-may")
 	if err != nil {

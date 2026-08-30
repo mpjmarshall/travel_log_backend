@@ -25,7 +25,6 @@ func wiredConfig() config.Config {
 		AuthRateLimitPerMin:      60,
 		TravellerRateLimitPerMin: 600,
 		PublicRateLimitPerMin:    120,
-		Argon2MaxConcurrent:      4,
 		MediaMaxBytes:            config.MinMediaMaxBytes,
 	}
 }
@@ -99,18 +98,6 @@ func TestHealthzIsStillOnTheMuxBesideThem(t *testing.T) {
 	}
 }
 
-func TestApiRoutesRefusesAnArgon2CeilingBelowOne(t *testing.T) {
-	cfg := wiredConfig()
-	cfg.Argon2MaxConcurrent = 0
-	if _, err := apiRoutes(cfg, nil, quiet(), media.NewMemory()); err == nil {
-		t.Errorf("apiRoutes accepted ARGON2_MAX_CONCURRENT=0.\n" +
-			"    DEC-48: zero is not 'unlimited' — a zero-capacity semaphore blocks the\n" +
-			"    first login for ever. config.Load floors it at 1 and this is the half\n" +
-			"    that holds if a caller is not config.")
-	}
-}
-
-// The chain around the mux.
 func TestTheServedHandlerCarriesARequestIdAndSurvivesAPanic(t *testing.T) {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(logs, nil))

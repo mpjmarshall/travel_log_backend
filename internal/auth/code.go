@@ -80,7 +80,7 @@ func (s *Service) RequestCode(ctx context.Context, email string) (code string, t
 	if err := checkEmail(email); err != nil {
 		return "", Traveller{}, false, err
 	}
-	tr, _, err = s.Store.TravellerByEmail(ctx, email)
+	tr, err = s.Store.TravellerByEmail(ctx, email)
 	switch {
 	case errors.Is(err, ErrNoTraveller):
 		return "", Traveller{}, false, nil
@@ -111,7 +111,7 @@ func (s *Service) SignInWithCode(ctx context.Context, email, code string) (Issue
 	if err := checkEmail(email); err != nil {
 		return Issued{}, err
 	}
-	tr, _, err := s.Store.TravellerByEmail(ctx, email)
+	tr, err := s.Store.TravellerByEmail(ctx, email)
 	switch {
 	case errors.Is(err, ErrNoTraveller):
 		return Issued{}, ErrBadCredentials

@@ -50,7 +50,7 @@ func TestCreateTravellerStoresTheAddressExactlyAsTyped(t *testing.T) {
 	store, db, _ := authStore(t)
 	const typed = "Matt.Marshall@Example.COM"
 
-	tr, err := store.CreateTraveller(context.Background(), typed, "$argon2id$stub")
+	tr, err := store.CreateTraveller(context.Background(), typed)
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestCreateTravellerStoresTheAddressExactlyAsTyped(t *testing.T) {
 
 func TestCreateTravellerLeavesTheNameNull(t *testing.T) {
 	store, db, _ := authStore(t)
-	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
+	tr, err := store.CreateTraveller(context.Background(), "matt@example.com")
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestCreateTravellerLeavesTheNameNull(t *testing.T) {
 
 func TestCreateTravellerStartsTheLogbookVersionAtZero(t *testing.T) {
 	store, db, _ := authStore(t)
-	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
+	tr, err := store.CreateTraveller(context.Background(), "matt@example.com")
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
@@ -104,11 +104,11 @@ func TestASecondRegistrationOfOneAddressInAnotherCasingIsRefused(t *testing.T) {
 	store, _, _ := authStore(t)
 	ctx := context.Background()
 
-	if _, err := store.CreateTraveller(ctx, "A@B.com", "$argon2id$stub"); err != nil {
+	if _, err := store.CreateTraveller(ctx, "A@B.com"); err != nil {
 		t.Fatalf("the first registration: %v", err)
 	}
 	for _, variant := range []string{"a@b.com", "A@B.COM", "a@B.Com", "A@B.com"} {
-		_, err := store.CreateTraveller(ctx, variant, "$argon2id$stub")
+		_, err := store.CreateTraveller(ctx, variant)
 		if !errors.Is(err, auth.ErrEmailTaken) {
 			t.Errorf("registering %q over A@B.com answered %v, want auth.ErrEmailTaken", variant, err)
 		}
@@ -119,21 +119,18 @@ func TestTravellerByEmailResolvesAnAddressInAnyCasing(t *testing.T) {
 	store, _, _ := authStore(t)
 	ctx := context.Background()
 
-	created, err := store.CreateTraveller(ctx, "A@B.com", "$argon2id$stub")
+	created, err := store.CreateTraveller(ctx, "A@B.com")
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
 	for _, spelling := range []string{"A@B.com", "a@b.com", "A@B.COM", "a@B.Com"} {
-		found, hash, err := store.TravellerByEmail(ctx, spelling)
+		found, err := store.TravellerByEmail(ctx, spelling)
 		if err != nil {
 			t.Errorf("TravellerByEmail(%q) = %v", spelling, err)
 			continue
 		}
 		if found.ID != created.ID {
 			t.Errorf("TravellerByEmail(%q) answered %s, want %s", spelling, found.ID, created.ID)
-		}
-		if hash != "$argon2id$stub" {
-			t.Errorf("TravellerByEmail(%q) answered the hash %q", spelling, hash)
 		}
 		if found.Email != "A@B.com" {
 			t.Errorf("TravellerByEmail(%q) answered the address %q, want it as typed", spelling, found.Email)
@@ -143,7 +140,7 @@ func TestTravellerByEmailResolvesAnAddressInAnyCasing(t *testing.T) {
 
 func TestTravellerByEmailAnswersNoTravellerForAnAddressNobodyHolds(t *testing.T) {
 	store, _, _ := authStore(t)
-	if _, _, err := store.TravellerByEmail(context.Background(), "nobody@example.com"); !errors.Is(err, auth.ErrNoTraveller) {
+	if _, err := store.TravellerByEmail(context.Background(), "nobody@example.com"); !errors.Is(err, auth.ErrNoTraveller) {
 		t.Errorf("TravellerByEmail on an empty table answered %v, want auth.ErrNoTraveller", err)
 	}
 }
@@ -154,7 +151,7 @@ func TestTheLookupUsesTheLowerEmailIndexAndAPlainEqualityDoesNot(t *testing.T) {
 	store, db, _ := authStore(t)
 	ctx := context.Background()
 	for _, email := range []string{"a@b.com", "c@d.com", "e@f.com", "g@h.com"} {
-		if _, err := store.CreateTraveller(ctx, email, "$argon2id$stub"); err != nil {
+		if _, err := store.CreateTraveller(ctx, email); err != nil {
 			t.Fatalf("seeding %s: %v", email, err)
 		}
 	}
@@ -208,7 +205,7 @@ func TestTheLookupUsesTheLowerEmailIndexAndAPlainEqualityDoesNot(t *testing.T) {
 func withTravellerRow(t *testing.T) (AuthStore, *sql.DB, auth.Traveller) {
 	t.Helper()
 	store, db, _ := authStore(t)
-	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
+	tr, err := store.CreateTraveller(context.Background(), "matt@example.com")
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
@@ -276,7 +273,7 @@ func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 // traveller's write lock, and a session create still does.
 func TestCreateSessionWaitsForTheTravellerLockAndTouchSessionDoesNot(t *testing.T) {
 	store, db, schema := authStore(t)
-	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
+	tr, err := store.CreateTraveller(context.Background(), "matt@example.com")
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
@@ -467,7 +464,7 @@ func TestTouchSessionRefusesASessionThatIsNotThisTravellersAndOneThatIsGone(t *t
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	stranger, err := store.CreateTraveller(ctx, "other@example.com", "$argon2id$stub")
+	stranger, err := store.CreateTraveller(ctx, "other@example.com")
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
@@ -562,7 +559,7 @@ func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
 		t.Fatalf("TravellerExists is true on an empty table")
 	}
 
-	if _, err := store.CreateTraveller(ctx, "matt@example.com", "$argon2id$stub"); err != nil {
+	if _, err := store.CreateTraveller(ctx, "matt@example.com"); err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
 
@@ -695,7 +692,7 @@ func TestRevokingSessionsMovesNoLogbookVersion(t *testing.T) {
 // aSecondTraveller is `aTraveller` for a leg that needs two of them.
 func aSecondTraveller(t *testing.T, db *sql.DB, email string) string {
 	t.Helper()
-	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), email, "$argon2id$stub")
+	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), email)
 	if err != nil {
 		t.Fatalf("creating a second traveller: %v", err)
 	}

@@ -76,7 +76,6 @@ func CountsFor(photos int) Counts {
 type Traveller struct {
 	ID             string
 	Email          string
-	PassphraseHash string
 	Name           *string
 	LogbookVersion int64
 	CreatedAt      time.Time

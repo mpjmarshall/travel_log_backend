@@ -9,7 +9,7 @@ import (
 
 func aRegistered(t *testing.T, s *Service, store *fakeStore, email string) Traveller {
 	t.Helper()
-	tr, err := s.Register(context.Background(), email, "a long enough passphrase")
+	tr, err := s.Register(context.Background(), email)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestACodeIsNotValidForAnotherTraveller(t *testing.T) {
 	ctx := context.Background()
 	aRegistered(t, s, store, "matt@example.com")
 	other := Traveller{ID: fakeUUID(99), Email: "other@example.com"}
-	store.travellers["other@example.com"] = storedTraveller{Traveller: other, hash: dummyHash}
+	store.travellers["other@example.com"] = storedTraveller{Traveller: other}
 
 	code, _, _, _ := s.RequestCode(ctx, "matt@example.com")
 	if _, _, _, err := s.RequestCode(ctx, "other@example.com"); err != nil {

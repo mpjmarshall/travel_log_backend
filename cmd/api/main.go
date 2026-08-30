@@ -189,14 +189,7 @@ func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.S
 // apiRoutes builds the auth service from the config and answers something
 // that mounts its routes.
 func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.Store) (func(*http.ServeMux), error) {
-	gate, err := auth.NewGate(cfg.Argon2MaxConcurrent)
-	if err != nil {
-		return nil, fmt.Errorf("ARGON2_MAX_CONCURRENT: %w", err)
-	}
-	service := &auth.Service{
-		Store:  postgres.AuthStore{DB: db},
-		Hasher: auth.Capped{Hasher: auth.Argon2id{Params: auth.DefaultParams}, Gate: gate},
-	}
+	service := &auth.Service{Store: postgres.AuthStore{DB: db}}
 	credential, traveller, public := limiters(cfg)
 
 	sender, err := mailer(cfg, log)
