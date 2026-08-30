@@ -1,0 +1,153 @@
+/* Transcribed by hand from the client's lib/src/theme/app_colors.dart:
+   22 primitives, then the 12 semantic names built on them. */
+:root {
+  --ink900: #121212;
+  --ink850: #1c1c1c;
+  --ink800: #232323;
+  --ink700: #2f2f2f;
+  --ink600: #3a3a3a;
+  --ink500: #4a4a4a;
+  --paper000: #ffffff;
+  --paper100: #f4f5f7;
+  --paper200: #e3e7ee;
+  --grey400: #8a8a8e;
+  --grey300: #a0a0a5;
+  --grey200: #c7c7cc;
+  --sky100: #dbe3ef;
+  --sky200: #cad3e2;
+  --sky300: #b3c3dd;
+  --sky400: #93a8c9;
+  --white-a08: rgba(255, 255, 255, 0.078);
+  --white-a14: rgba(255, 255, 255, 0.141);
+  --white-a70: rgba(255, 255, 255, 0.702);
+  --transparent: rgba(0, 0, 0, 0);
+  --border-control: rgba(255, 255, 255, 0.376);
+  --scrim-chip: rgba(0, 0, 0, 0.702);
+
+  --surface-app: var(--ink900);
+  --surface-sheet: var(--ink850);
+  --surface-raised: var(--ink700);
+  --surface-field: var(--ink600);
+  --surface-canvas: var(--sky200);
+  --text-primary: var(--paper000);
+  --text-secondary: var(--grey300);
+  --text-tertiary: var(--grey400);
+  --text-on-inverse: var(--ink900);
+  --border-hairline: var(--white-a08);
+  --accent-action: var(--paper000);
+  --accent-action-text: var(--ink900);
+}
+
+@font-face {
+  font-family: "PlayfairDisplay";
+  src: url("/admin/static/PlayfairDisplay-Variable.ttf") format("truetype");
+  font-weight: 400 900;
+  font-display: swap;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+h1, h2, h3 {
+  font-family: "PlayfairDisplay", Georgia, serif;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+h1 { font-size: 2rem; }
+h2 { font-size: 1.3rem; }
+
+main { max-width: 68rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+nav {
+  background: var(--surface-sheet);
+  border-bottom: 1px solid var(--border-hairline);
+  padding: 0.9rem 1.5rem;
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+}
+
+nav a { color: var(--text-secondary); text-decoration: none; }
+nav a:hover, nav a[aria-current] { color: var(--text-primary); }
+nav .spacer { flex: 1; }
+
+.brand {
+  font-family: "PlayfairDisplay", Georgia, serif;
+  font-size: 1.15rem;
+  color: var(--text-primary);
+}
+
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+
+th, td {
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+th { color: var(--text-tertiary); font-weight: 500; font-size: 0.8rem;
+     text-transform: uppercase; letter-spacing: 0.04em; }
+
+td.numeric, th.numeric { text-align: right; font-variant-numeric: tabular-nums; }
+
+tr:hover td { background: var(--surface-sheet); }
+
+.cards { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1.5rem 0; }
+
+.card {
+  background: var(--surface-sheet);
+  border: 1px solid var(--border-hairline);
+  border-radius: 14px;
+  padding: 1rem 1.25rem;
+  min-width: 9rem;
+}
+
+.card .label { color: var(--text-tertiary); font-size: 0.75rem;
+               text-transform: uppercase; letter-spacing: 0.04em; }
+.card .value { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+
+input[type="text"], input[type="password"], input[type="search"] {
+  background: var(--surface-field);
+  border: 1px solid var(--border-control);
+  border-radius: 999px;
+  color: var(--text-primary);
+  padding: 0.6rem 1rem;
+  font: inherit;
+  width: 100%;
+}
+
+button, .button {
+  background: var(--accent-action);
+  color: var(--accent-action-text);
+  border: 0;
+  border-radius: 999px;
+  padding: 0.6rem 1.4rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.quiet {
+  background: var(--transparent);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-control);
+}
+
+button.danger { background: var(--transparent); color: var(--text-secondary);
+                border: 0; text-decoration: underline; padding: 0.4rem 0; }
+
+.note { color: var(--text-secondary); }
+.warn { color: var(--text-primary); background: var(--surface-raised);
+        border-radius: 10px; padding: 0.75rem 1rem; margin: 1rem 0; }
+
+.login { max-width: 22rem; margin: 12vh auto; }
+.login form { display: flex; flex-direction: column; gap: 0.9rem; }
+
+.pager { display: flex; gap: 0.75rem; align-items: center; margin-top: 1rem; }

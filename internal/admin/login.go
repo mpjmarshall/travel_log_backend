@@ -98,12 +98,12 @@ func Login(deps Deps) http.HandlerFunc {
 		if tries.locked(key, now) {
 			deps.Log.Warn("admin: login refused, locked",
 				slog.String("client", key))
-			deps.Render.Page(w, http.StatusTooManyRequests, "login", pageData{Locked: true})
+			deps.Render.Page(w, http.StatusTooManyRequests, "login", PageData{Locked: true})
 			return
 		}
 
 		if err := r.ParseForm(); err != nil {
-			deps.Render.Page(w, http.StatusBadRequest, "login", pageData{Failed: true})
+			deps.Render.Page(w, http.StatusBadRequest, "login", PageData{Failed: true})
 			return
 		}
 
@@ -112,14 +112,14 @@ func Login(deps Deps) http.HandlerFunc {
 			locked := tries.fail(key, now)
 			deps.Log.Warn("admin: login refused",
 				slog.String("client", key), slog.Bool("locked", locked))
-			deps.Render.Page(w, http.StatusUnauthorized, "login", pageData{Failed: true})
+			deps.Render.Page(w, http.StatusUnauthorized, "login", PageData{Failed: true})
 			return
 		}
 
 		id, _, err := deps.Sessions.New(now)
 		if err != nil {
 			deps.Log.Error("admin: minting a session", slog.String("err", err.Error()))
-			deps.Render.Page(w, http.StatusInternalServerError, "login", pageData{Failed: true})
+			deps.Render.Page(w, http.StatusInternalServerError, "login", PageData{Failed: true})
 			return
 		}
 
@@ -143,9 +143,27 @@ func (d Deps) cookie(id string) *http.Cookie {
 	}
 }
 
-// pageData is what a template is given. It grows as the pages do.
-type pageData struct {
-	Failed bool
-	Locked bool
-	CSRF   string
+// PageData is what every template is given. It grows as the pages do.
+type PageData struct {
+	Title    string
+	CSRF     string
+	SignedIn bool
+	Failed   bool
+	Locked   bool
+
+	Cards    []Card
+	Sessions []SessionRow
+}
+
+// Card is one figure on the overview.
+type Card struct {
+	Label string
+	Value string
+}
+
+// SessionRow is one live session, named by its traveller.
+type SessionRow struct {
+	Email      string
+	CreatedAt  string
+	LastUsedAt string
 }

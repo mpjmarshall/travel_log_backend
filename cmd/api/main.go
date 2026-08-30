@@ -139,14 +139,9 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	panel := func(mux *http.ServeMux) {
-		admin.Mount(mux, admin.Deps{
-			Password: cfg.AdminPassword,
-			Sessions: admin.NewSessions(),
-			Now:      time.Now,
-			Log:      log,
-			Dev:      cfg.Development,
-		})
+	panel, err := adminPanel(cfg, log)
+	if err != nil {
+		return err
 	}
 
 	return serve(addr, serverChain(newMux(db, log, mount, panel), log, cfg.RequestTimeout), log)
@@ -188,6 +183,28 @@ func migrateOnlyRun(cfg config.Config, log *slog.Logger) error {
 		return fmt.Errorf("the database did not answer within %s: %w", migrateTimeout, err)
 	}
 	return migrateUp(ctx, db, log)
+}
+
+// adminPanel is the /admin mount, or a mount that registers nothing when no
+// password is configured.
+func adminPanel(cfg config.Config, log *slog.Logger) (func(*http.ServeMux), error) {
+	if cfg.AdminPassword == "" {
+		return func(*http.ServeMux) {}, nil
+	}
+	pages, err := admin.NewTemplates(log)
+	if err != nil {
+		return nil, fmt.Errorf("the admin panel's templates: %w", err)
+	}
+	return func(mux *http.ServeMux) {
+		admin.Mount(mux, admin.Deps{
+			Password: cfg.AdminPassword,
+			Sessions: admin.NewSessions(),
+			Now:      time.Now,
+			Log:      log,
+			Dev:      cfg.Development,
+			Render:   pages,
+		})
+	}, nil
 }
 
 // newMux builds the server's routing table.

@@ -1,0 +1,26 @@
+{{define "layout" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Travel Log admin</title>
+<link rel="stylesheet" href="/admin/static/admin.css">
+<script src="/admin/static/htmx.min.js" defer></script>
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{.CSRF}}"}'>
+{{if .SignedIn}}
+<nav>
+  <span class="brand">Travel Log</span>
+  <a href="/admin">Overview</a>
+  <a href="/admin/travellers">Travellers</a>
+  <a href="/admin/invites">Invites</a>
+  <a href="/admin/sessions">Sessions</a>
+  <span class="spacer"></span>
+  <button class="quiet" hx-post="/admin/logout" hx-target="body">Sign out</button>
+</nav>
+{{end}}
+<main>{{template "content" .}}</main>
+</body>
+</html>
+{{- end}}

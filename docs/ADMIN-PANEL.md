@@ -33,7 +33,7 @@ Twenty-nine, counted rather than carried.
 | 4 | It mounts on the **same binary and the same port**, under `/admin`. |
 | 5 | Views are `html/template`; **htmx is vendored**, never a CDN. |
 | 6 | It **matches the app's dark design system**. |
-| 7 | The 23 colour tokens are **hand-transcribed** into CSS custom properties, with `lib/src/theme/app_colors.dart` named in a comment. A generator in the gate is impossible: the Go repository's CI has no copy of the Flutter one. |
+| 7 | The colour tokens are **hand-transcribed** into CSS custom properties, with `lib/src/theme/app_colors.dart` named in a comment. A generator in the gate is impossible: the Go repository's CI has no copy of the Flutter one. |
 | 8 | **Playfair Display for headings, system sans for body.** 300KB rather than 540KB, and Playfair carries most of the identity. |
 
 ### Authentication
@@ -131,7 +131,7 @@ internal/admin/
     sessions.gohtml
     _confirm.gohtml     the typed-name delete dialog
   static/
-    admin.css       the 23 transcribed tokens, then the panel's own rules
+    admin.css       the 34 transcribed tokens, then the panel's own rules
     htmx.min.js     vendored, version recorded in §13
     PlayfairDisplay-Variable.ttf
     OFL-PlayfairDisplay.txt
@@ -403,10 +403,11 @@ func TestEveryTemplateParsesAndExecutes(t *testing.T) {
   `template.Must`-free parsing that returns its error. `layout.gohtml` puts the
   CSRF token on the body as `hx-headers='{"X-CSRF-Token": "..."}'` so every
   htmx request inherits it.
-- [ ] **Step 4: transcribe the tokens.** All 23 from
-  `lib/src/theme/app_colors.dart` as custom properties on `:root`, in source
-  order, under a two-line comment naming that file as the source and saying the
-  values are transcribed by hand.
+- [x] **Step 4: transcribe the tokens.** **Thirty-four, not the 23 this plan
+  first said** — that figure came from a grep counting only direct `Color(0x…)`
+  constructions. Re-derived: 22 primitives, 12 semantic aliases built on them,
+  and one `LinearGradient` which CSS expresses differently and is left out. A
+  leg names all 34, so dropping one reddens.
 - [ ] **Step 5: vendor the assets.** `htmx.min.js`, `PlayfairDisplay-Variable.ttf`
   and `OFL-PlayfairDisplay.txt`, the last of which must ship for the licence to
   be satisfied. Serve them under `/admin/static/`.
