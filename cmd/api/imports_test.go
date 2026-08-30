@@ -93,6 +93,7 @@ var pgxImporters = map[string]string{
 	"internal/postgres/testdb/testdb.go": "the test seam: opens the pool the store legs run against",
 	"cmd/seed/main.go":                   "the developer command: registers the driver for its own pool, and calls nothing in it",
 	"cmd/invite/main.go":                 "the invite command: registers the driver for its own pool, and calls nothing in it",
+	"cmd/sweep/main.go":                  "the sweep command: registers the driver for its own pool, and calls nothing in it",
 }
 
 // TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes the claim A grep

@@ -541,9 +541,18 @@ travellers in it. What it found and what it proved:
   objects and 5,175,532 bytes on the live stack on 30 August 2026, with no code
   path that could ever have removed one.
 
-- [ ] **Re-read §10 when the code lands** and drop its "nothing here is built
-  yet" clause. A section written ahead of the work is right until the work
-  exists, and then it is stale.
+- [x] **§10 re-read once the code landed** and its "nothing here is built yet"
+  clause dropped.
+
+- [x] **The orphan sweep is built**, `make sweep`, rather than left open:
+  `internal/sweep` decides what an orphan is with no bucket and no database in
+  the way, `cmd/sweep` wires it up, and it reports unless given `DELETE=1`.
+  **One thing it has not done end to end**: removed a real orphan from a real
+  bucket. Nothing on either stack is both unreferenced and older than the
+  24-hour guard, and MinIO takes `LastModified` from its own metadata, so an
+  old object cannot be planted. `Plan`'s age boundary and `Apply`'s deletion
+  are covered by legs, and `media.Delete` is proven against real MinIO by the
+  traveller delete — the composition is the part standing on tier three.
 
 ---
 

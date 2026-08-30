@@ -280,3 +280,24 @@ func (s AdminStore) DeleteTraveller(ctx context.Context, id string) ([]string, e
 	}
 	return objects, nil
 }
+
+// KnownObjects is every object the database references, keyed as the bucket
+// keys them. Rows with no bytes yet are in it, so a begun upload is not swept.
+func (s AdminStore) KnownObjects(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT traveller_id::text || '/' || id FROM media_objects`)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: listing referenced objects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	known := map[string]struct{}{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("postgres: reading an object key: %w", err)
+		}
+		known[key] = struct{}{}
+	}
+	return known, rows.Err()
+}

@@ -337,9 +337,20 @@ thing between the internet and every traveller's account is one password.
    the panel, and the row, the cascade and the object all went, with every
    other traveller untouched.
 
-   **It does not sweep the orphans that already exist.** Measured on the live
-   stack on 30 August 2026: 4 objects, 5,175,532 bytes, and no code path that
-   could ever have removed one. §4 and §5 are unchanged and both still apply.
+   **There is a sweep for orphans now**, `make sweep`, added the same day.
+   It reports by default and removes nothing without `DELETE=1`, and it leaves
+   any object younger than 24 hours alone whatever the rows say. That guard is
+   belt and braces: `BeginMedia` writes the row before `PresignPut` hands out
+   the URL, so bytes cannot exist without a row and nothing in flight can look
+   orphaned — but a bucket-wide delete should not rest on one reading of one
+   code path.
+
+   **Run on the live stack on 30 August 2026: 4 objects, 4 referenced, no
+   orphans.** Worth stating plainly, because an earlier draft of this section
+   recorded those 4 objects in a way that read as though they were orphans.
+   They were not. The hazard was never that orphans existed; it was that
+   nothing could remove one if it did. §4 and §5 are unchanged and both still
+   apply — the bucket is still not backed up.
 
 4. **`ADMIN_PASSWORD` is the first variable in this stack with no safe
    default**, deliberately. Every other password here is guessable on purpose
