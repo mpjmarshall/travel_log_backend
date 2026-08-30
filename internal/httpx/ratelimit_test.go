@@ -12,8 +12,7 @@ import (
 	"travellog/internal/httpx"
 )
 
-// clock is the injected time. A limiter tested against the wall clock is a
-// test that either sleeps for a minute or asserts nothing about refill.
+// clock is the injected time.
 type clock struct{ t time.Time }
 
 func (c *clock) now() time.Time      { return c.t }
@@ -80,15 +79,8 @@ func TestTheBucketRefillsOverTime(t *testing.T) {
 	}
 }
 
-// A bucket that fills without a ceiling turns an idle hour into an hour's worth
-// of burst — which is the shape that lets a quiet attacker land 3,600 Argon2
-// logins in one second, and the whole reason DEC-48 exists.
-//
-// THE FIRST Allow IS LOAD-BEARING AND ITS ABSENCE WAS A DEFECT IN THIS LEG.
-// Written without it, the hour passed BEFORE the bucket existed — and a bucket
-// is created full, with `last` set to the moment of creation, so there was no
-// elapsed time to accumulate and the leg passed with the ceiling removed. Found
-// by mutation M32, not by review.
+// A bucket that fills without a ceiling turns an idle hour into an hour's
+// worth of burst.
 func TestIdleTimeDoesNotAccumulateBeyondTheAllowance(t *testing.T) {
 	c := newClock()
 	l := httpx.NewLimiter(5, c.now)
@@ -110,10 +102,8 @@ func TestIdleTimeDoesNotAccumulateBeyondTheAllowance(t *testing.T) {
 	}
 }
 
-// RemoteAddr is `host:port`, and the port is a NEW EPHEMERAL NUMBER on every
-// connection. Keying on the raw string gives each request its own bucket, so a
-// limiter that looks correct in every unit test limits nothing at all in
-// production. This is the leg that would have caught it.
+// RemoteAddr is `host:port`, and the port is a new ephemeral number on every
+// connection.
 func TestClientKeyStripsThePortSoOneHostIsOneBucket(t *testing.T) {
 	first := httptest.NewRequest(http.MethodPost, "/v1/auth/session", nil)
 	first.RemoteAddr = "203.0.113.9:41235"
@@ -182,10 +172,7 @@ func TestTheMiddlewareRefusesWithTheEnvelopeAndDoesNotRunTheHandler(t *testing.T
 	}
 }
 
-// DEC-48: REJECT rather than queue. Queueing converts memory exhaustion into
-// timeout exhaustion, which is the same outage wearing a different error — so
-// the refusal has to be immediate, and "immediate" is the property a test can
-// actually check.
+// : reject rather than queue.
 func TestARefusalIsImmediateRatherThanAWait(t *testing.T) {
 	log, _ := testLogger()
 	c := newClock()
@@ -203,9 +190,8 @@ func TestARefusalIsImmediateRatherThanAWait(t *testing.T) {
 	}
 }
 
-// The limiter is shared by every request on the server, so its own bookkeeping
-// is the race. Run under -race, which is what `make check` does not do — see
-// CLAUDE.md — so this leg is worth having under `go test -race` by hand.
+// The limiter is shared by every request on the server, so its own
+// bookkeeping is the race.
 func TestConcurrentCallersSpendExactlyTheAllowanceBetweenThem(t *testing.T) {
 	c := newClock()
 	l := httpx.NewLimiter(50, c.now)
@@ -228,21 +214,12 @@ func TestConcurrentCallersSpendExactlyTheAllowanceBetweenThem(t *testing.T) {
 	}
 }
 
-// === keying by something other than the address ===
-
-// RateLimit's key is the client address, which is the right key for an
-// unauthenticated credential attempt and the wrong one for a request that
-// carries an identity: a stolen token used from a thousand addresses is a
-// thousand buckets. RateLimitBy is what lets a caller that HAS an identity key
-// on it — and the key function belongs to the caller, because this package
-// imports no domain and has never heard of a traveller.
+// RateLimit the key is the client address.
 func TestRateLimitBySpendsTheAllowancePerKeyTheFunctionReturns(t *testing.T) {
 	log, _ := testLogger()
 	c := newClock()
 	l := httpx.NewLimiter(2, c.now)
 
-	// One address, two identities: the shape a limiter keyed on RemoteAddr
-	// cannot tell apart.
 	byHeader := httpx.RateLimitBy(l, log, "traveller", func(r *http.Request) (string, bool) {
 		return r.Header.Get("X-Who"), true
 	})
@@ -269,22 +246,8 @@ func TestRateLimitBySpendsTheAllowancePerKeyTheFunctionReturns(t *testing.T) {
 	}
 }
 
-// A REQUEST IT CANNOT KEY IS REFUSED, NOT WAVED THROUGH. The only way the key
-// function fails is a middleware mounted where the fact it reads is not on the
-// request yet — a wiring defect, not a client fault — so it is a 500 and it is
-// loud. Failing OPEN here would remove the ceiling in exactly the case nobody
-// notices: the app works, and the guard is not there.
+// A request it cannot key is refused, not waved through.
 func TestARefusalWithNoLoggerIsStillARefusal(t *testing.T) {
-	// BOTH REFUSAL BRANCHES LOG, AND BEFORE THIS BOTH PANICKED ON A NIL
-	// LOGGER — which the recover middleware turned into a 500. So a nil
-	// logger answered 500 in place of every 429, on the one path that runs
-	// when the system is already under pressure and the limiter is doing
-	// exactly what it is for.
-	//
-	// httpapi.Mount panics on a nil logger now, which is where a
-	// misconfiguration should be caught. This is the second line, for a
-	// caller that is not Mount, and it is the shape logFailure and the
-	// migrator already use.
 	c := newClock()
 
 	t.Run("the limited branch answers 429", func(t *testing.T) {
@@ -315,9 +278,6 @@ func TestARefusalWithNoLoggerIsStillARefusal(t *testing.T) {
 	})
 
 	t.Run("the unkeyable branch still answers 500, for its own reason", func(t *testing.T) {
-		// Not a regression: an unkeyable request IS a 500. The point is that
-		// it is a 500 because the limiter could not key it, not because the
-		// logger was nil.
 		l := httpx.NewLimiter(60, c.now)
 		h := httpx.Chain(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -368,8 +328,7 @@ func TestRateLimitByRefusesARequestItCannotKey(t *testing.T) {
 }
 
 // The two refusals mean different things to an operator, so they are not
-// spelled the same in the log: one names the address that ran out and the other
-// names the identity.
+// spelled the same in the log.
 func TestTheKeyNameIsWhatTheRefusalIsLoggedUnder(t *testing.T) {
 	log, logs := testLogger()
 	c := newClock()

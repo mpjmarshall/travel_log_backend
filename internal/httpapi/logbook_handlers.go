@@ -1,18 +1,4 @@
 // The one conditional read and the one whole-state write.
-//
-// THIS PACKAGE TRANSLATES HTTP AND NOTHING MORE (DEC-62). What a trip may
-// contain is internal/logbook's; what the log looks like on the wire is its
-// emitter's; what one read sees is internal/postgres's snapshot. What is here
-// is the tag, the condition, the status, and the one function that turns a
-// domain sentinel into a word from DEC-12's closed vocabulary.
-//
-// THE ORDER INSIDE THE READ IS THE WHOLE OF DEC-31 AND IT IS EASY TO GET
-// BACKWARDS. The version is taken first, inside the snapshot; the tag is built
-// from it; If-None-Match is compared; and only then — and only if the
-// comparison says the client is behind — are the five lists assembled. A 304
-// computed after building the body saves bandwidth and no server work at all,
-// which is half the point, and it is the reason Store.Read takes a callback
-// rather than answering a document.
 package httpapi
 
 import (
@@ -27,8 +13,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// formatHeader is DEC-53's negotiation, and it is used in BOTH directions: the
-// client declares what it can read, and a 406 names what this build can write.
+// formatHeader is the negotiation, and it is used in both directions.
 const formatHeader = "X-Logbook-Format"
 
 func readLogbook(deps Deps) http.HandlerFunc {
@@ -74,13 +59,8 @@ func readLogbook(deps Deps) http.HandlerFunc {
 	}
 }
 
-// putTrip is the whole-state upsert on a client-minted key (DEC-33), so it is
+// putTrip is the whole-state upsert on a client-minted key, so it is
 // idempotent by construction and needs no idempotency apparatus.
-//
-// THE PATH WINS AND A DISAGREEING BODY IS REFUSED. A body with no id is the
-// ordinary case — the path already carries it — but a body naming a DIFFERENT
-// trip is a client that believes it is writing somewhere else, and honouring
-// either half of that would put the write where nobody asked for it.
 func putTrip(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traveller, held := auth.TravellerFrom(r.Context())
@@ -95,11 +75,6 @@ func putTrip(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		// THE PATH FILLS AN ABSENT ID AND CONTRADICTS NOTHING ELSE. Under
-		// DEC-89 an absent id is `nil` rather than the empty string, and the
-		// two have stopped being the same value: `{"id":""}` is now a client
-		// naming a trip it cannot have, which ValidateTrip refuses by pattern
-		// instead of the path quietly supplying one.
 		id := r.PathValue("id")
 		if body.ID == nil {
 			body.ID = &id
@@ -119,8 +94,6 @@ func putTrip(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		// A write always leaves a version of at least 1: the bump is taken
-		// before the body runs, so there is no `tagFor` branch to take here.
 		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
 		httpx.WriteJSON(w, r, http.StatusOK, logbook.EmitTrip(trip))
 	}
@@ -128,14 +101,6 @@ func putTrip(deps Deps) http.HandlerFunc {
 
 // tagFor answers the empty string for a log nothing has ever written to, and
 // that is a decision rather than a gap.
-//
-// A traveller starts at logbook_version 0 and DEC-49's tag needs BOTH halves —
-// FormatETag panics on a zero, deliberately, because a tag with one half is
-// the defect the first half exists to prevent. So the read serves 200 with no
-// tag at all rather than `W/"1-0"`. httpx.ETagMatches then answers false for
-// every If-None-Match including `*`, which is the right answer: a 304 against
-// a log the client has never held hands it an empty body it will treat as
-// unchanged, which is DEC-49(b)'s permanently empty app.
 func tagFor(version int64) string {
 	if version < 1 {
 		return ""
@@ -143,9 +108,7 @@ func tagFor(version int64) string {
 	return httpx.FormatETag(logbook.EmitterVersion, version)
 }
 
-// requestedFormat reads DEC-53's header. A MISSING HEADER IS THE CURRENT
-// VERSION, so the header is additive and a client that never learned to send
-// it is no worse off than one that cannot.
+// requestedFormat reads the header.
 func requestedFormat(r *http.Request) (int, bool) {
 	asked := r.Header.Get(formatHeader)
 	if asked == "" {
@@ -172,17 +135,8 @@ func emittableFormats() string {
 	return strings.Join(text, ", ")
 }
 
-// writeLogbookFailure is DEC-62's one mapping for this half of the API: the
+// writeLogbookFailure is the one mapping for this half of the API: the
 // sentinel is the domain's word and the code is the wire's.
-//
-// A TRAVELLER WHO HAS GONE IS A 401 AND NOT A 500, and the difference matters
-// to the phone. The row can be deleted between the credential being accepted
-// and the query running; the honest report is that the credential is not live,
-// and the answer is to sign in again. A 500 would have the client wait for a
-// server that is perfectly well.
-//
-// EVERY BRANCH PASSES A NAMED CONSTANT, which is what keeps httpx's AST sweep
-// able to see this file: its one exemption is WriteErrorFor.
 func writeLogbookFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
 	var invalid logbook.InvalidFieldError
 
@@ -195,28 +149,11 @@ func writeLogbookFailure(w http.ResponseWriter, r *http.Request, log *slog.Logge
 		errors.Is(err, logbook.ErrNoPlace),
 		errors.Is(err, logbook.ErrNoPhoto),
 		errors.Is(err, logbook.ErrNoWalk):
-		// FOUR SENTINELS AND ONE BRANCH, because to a client they are one
-		// condition: the thing this request is ABOUT is not in your log. Which
-		// kind it was is in the message and not in the code — DEC-12's
-		// vocabulary is closed, and `not_found` is the word for all four.
-		//
-		// THREE OF THE FOUR ARE ONLY EVER RAISED BY A RE-READ AFTER AN UPSERT,
-		// which is a 500-shaped bug rather than a client error, and mapping
-		// them here is deliberate anyway: a 404 tells the client to stop
-		// retrying, which is the right instruction for a row that is gone.
-		// `ErrNoPhoto` is the one a route raises on purpose — M2.2's re-file,
-		// where the client's own method answers false for an id the log does
-		// not hold.
 		httpx.WriteError(w, r, httpx.CodeNotFound)
 	case errors.Is(err, logbook.ErrUnsupportedFormat):
 		w.Header().Set(formatHeader, emittableFormats())
 		httpx.WriteError(w, r, httpx.CodeUnsupportedFormat)
 	case httpx.DependencyIsDown(err):
-		// DEC-96. A request that could not reach the database has not
-		// encountered a handler bug, and 500 tells the client the opposite:
-		// do not retry, the request is poison. `timeout` is 503 and
-		// httpx.RetryAfter puts the header on. It is still logged — an
-		// outage is worth a line — but it is not a fault.
 		logFailure(r, log, err)
 		httpx.WriteError(w, r, httpx.CodeTimeout)
 	default:

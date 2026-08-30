@@ -1,6 +1,4 @@
-// TEST-FIRST (agent-graph-spec-V4 §6.7). Every leg in this file was written and
-// watched to fail before internal/config/config.go existed. The red output is
-// recorded in CLAUDE.md under "VS2".
+// test-first (agent-graph-spec-V4 §6.7).
 package config_test
 
 import (
@@ -13,22 +11,8 @@ import (
 	"travellog/internal/config"
 )
 
-// allVars is the seven variables VS2's step text names, written out rather than
-// read from the package: a test that asks the subject what it reads cannot
-// notice the subject forgetting to read one. TestLoadNamesEveryVariableWhenTheEnvironmentIsEmpty
-// pins the count from the other side.
-//
-// AND A NINTH AT R8. PUBLIC_RATE_LIMIT_PER_MIN is the ceiling on the one
-// route with no identity at all, and it is a THIRD variable for the reason the
-// second is a second: it is not a credential attempt, so it needs its own
-// number AND its own bucket.
-//
-// EIGHT SINCE THE LIMITER FIX. TRAVELLER_RATE_LIMIT_PER_MIN is the
-// authenticated ceiling, and it is a SECOND variable rather than a second use
-// of AUTH_RATE_LIMIT_PER_MIN because the two bound different things: the
-// credential ceiling bounds unauthenticated Argon2 work and is deliberately
-// low, and this one bounds a stolen token and must be high enough that no
-// honest client meets it.
+// allVars is the seven variables the step text names, written out rather than
+// read from the package.
 var allVars = []string{
 	"DATABASE_URL",
 	"PORT",
@@ -51,9 +35,7 @@ var allVars = []string{
 	"MEDIA_MAX_BYTES",
 }
 
-// complete is a whole environment Load must accept. Its values are the ones
-// deploy/docker-compose.yml actually sets, so a leg that passes here is a leg
-// about the stack rather than about invented input.
+// complete is a whole environment Load must accept.
 func complete() map[string]string {
 	return map[string]string{
 		"DATABASE_URL":                 "postgres://travellog:travellog@postgres:5432/travellog?sslmode=disable",
@@ -78,12 +60,7 @@ func complete() map[string]string {
 	}
 }
 
-// setEnv makes `vars` the WHOLE of what Load can see: every variable in allVars
-// that vars does not name is explicitly unset, so an ambient value on the
-// developer's machine cannot turn a missing-variable leg green.
-//
-// t.Setenv before os.Unsetenv is deliberate — t.Setenv is what registers the
-// restore, and it is the only thing in `testing` that does.
+// setEnv makes `vars` the whole of what Load can see.
 func setEnv(t *testing.T, vars map[string]string) {
 	t.Helper()
 	for _, k := range allVars {
@@ -114,14 +91,7 @@ func with(key, value string) map[string]string {
 	return env
 }
 
-// --- one error, naming everything ------------------------------------------
-
-// THE LEG THE STEP NAMES. A Load that fails on the first missing variable
-// passes every other test in this file and fails this one: it is the only leg
-// that can tell "reports a problem" from "reports the problems".
-//
-// It must also NOT name the four that ARE set — an error that lists everything
-// is as useless as one that lists one thing.
+// All three missing variables are reported at once, not one per run.
 func TestLoadReportsAllThreeMissingVariablesAtOnce(t *testing.T) {
 	missing := []string{"DATABASE_URL", "DB_MAX_IDLE_CONNS", "ARGON2_MAX_CONCURRENT"}
 	setEnv(t, without(missing...))
@@ -159,9 +129,7 @@ func TestLoadNamesEveryVariableWhenTheEnvironmentIsEmpty(t *testing.T) {
 	}
 }
 
-// A variable set to the empty string is a variable that is not set. os.Getenv —
-// which spec L30 mandates — cannot tell the two apart, and `FOO=` in a compose
-// file or a .env is the ordinary way to produce one.
+// A variable set to the empty string is a variable that is not set.
 func TestLoadTreatsAnEmptyValueAsMissing(t *testing.T) {
 	setEnv(t, with("DATABASE_URL", ""))
 
@@ -174,8 +142,8 @@ func TestLoadTreatsAnEmptyValueAsMissing(t *testing.T) {
 	}
 }
 
-// A caller that ignores the error must not receive a half-filled Config it can
-// mistake for a working one.
+// A caller that ignores the error must not receive a half-filled Config it
+// can mistake for a working one.
 func TestLoadReturnsTheZeroConfigOnFailure(t *testing.T) {
 	setEnv(t, without("DATABASE_URL"))
 
@@ -187,8 +155,6 @@ func TestLoadReturnsTheZeroConfigOnFailure(t *testing.T) {
 		t.Errorf("Load() returned %+v alongside an error, want the zero Config", cfg)
 	}
 }
-
-// --- the happy path ---------------------------------------------------------
 
 func TestLoadReadsEveryValueFromACompleteEnvironment(t *testing.T) {
 	setEnv(t, complete())
@@ -245,12 +211,7 @@ func TestLoadAcceptsEveryLogLevelInAnyCase(t *testing.T) {
 	}
 }
 
-// --- the invalid values -----------------------------------------------------
-
-// Table-driven over every rejection. Each row is a value somebody could
-// plausibly put in a .env, and the assertion is that the error NAMES the
-// variable — an error saying only `strconv.Atoi: invalid syntax` is an error
-// that does not tell you which of the four integers is wrong.
+// Table-driven over every rejection.
 func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -281,31 +242,18 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 		{"request timeout is below the floor", "REQUEST_TIMEOUT", "500ms", "one Argon2id hash at 64 MiB does not finish inside it, so every sign-in answers 503"},
 		{"request timeout is above the ceiling", "REQUEST_TIMEOUT", "120s", "a handler allowed to outlive the connection's own write deadline"},
 
-		// The bucket group. THE TWO ADDRESSES ARE VALIDATED AS ADDRESSES AND
-		// NOT MERELY AS PRESENT (DEC-42): a SigV4 signature covers the HOST,
-		// so "minio:9000" without a scheme is a signature nothing can satisfy
-		// and a failure that surfaces on the phone rather than at boot.
 		{"the internal endpoint has no scheme", "S3_INTERNAL_ENDPOINT", "minio:9000", "minio.New needs a host and a transport, and a bare host:port gives neither"},
 		{"the internal endpoint is a scheme we do not speak", "S3_INTERNAL_ENDPOINT", "s3://minio:9000", "only http and https"},
 		{"the internal endpoint has no host", "S3_INTERNAL_ENDPOINT", "http://", "a signature covers the host"},
 		{"the public base has no scheme", "S3_PUBLIC_BASE_URL", "127.0.0.1:9000", "the phone connects to this one, and it is what the signature covers"},
 		{"the public base is not a URL at all", "S3_PUBLIC_BASE_URL", "http://a b c", "url.Parse"},
 
-		// THE TWO LIFETIMES ARE BOUNDED BY THE SIGNER'S OWN LIMITS, measured
-		// against minio-go: below 1s it answers "Expires cannot be lesser than
-		// 1 second" and above 7 days "Expires cannot be greater than 7 days".
-		// Outside them every media route 500s at the first request, so the
-		// refusal belongs at boot.
 		{"the private lifetime has no unit", "S3_PRESIGN_TTL_PRIVATE", "120", "a bare number is ambiguous and ParseDuration refuses it"},
 		{"the private lifetime is below the signer's floor", "S3_PRESIGN_TTL_PRIVATE", "500ms", "minio-go refuses an expiry under a second"},
 		{"the private lifetime is zero", "S3_PRESIGN_TTL_PRIVATE", "0s", "every minted URL would be expired on arrival"},
 		{"the public lifetime is above the signer's ceiling", "S3_PRESIGN_TTL_PUBLIC", "169h", "SigV4 presigned URLs cap at seven days"},
 		{"the public lifetime is not a duration", "S3_PRESIGN_TTL_PUBLIC", "fifteen", "ParseDuration"},
 
-		// MEDIA_MAX_BYTES HAS A FLOOR AND THE FLOOR IS A MEASUREMENT: the
-		// fixture's larger object is hero-mountain.png at 555,376 bytes, so a
-		// ceiling under a megabyte is a build that cannot store its own seed
-		// data — and R4's `make seed` is where that would be discovered.
 		{"the media bound is not a number", "MEDIA_MAX_BYTES", "twenty-five megabytes", "strconv"},
 		{"the media bound is zero", "MEDIA_MAX_BYTES", "0", "a ceiling of zero refuses every upload, which is a feature switched off by a setting that reads like a safety measure"},
 		{"the media bound is negative", "MEDIA_MAX_BYTES", "-1", "same as zero"},
@@ -325,17 +273,7 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 	}
 }
 
-// MEASURED, in $(go env GOROOT)/src/database/sql/sql.go, SetMaxIdleConns:
-//
-//	if db.maxOpen > 0 && db.maxIdleConnsLocked() > db.maxOpen {
-//		db.maxIdleCount = db.maxOpen
-//	}
-//
-// The clamp is SILENT and there is no way to observe it afterwards — sql.DBStats
-// carries MaxOpenConnections and no idle counterpart. So DB_MAX_IDLE_CONNS=16
-// against DB_MAX_OPEN_CONNS=4 is honoured as 4, nothing says so, and spec L21's
-// "explicitly configure" becomes a call whose argument the runtime discards.
-// Config is the only place that can refuse it.
+// measured, in $(go env goroot)/src/database/sql/sql.go, SetMaxIdleConns.
 func TestLoadRejectsMoreIdleConnectionsThanOpenOnes(t *testing.T) {
 	env := complete()
 	env["DB_MAX_OPEN_CONNS"] = "4"

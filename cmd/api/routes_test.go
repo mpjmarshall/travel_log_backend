@@ -1,11 +1,5 @@
-// The wiring: that the two auth routes are on the mux the server serves, and
-// that the chain around it does what it is there for. Test-first.
-//
-// WHAT IS ASSERTED HERE IS WIRING AND NOTHING ELSE. Every rule about what
-// register and sign-in DO is in internal/httpapi, over the same handlers and
-// the same middleware; repeating it here would be two suites of one thing.
-// What only this package can say is whether the routes reach the server that
-// `docker compose up` starts.
+// The wiring: the auth routes are on the mux the server actually serves, and
+// the middleware chain around them does its job.
 package main
 
 import (
@@ -31,26 +25,11 @@ func wiredConfig() config.Config {
 		TravellerRateLimitPerMin: 600,
 		PublicRateLimitPerMin:    120,
 		Argon2MaxConcurrent:      4,
-		// MEDIA_MAX_BYTES's FLOOR RATHER THAN ITS DEPLOYED VALUE. Mount
-		// refuses a zero, so this has to be set for the mux to come up at all
-		// — and config.MinMediaMaxBytes is a MEASUREMENT (one byte over the
-		// fixture's largest object) rather than a number invented here.
-		MediaMaxBytes: config.MinMediaMaxBytes,
+		MediaMaxBytes:            config.MinMediaMaxBytes,
 	}
 }
 
-// THE THREE CEILINGS COME FROM THE THREE VARIABLES, AND NOT FROM EACH OTHER. A
-// swapped pair is invisible to every other leg in this package: the routes are
-// still mounted, the statuses are still right, and the credential routes would
-// be running at 600 a minute against a 64 MiB-per-attempt Argon2 surface while
-// a phone met a ceiling of 10. Spending from the limiters is the only way to
-// see it from outside internal/httpx.
-//
-// THREE SINCE R8 (PD-09), and the third one is where the arithmetic and the
-// INSTANCE are both load-bearing: `GET /l/{token}` is unauthenticated and is
-// not a credential attempt, so a build that handed it the credential limiter
-// would answer every leg in this package identically and lock everybody out of
-// signing in the first time somebody read a shared trip twelve times.
+// The three ceilings come from their own three variables, not from each other.
 func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	cfg := config.Config{
 		AuthRateLimitPerMin:      3,
@@ -78,9 +57,6 @@ func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	if got := spend(public); got != 11 {
 		t.Errorf("the public limiter served %d requests at PUBLIC_RATE_LIMIT_PER_MIN=11, want 11", got)
 	}
-	// THREE DISTINCT INSTANCES, ASSERTED PAIRWISE. Two variables feeding one
-	// limiter would pass all three counts above on the first spend and share
-	// one bucket for ever after.
 	if credential == traveller || credential == public || traveller == public {
 		t.Error("two of the three ceilings are one limiter, so routes that were given " +
 			"separate budgets are spending the same allowance")
@@ -132,8 +108,7 @@ func TestApiRoutesRefusesAnArgon2CeilingBelowOne(t *testing.T) {
 	}
 }
 
-// The chain around the mux. Timeout is deliberately NOT in it — see
-// serverChain — so what is asserted is the three that are.
+// The chain around the mux.
 func TestTheServedHandlerCarriesARequestIdAndSurvivesAPanic(t *testing.T) {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(logs, nil))
@@ -175,9 +150,7 @@ func TestTheServedHandlerCarriesARequestIdAndSurvivesAPanic(t *testing.T) {
 	}
 }
 
-// The chain must not change what /healthz sends. VS1's probe asserts that body
-// byte for byte, trailing newline included, and it talks to the SERVER rather
-// than to the mux.
+// The chain must not change what /healthz sends.
 func TestTheChainLeavesHealthzsBodyExactlyAsItWas(t *testing.T) {
 	log := quiet()
 	mux := wiredMux(t, log)
@@ -200,9 +173,8 @@ func TestTheChainLeavesHealthzsBodyExactlyAsItWas(t *testing.T) {
 	}
 }
 
-// A last check that the wiring is the REAL thing rather than a stub beside it:
-// the mounted route answers 422 for a body internal/auth refuses, which no
-// placeholder handler would.
+// A last check that the wiring is the real thing rather than a stub beside
+// it.
 func TestTheMountedRegisterRouteIsTheRealHandler(t *testing.T) {
 	mux := wiredMux(t, quiet())
 	rec := httptest.NewRecorder()
@@ -220,13 +192,8 @@ func TestTheMountedRegisterRouteIsTheRealHandler(t *testing.T) {
 	var _ auth.Traveller
 }
 
-// The route table is closed, so an unknown path is the FIRST thing a
-// mistyped client meets — and until VS7 it met net/http's own plain text.
-//
-// THIS IS THE WIRING LEG AND NOT THE BEHAVIOUR LEG. What MuxErrors does to a
-// 404 and a 405 is proven in internal/httpx over the same wrapper; what only
-// this package can say is whether serverChain puts it around the mux the
-// server serves.
+// The route table is closed, so an unknown path is the first thing a mistyped
+// client meets — and until it met net/http's own plain text.
 func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 	log := quiet()
 	chained := httptest.NewRecorder()
@@ -244,10 +211,8 @@ func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 	}
 }
 
-// The four routes VS7 leaves on the server, asserted here for the reason the
-// two auth ones are: what only this package can say is whether they reach the
-// server `docker compose up` starts. What each of them DOES is proven in
-// internal/httpapi, over the same handlers and the same middleware.
+// The four logbook routes are on the server's mux, asserted here for the same
+// reason the auth ones are: only this package sees the assembled server.
 func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
 	mux := wiredMux(t, quiet())
 
@@ -266,14 +231,7 @@ func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
 	}
 }
 
-// THE COMPRESSOR IS IN THE CHAIN AND IN THE RIGHT PLACE (DEC-94).
-//
-// A middleware written, tested and never wired is the exact state
-// `httpx.Timeout` was in for four steps — the acceptance check for this step
-// greps for its call site for that reason. This leg is the same guard for
-// Compress, and it asserts the OBSERVABLE consequence rather than the wiring:
-// a big body through the served handler comes back gzipped, and Vary names
-// Accept-Encoding whether or not the client asked.
+// The compressor is in the chain and in the right place.
 func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
 	log := quiet()
 	mux := wiredMux(t, log)
@@ -286,9 +244,6 @@ func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
 	server := httptest.NewServer(serverChain(mux, log, testRequestTimeout))
 	t.Cleanup(server.Close)
 
-	// DisableCompression, or net/http adds Accept-Encoding itself and
-	// transparently decompresses — which would make this leg pass against a
-	// server that never compressed anything.
 	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
 
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/big", nil)
@@ -320,19 +275,11 @@ func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
 }
 
 // testRequestTimeout is what the legs in this file pass where the server
-// passes cfg.RequestTimeout. Generous, because none of them is about the
-// timeout: a leg that flaked on a slow machine would be a leg about the
-// machine.
+// passes cfg.RequestTimeout.
 const testRequestTimeout = 30 * time.Second
 
-// THE PER-REQUEST BOUND IS WIRED, AND THE LEG ASSERTS THE ANSWER RATHER THAN
-// THE CALL SITE (DEC-96).
-//
-// `httpx.Timeout` was written at VS3 and had ZERO production call sites for
-// four steps; main.go's own comment said the only reason was a missing config
-// variable. A grep for `httpx.Timeout` is what this step's acceptance check
-// runs, and a grep cannot tell a wired middleware from a mentioned one — so
-// this hangs a handler and asserts the request comes back.
+// The per-request bound is wired, and the leg asserts the answer rather than
+// the call site.
 func TestASlowHandlerIsBoundedAndTheAnswerCarriesRetryAfter(t *testing.T) {
 	log := quiet()
 	mux := wiredMux(t, log)
@@ -366,11 +313,8 @@ func TestASlowHandlerIsBoundedAndTheAnswerCarriesRetryAfter(t *testing.T) {
 	}
 }
 
-// THE TWO BOUNDS LIVE IN TWO FILES AND THE RELATIONSHIP IS INVISIBLE FROM
-// EITHER. config refuses a REQUEST_TIMEOUT above its own ceiling; that ceiling
-// is only correct while it equals the server's write deadline. A handler
-// allowed to run longer than the response may take to be written is a handler
-// whose work is discarded underneath it.
+// The two bounds live in two files and the relationship is invisible from
+// either.
 func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 	if config.MaxRequestTimeout != writeTimeout {
 		t.Errorf("config.MaxRequestTimeout = %s and cmd/api's writeTimeout = %s — "+
@@ -380,28 +324,11 @@ func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 	}
 }
 
-// THE SHIPPED SURFACE IS TWENTY-THREE ROUTES AND THE TWENTY-THIRD IS
+// The shipped surface is twenty-three routes and the twenty-third is
 // `/healthz`.
-//
-// TWO NUMBERS THAT LOOK LIKE A DISAGREEMENT AND ARE NOT, WHICH IS WORTH A LEG
-// BECAUSE THIS PROJECT HAS ALREADY HAD ONE REAL COUNT DISAGREEMENT HERE — R6's
-// unanchored `grep -c http.Method` answered 22 against 21 rows, because the
-// sentence documenting the grep matched it. `httpapi.Routes()` holds
-// 22 rows and the plan's table holds 23: the extra one is this package's
-// liveness probe, which is deliberately not in the API's table because a
-// liveness probe is not part of the API.
-//
-// SO THE CLAIM IS ASSERTED WHERE IT IS TRUE — over the MUX THE SERVER SERVES,
-// which is the only place both facts exist at once — and it is asserted by
-// ASKING THE MUX rather than by counting anything: every one of the 23 has to
-// resolve to its own pattern.
 func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
 	mux := wiredMux(t, quiet())
 
-	// THE PUBLIC READ IS NAMED HERE RATHER THAN LOOPED OVER, because what this
-	// leg is for is that it REACHES THE SERVER `docker compose up` STARTS. A
-	// route green in `go test` and 404 in the running container is the gap the
-	// arc exists to close, and this is its cheapest half.
 	req := httptest.NewRequest(http.MethodGet, "/l/mnpqrstuvwxy", nil)
 	if _, pattern := mux.Handler(req); pattern != "GET /l/{token}" {
 		t.Errorf("GET /l/{token} resolves to %q on the server's own mux — the one "+
@@ -409,9 +336,6 @@ func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
 			pattern)
 	}
 
-	// AND `/healthz` IS STILL BESIDE IT, unauthenticated and unlimited, which
-	// is the twenty-third row of the plan's table and the one that is not
-	// internal/httpapi's.
 	if _, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, healthzPath, nil)); pattern == "" {
 		t.Errorf("%s resolves to no pattern", healthzPath)
 	}

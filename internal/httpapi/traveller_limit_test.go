@@ -1,23 +1,5 @@
-// The AUTHENTICATED budget, which is a different thing from the credential
-// budget and is keyed on a different fact about the request. Test-first: every
-// leg in this file was written and watched to fail against a `Mount` that
-// applied rate limiting and authentication as EITHER/OR, which left every
-// authenticated route with no limiter at all. The red is recorded in CLAUDE.md.
-//
-// WHY A SECOND LIMITER RATHER THAN THE CREDENTIAL ONE. The credential limiter
-// bounds an unauthenticated 64 MiB-per-attempt Argon2 surface, so its ceiling
-// is deliberately low. This one bounds a STOLEN TOKEN against a thirty-day TTL
-// with no revocation surface, so its ceiling has to be high enough that no
-// honest client ever meets it. One ceiling cannot be both, and reusing the low
-// one would make the app unusable.
-//
-// WHY THE KEY IS THE TRAVELLER AND NOT THE ADDRESS. A stolen token used from a
-// thousand addresses is one traveller and a thousand buckets. Every leg in this
-// suite arrives from loopback, which is exactly why a limiter keyed on the
-// address, on a constant, or on the path would pass a suite that did not check
-// — so the two keying legs below assert the ADDRESSES WERE THE SAME while the
-// budgets were separate, and the reverse: two tokens, one traveller, one
-// budget.
+// The authenticated budget, which is a different thing from the credential
+// budget and is keyed on a different fact about the request.
 package httpapi
 
 import (
@@ -51,13 +33,7 @@ func TestAnAuthenticatedRouteRunsOutOfItsOwnAllowance(t *testing.T) {
 	}
 }
 
-// TWO TRAVELLERS, ONE ADDRESS. This is the leg that tells "keyed by the
-// traveller" from "keyed by anything at all": every request here comes from
-// loopback, so a limiter keyed on the client address — or on a constant, or on
-// the route — hands both travellers the same bucket and refuses the second.
-//
-// The address premise is ASSERTED rather than assumed. Without that assertion
-// the leg is one httptest change away from proving nothing.
+// Two travellers, one address.
 func TestOneTravellerRunningOutDoesNotRefuseAnotherAtTheSameAddress(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
 	first := bearerFor(t, h, "matt@example.com")
@@ -91,11 +67,8 @@ func TestOneTravellerRunningOutDoesNotRefuseAnotherAtTheSameAddress(t *testing.T
 	}
 }
 
-// The other half of the keying claim, and the mutation it kills is a plausible
-// one: a limiter keyed on the BEARER TOKEN passes the leg above and fails this.
-// One traveller with two live sessions — a phone and a tablet — is one budget,
-// because the thing being bounded is the traveller's data and not the string
-// the request carried.
+// The other half of the keying claim, and the mutation it kills is a
+// plausible one.
 func TestOneTravellersTwoSessionsShareOneAllowance(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
 	phone := bearerFor(t, h, "matt@example.com")
@@ -120,8 +93,7 @@ func TestOneTravellersTwoSessionsShareOneAllowance(t *testing.T) {
 }
 
 // A refused request must not reach the handler — the whole point of a ceiling
-// on a stolen token is the work that does not happen. `assembles` counts the
-// times the store was asked to build the document.
+// on a stolen token is the work that does not happen.
 func TestARefusedAuthenticatedRequestNeverReachesTheHandler(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 2})
 	token := bearer(t, h)
@@ -144,12 +116,8 @@ func TestARefusedAuthenticatedRequestNeverReachesTheHandler(t *testing.T) {
 	}
 }
 
-// THE LIMITER SITS INSIDE THE AUTHENTICATION, and this is the leg that says so.
-// The key is the traveller id, which is on the context only after
-// RequireTraveller has resolved the credential — so a limiter wrapped OUTSIDE
-// it has no traveller to key on and would have to fall back to the address,
-// at which point anybody with a socket can spend a traveller's whole allowance
-// without holding a credential at all.
+// The limiter sits inside the authentication, and this is the leg that says
+// so.
 func TestAnUnauthenticatedFloodDoesNotSpendTheTravellersAllowance(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
 	token := bearer(t, h)
@@ -173,10 +141,7 @@ func TestAnUnauthenticatedFloodDoesNotSpendTheTravellersAllowance(t *testing.T) 
 	}
 }
 
-// The refusal goes to the log with the traveller on it, because "which
-// traveller" is the one detail an operator needs and the body carries the code
-// alone. The TOKEN must not be there: it is the credential itself, and VS6
-// already keeps it out of every log line.
+// The refusal goes to the log with the traveller on it.
 func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 1})
 	token := bearerFor(t, h, "matt@example.com")
@@ -186,11 +151,6 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 		t.Fatalf("the 2nd request at a limit of 1 = %d %s, want 429", got.status, got.body)
 	}
 
-	// THE ID IS READ OFF THE STORE RATHER THAN WRITTEN DOWN. This line said
-	// `traveller-1` and went red at R3, when the fake store started minting
-	// UUIDs — which it had to, because `travellers.id` is a uuid column and
-	// internal/media refuses anything else outright. A literal here turns
-	// "the refusal names the traveller" into "the fake mints this string".
 	logs := h.logs.String()
 	if !strings.Contains(logs, h.travellerID(t, token)) {
 		t.Errorf("no log line names the traveller whose allowance ran out:\n%s", logs)
@@ -201,21 +161,7 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 }
 
 // aSecondTravellerBehindTheClosedRoute puts a traveller into the store
-// DIRECTLY and signs them in through the real routes.
-//
-// IT EXISTS BECAUSE DEC-86 CLOSED THE ROUTE THAT USED TO DO THIS, and going
-// round the route is the honest answer rather than a workaround. Registration
-// refuses once any traveller row exists, so `bearerFor` can mint exactly one
-// traveller now — and the two legs above are about the LIMITER's keying, which
-// is a claim about a state the system can still be in: ruling 3 wants one
-// traveller, and DEC-86's own trigger for revisiting is "a second traveller
-// ever being wanted". The keying has to be right before that day, not after
-// it, or the limiter is discovered to be per-address by whoever opens the
-// route.
-//
-// SIGNING IN STILL GOES THROUGH THE REAL ROUTE, so what is bypassed is the
-// registration rule and nothing else: the token this answers was minted by
-// `POST /v1/auth/session` over the real mux and the real chain.
+// directly and signs them in through the real routes.
 func aSecondTravellerBehindTheClosedRoute(t *testing.T, h *harness, email string) string {
 	t.Helper()
 	hash, err := cheapArgon.Hash("a long enough passphrase")

@@ -1,64 +1,5 @@
-// The two responses `http.ServeMux` writes for itself, brought inside DEC-12's
+// The two responses `http.ServeMux` writes for itself, brought inside's
 // envelope.
-//
-// THE GAP IS STRUCTURAL RATHER THAN AN OVERSIGHT. An unknown path and a known
-// path under an unregistered method are both answered by net/http BEFORE any
-// handler runs — `http.Error(w, "404 page not found", 404)` and
-// `http.Error(w, "Method Not Allowed", 405)`, each with
-// `Content-Type: text/plain; charset=utf-8` — so no call to WriteError is
-// involved and DEC-12's AST sweep cannot see them. Measured on Go 1.26.5:
-//
-//	GET  /nope        -> 404 text/plain "404 page not found\n"
-//	POST /v1/logbook  -> 405 text/plain "Method Not Allowed\n"  Allow: GET, HEAD
-//
-// The client decodes every body as JSON and switches on the code, so a
-// text/plain body is not a WRONG answer to it — it is an UNPARSEABLE one,
-// which is a worse failure than any word in the vocabulary. This is the same
-// class as http.TimeoutHandler's body, and it takes the same shape of fix: a
-// ResponseWriter wrapper deciding at WriteHeader time, exactly as jsonByDefault
-// does in middleware.go.
-//
-// THE WORD IT WRITES IS `unsupported_route` AND NEVER `not_found` (DEC-103),
-// AND THE DIFFERENCE WAS MEASURED. Under the vocabulary's nearest word a
-// running container answered `DELETE /v1/trips/{id}` -> `405
-// {"code":"not_found"}`, `PATCH /v1/me` -> `404 {"code":"not_found"}` and `PUT
-// /v1/places/x` -> `404 {"code":"not_found"}`: every route a deployment does
-// not carry yet wearing THE SAME WORD the vocabulary uses for "that trip is
-// not in your log". A client build ahead of the server therefore tells the
-// user their trip, place, photograph or walk is GONE, on eighteen routes — and
-// worse, the client treats an unknown id as SUCCESS on all three deletes by
-// decision, so the obvious mapping makes a delete against an undeployed route
-// report success, delete nothing, and advance the cache.
-//
-// `method_not_allowed` IS REFUSED AS A THIRTEENTH WORD, on its own merits: a
-// 405 is a client disagreeing about a verb,
-// not a condition a user can be told about. DEC-12's closure was never
-// "twelve"; it was "a client can act on each word", and `unsupported_route`
-// passes that test — its action is "this needs a newer server" — while
-// `method_not_allowed` does not.
-//
-// THREE DECISIONS IN IT, AND EACH HAD A REAL ALTERNATIVE:
-//
-//   - THE 405 KEEPS ITS STATUS AND ITS `Allow` HEADER. Rewriting it to a 404
-//     would tell a client the path does not exist when the mux has just said
-//     which methods it takes. The status is the stdlib's FACT about the
-//     request and `Allow` is information a 404 would throw away. Only the word
-//     in the body is rewritten, so the status and the code do not contradict
-//     each other.
-//
-//   - ONE CONSTANT DOES BOTH STATUSES. `bodyUnsupportedRoute` is written only
-//     when `stdlibWroteIt` is true, so the 404 and the 405 carry the same word
-//     — which is right, because both mean the same thing: no pattern matched.
-//
-//   - IT DECIDES ON THE Content-Type, NOT ON THE STATUS ALONE. A handler's own
-//     404 is already the envelope and may carry `field`; rewriting every 404
-//     would throw that away. http.Error sets text/plain before WriteHeader and
-//     WriteError sets application/json before WriteHeader, so by the time this
-//     wrapper is asked, the two are already distinguishable. THAT
-//     DISCRIMINATION IS WHAT MAKES THE WORD SAFE: "the mux answered"
-//     already means "this build does not have that route", and a handler's own
-//     404 for an unknown id is left alone with `not_found` and its `field` —
-//     which is the case the client's NotFoundScreen exists for.
 package httpx
 
 import (
@@ -69,9 +10,7 @@ import (
 )
 
 // MuxErrors wraps the mux so the 404 and 405 net/http writes itself carry the
-// envelope. It goes INNERMOST in the chain, directly around the mux: a 404 is a
-// request that happened and should be recovered, identified, logged and timed
-// like any other.
+// envelope.
 func MuxErrors() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,8 +20,7 @@ func MuxErrors() Middleware {
 }
 
 // envelopeWriter replaces a plain-text 404 or 405 with the envelope and
-// swallows the body that was about to follow it. The word it writes is
-// `unsupported_route`, never `not_found` — see the file comment.
+// swallows the body that was about to follow it.
 type envelopeWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
@@ -108,9 +46,7 @@ func (w *envelopeWriter) WriteHeader(status int) {
 	_, _ = io.WriteString(w.ResponseWriter, bodyUnsupportedRoute)
 }
 
-// stdlibWroteIt is the whole of the discrimination: one of the two statuses
-// net/http answers on its own, with the Content-Type net/http sets rather than
-// the one WriteJSON sets.
+// stdlibWroteIt is the whole of the discrimination.
 func (w *envelopeWriter) stdlibWroteIt(status int) bool {
 	if status != http.StatusNotFound && status != http.StatusMethodNotAllowed {
 		return false

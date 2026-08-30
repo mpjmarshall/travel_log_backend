@@ -1,18 +1,4 @@
 // The bucket, at boot.
-//
-// TWO THINGS ARE INVISIBLE FROM OUTSIDE THE PROCESS and both are guarded here,
-// for the reason routes_test.go's limiter leg exists: a swapped pair gives a
-// perfectly healthy server that is wrong in a way no status code reports.
-//
-//  1. WHICH ADDRESS FEEDS WHICH HALF (DEC-42). S3_INTERNAL_ENDPOINT is what
-//     the API dials and S3_PUBLIC_BASE_URL is what a signature covers. Swap
-//     them and every presigned URL is minted for `minio:9000`, which a phone
-//     cannot resolve — and nothing on the server ever notices.
-//  2. THAT BOOT ACTUALLY REACHES THE BUCKET (DEC-98). The mutation the plan
-//     names is "delete EnsureBucket from main.go", and its stated guard is the
-//     arc. This is the same mutation caught in `make check` with no daemon:
-//     against a port nothing is listening on, a boot that only CONSTRUCTS a
-//     client succeeds, and a boot that creates the bucket cannot.
 package main
 
 import (
@@ -63,10 +49,7 @@ func TestTheTwoBucketAddressesGoToTheirOwnHalves(t *testing.T) {
 	}
 }
 
-// THE TWO LIFETIMES, AT THE WIRING SITE (DEC-47, DEC-84). internal/media's own
-// legs assert that each audience gets its own; this asserts that the two
-// numbers arrive the right way round from config, which is the other end of
-// the same wire and is not implied by either half.
+// The two lifetimes, at the wiring site.
 func TestTheTwoLifetimesAreNotSwappedOnTheWayIn(t *testing.T) {
 	got := mediaConfig(bucketConfig())
 
@@ -79,27 +62,8 @@ func TestTheTwoLifetimesAreNotSwappedOnTheWayIn(t *testing.T) {
 	}
 }
 
-// BOOT TALKS TO THE BUCKET, and this is the leg that says so without a daemon.
-//
-// Against a port nothing is listening on, media.New succeeds — building a
-// client is offline, and so is presigning once the region is pinned — so a
-// boot that stopped there would come up perfectly healthy and 500 on every
-// media route. Only EnsureBucket touches the network. Delete that call and
-// this leg goes green with nothing having been checked, which is why the
-// assertion is on the ERROR and not on the absence of one.
-//
-// AND IT IS THE INTERNAL ENDPOINT THAT IS DIALLED, not the signed one: the
-// error names the closed port and never the public base. The reverse would
-// mean the API is reaching for the bucket by the address the phone uses,
-// which works on a laptop and not inside compose.
-//
-// THE BUDGET IS 1.5s AND NOT bucketTimeout's 10s, because minio-go RETRIES a
-// refused connection with backoff rather than giving up on it — measured, a
-// closed port consumed the whole context both times — so this leg pays its
-// budget in full on every run and the gate is four commands and stays fast.
-// The elapsed-versus-budget half of the message is there for exactly that
-// reason: at boot the same shape is a container that waited ten seconds, and
-// "waited 250ms of a 10s budget" and "waited 10s" are different problems.
+// boot talks to the bucket, and this is the leg that says so without a
+// daemon.
 func TestBootRefusesToComeUpWhenTheBucketCannotBeReached(t *testing.T) {
 	cfg := bucketConfig()
 	closed := closedPort(t)
@@ -132,7 +96,7 @@ func TestBootHandsBackSomethingThatSatisfiesTheInterface(t *testing.T) {
 }
 
 // closedPort answers a host:port that was listening a moment ago and is not
-// any more, which is the only reliable way to name a port nothing will answer.
+// any more.
 func closedPort(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")

@@ -15,17 +15,8 @@ import (
 	"travellog/internal/httpx"
 )
 
-// decCodes is DEC-12's vocabulary, written out here as the DECISION's list —
-// deliberately a second copy, so this leg fails when the const block and the
-// decision disagree in EITHER direction. The count is never carried: it is
-// len() of this literal, and a separate leg derives the same number from the
-// source with grep.
-//
-// THIRTEEN SINCE DEC-103, AND THE REOPENING IS THE POINT RATHER THAN THE
-// COUNT. The twelve were closed on the argument that a client can ACT on each
-// word, and `unsupported_route` passes that test because its action is "this
-// needs a newer server" and no other word's is. Anything reaching for a
-// fourteenth has to make the same argument in the same form.
+// decCodes is the vocabulary, written out here as the decision's list —
+// deliberately a second copy.
 var decCodes = []string{
 	"conflict",
 	"forbidden",
@@ -59,9 +50,7 @@ func TestTheVocabularyIsExactlyTheCodesDEC12Names(t *testing.T) {
 	}
 }
 
-// Totality in both directions. A code with no status would answer 500 silently;
-// a status entry for a word not in the block is a vocabulary that has grown
-// without anybody saying so.
+// Totality in both directions.
 func TestEveryCodeHasAStatusAndNoStatusIsOrphaned(t *testing.T) {
 	for _, c := range httpx.Codes() {
 		if got := httpx.StatusFor(c); got < 400 || got > 599 {
@@ -75,15 +64,9 @@ func TestEveryCodeHasAStatusAndNoStatusIsOrphaned(t *testing.T) {
 
 func TestTheStatusOfEachCodeIsTheOneItsDecisionNames(t *testing.T) {
 	want := map[httpx.Code]int{
-		httpx.CodeUnauthenticated: http.StatusUnauthorized,
-		httpx.CodeForbidden:       http.StatusForbidden,
-		httpx.CodeNotFound:        http.StatusNotFound,
-		// 404 AND NOT 501. "Not Implemented" is the honest word for "this
-		// server does not do that" and it is wrong here twice: net/http has
-		// already chosen 404 or 405 by the time the body is written, and a 501
-		// reads to an intermediary as a server fault worth alerting on rather
-		// than a version skew. The status is the stdlib's fact; the code is
-		// what the client acts on.
+		httpx.CodeUnauthenticated:   http.StatusUnauthorized,
+		httpx.CodeForbidden:         http.StatusForbidden,
+		httpx.CodeNotFound:          http.StatusNotFound,
 		httpx.CodeUnsupportedRoute:  http.StatusNotFound,
 		httpx.CodeConflict:          http.StatusConflict,
 		httpx.CodeInvalidBody:       http.StatusBadRequest,
@@ -108,9 +91,7 @@ func TestTheStatusOfEachCodeIsTheOneItsDecisionNames(t *testing.T) {
 }
 
 // TestTimeoutIsWhatTheStdlibItselfWrites is the reason CodeTimeout is 503 and
-// not 504. http.TimeoutHandler writes StatusServiceUnavailable itself, and the
-// handler cannot change it. A mapping that said 504 would disagree with the one
-// response in the app that the mapping does not get to produce.
+// not 504.
 func TestTimeoutIsWhatTheStdlibItselfWrites(t *testing.T) {
 	if got := httpx.StatusFor(httpx.CodeTimeout); got != http.StatusServiceUnavailable {
 		t.Errorf("StatusFor(timeout) = %d, want %d — what http.TimeoutHandler writes",
@@ -118,9 +99,7 @@ func TestTimeoutIsWhatTheStdlibItselfWrites(t *testing.T) {
 	}
 }
 
-// DEC-12: "no prose, ever". The key SET is the assertion, not the presence of
-// `code` — a body carrying `code` plus a `message` satisfies a contains-check
-// and is exactly what the decision forbids.
+// : "no prose, ever".
 func TestWriteErrorWritesTheCodeAndNothingElse(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
@@ -164,9 +143,8 @@ func TestWriteFieldErrorAddsFieldAndOnlyField(t *testing.T) {
 	}
 }
 
-// The `field` key is DEC-12's ONE optional additive key, and optional means
-// absent rather than empty: `"field":""` would have the client render a blank
-// name into a per-surface sentence.
+// The `field` key is the one optional additive key, and optional means absent
+// Than empty.
 func TestFieldIsOmittedRatherThanEmptyOnEveryOtherCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
@@ -178,9 +156,8 @@ func TestFieldIsOmittedRatherThanEmptyOnEveryOtherCode(t *testing.T) {
 	}
 }
 
-// A Code reached by conversion — httpx.Code("banana") — is the one-word bypass
-// the AST sweep is built to catch at review time. This is the runtime half:
-// even if one lands, no word outside the vocabulary reaches the wire.
+// A Code reached by conversion — httpx.Code("banana") — is the one-word
+// bypass the ast sweep is built to catch at review time.
 func TestAnUnknownCodeIsWrittenAsInternalRatherThanEchoed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
@@ -194,9 +171,6 @@ func TestAnUnknownCodeIsWrittenAsInternalRatherThanEchoed(t *testing.T) {
 		t.Errorf("body = %s, want {\"code\":\"internal\"} — never the invented word", got)
 	}
 }
-
-// === The mapping function DEC-62 asks for: the sentinel is the domain's word,
-// the code is the wire's. ===
 
 type fakeDomainError struct{ code httpx.Code }
 
@@ -227,8 +201,6 @@ func TestCodeForMapsSentinelsWrappersAndCoders(t *testing.T) {
 }
 
 // A domain error can name any word it likes; the vocabulary is still closed.
-// Without this, DEC-62's seam is the hole DEC-12's sweep cannot see, because
-// the word is a runtime value and no AST walk reaches it.
 func TestADomainErrorCannotInventAWireWord(t *testing.T) {
 	if got := httpx.CodeFor(fakeDomainError{httpx.Code("teapot")}); got != httpx.CodeInternal {
 		t.Errorf("CodeFor(a Coder returning an unknown word) = %q, want internal", got)
@@ -249,25 +221,8 @@ func TestWriteErrorForGoesThroughTheSameMapping(t *testing.T) {
 	}
 }
 
-// === DEC-96: a dependency that is down is a 503, not a 500 ===
-
-// A 500 TELLS A CLIENT THE SERVER HAS A BUG — do not retry, the request is
-// poison — WHEN THE TRUTH IS "the dependency is down, try again shortly".
-// Measured by the operations lens: with Postgres killed, every route answered
-// `500 {"code":"internal"}` with no Retry-After. It is also unanswerable
-// afterwards, because a 500 count then conflates handler bugs with outages.
-//
-// THIS BRANCH ADDS NO WORD TO THE VOCABULARY. `timeout` is already 503 and
-// already means "try again"; what was missing was the classification and the
-// header. The block stays at twelve for this ruling — DEC-103 grows it, for a
-// different reason, and that is a separate decision.
-//
-// THE THREE SHAPES ARE THE THREE DEC-96 NAMES, and each is reachable from the
-// standard library, which is what keeps this classification out of pgconn's
-// way: spec L20 has pgx as a blank import driver only, and internal/postgres'
-// own comment records that reading SQLSTATE off the driver is not available
-// here. Measured against a real pool pointed at a dead port: a pgconn connect
-// error unwraps to *net.OpError and satisfies errors.As(err, &net.Error).
+// A 500 tells A client the server has A bug — do not retry, the request is
+// poison — when the truth is "the dependency is down, try again shortly".
 func TestADependencyThatIsDownIsATimeoutAndNotAnInternalError(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -292,9 +247,8 @@ func TestADependencyThatIsDownIsATimeoutAndNotAnInternalError(t *testing.T) {
 	}
 }
 
-// AND THE CONTROL, WITHOUT WHICH THE ABOVE IS SATISFIED BY A CLASSIFIER THAT
-// CALLS EVERYTHING A TIMEOUT. A genuine handler fault is still `internal`, and
-// 500 is still what a client is told not to retry.
+// The control, without which the above is satisfied by A classifier that
+// calls everything A timeout.
 func TestAnOrdinaryFailureIsStillInternal(t *testing.T) {
 	for _, err := range []error{
 		errors.New("a handler dereferenced nothing"),
@@ -306,11 +260,8 @@ func TestAnOrdinaryFailureIsStillInternal(t *testing.T) {
 	}
 }
 
-// RETRY-AFTER IS A FUNCTION OF THE STATUS AND NOT OF THE CALLER, which is the
-// whole of why it is set where it is. Two different mechanisms produce a 503
-// here — this classification, and http.TimeoutHandler, which writes its own
-// response and takes no part in any of this — and a header set at each call
-// site would be set at one of them.
+// retry-after is a function of the status and not of the caller, which is the
+// whole of why it is set where it is.
 func TestEvery503CarriesRetryAfter(t *testing.T) {
 	h := httpx.RetryAfter()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrorFor(w, r, fmt.Errorf("postgres: %w", sql.ErrConnDone))
@@ -331,8 +282,7 @@ func TestEvery503CarriesRetryAfter(t *testing.T) {
 	}
 }
 
-// AND IT IS NOT SET ON ANYTHING ELSE. A Retry-After on a 422 or a 404 is an
-// instruction to retry a request that will fail identically for ever.
+// It is not set on anything else.
 func TestRetryAfterIsNotSetOnAnswersThatWillNotChange(t *testing.T) {
 	for _, code := range httpx.Codes() {
 		if httpx.StatusFor(code) == http.StatusServiceUnavailable {
@@ -351,19 +301,14 @@ func TestRetryAfterIsNotSetOnAnswersThatWillNotChange(t *testing.T) {
 }
 
 // pgLike is a driver error that carries a SQLSTATE the way *pgconn.PgError
-// does. It is a stand-in rather than the real thing for the reason
-// httpx.sqlStater is an interface rather than an import: this package must not
-// name pgconn, and the whole claim is that it does not have to.
+// does.
 type pgLike struct{ state string }
 
 func (e pgLike) Error() string    { return "ERROR: something (SQLSTATE " + e.state + ")" }
 func (e pgLike) SQLState() string { return e.state }
 
-// THE SECOND HALF OF THE CLASSIFICATION, AND IT IS THE HALF DEC-96'S OWN LIST
-// DOES NOT NAME. Measured while writing the ruling's lock leg: with a lock held
-// on `trips`, the blocked read is cut off by statement_timeout and comes back
-// as SQLSTATE 57014 — not a net error, not a context deadline — so it landed
-// in `default` and answered 500, and the ruling's own leg could not pass.
+// The second half of the classification, and the half a SQLSTATE list does
+// not name.
 func TestAServerThatGaveUpOnTheStatementIsAlsoATimeout(t *testing.T) {
 	for _, tc := range []struct{ state, what string }{
 		{"57014", "statement_timeout, which is DEC-96's own second bound firing"},
@@ -382,14 +327,7 @@ func TestAServerThatGaveUpOnTheStatementIsAlsoATimeout(t *testing.T) {
 	}
 }
 
-// AND THE CLASSES THAT MUST STAY 500, WHICH IS WHERE THE LINE IS DRAWN.
-//
-// A constraint violation is the server having a bug and a client must not
-// retry it. The two SERIALIZATION states are the interesting exclusions: both
-// are retryable in principle and neither is a dependency being unavailable —
-// they are this application's own concurrency, and this build takes one
-// advisory lock per traveller precisely so it does not meet them. One in a log
-// is a defect to fix, not an outage to wait out.
+// The classes that must stay 500, which is where the line is drawn.
 func TestAConstraintViolationAndADeadlockAreStillInternal(t *testing.T) {
 	for _, tc := range []struct{ state, what string }{
 		{"23503", "a foreign key violation — the server wrote something incoherent"},

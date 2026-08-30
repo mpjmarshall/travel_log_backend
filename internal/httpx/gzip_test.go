@@ -1,5 +1,5 @@
 // The compressor, and the header that stops the next cache in front of this
-// from serving compressed bytes to a client that did not ask (DEC-94).
+// from serving compressed bytes to a client that did not ask.
 package httpx_test
 
 import (
@@ -15,9 +15,7 @@ import (
 )
 
 // jsonBody is a handler writing a body big enough to be worth compressing and
-// compressible enough to prove it happened. The repetition is the point: a
-// 40-byte body would be LARGER gzipped, which is a real branch and has its own
-// leg below.
+// compressible enough to prove it happened.
 func jsonBody(n int) http.Handler {
 	body := `{"trips":[` + strings.Repeat(`{"id":"kyoto","name":"Kyoto in May"},`, n) + `{}]}`
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,19 +53,7 @@ func gunzip(t *testing.T, r io.Reader) []byte {
 	return out
 }
 
-// THE ONE THE PERFORMANCE LENS MEASURED. `GET /v1/logbook` answers HTTP 200
-// with a VALID ETag and a body cut mid-token when body/link-speed exceeds
-// WriteTimeout. Reproduced three times against an 11,102,597-byte log: at
-// 400 kB/s, 8,371,312 bytes received, curl exit 18, `json.load` ->
-// "Unterminated string starting at char 8371258", last bytes on disk
-// `{"lat":35.0409862745072,"lng`. At 500 kB/s: 9,631,256 bytes, code 200. At
-// 200 kB/s: 5,622,648 bytes, code 200. Unthrottled the same request is 151.9ms
-// and complete.
-//
-// COMPRESSION DOES NOT REMOVE THE CLASS, IT MOVES THE THRESHOLD 5-15x — level
-// 1 takes the fixture's 99,271 bytes to 6,806 in 0.3ms and the 11.1 MB log to
-// 2,084,727 in 47.2ms. Both halves of the fix are needed and this is the first;
-// the WriteTimeout ceiling is the second and is said out loud in cmd/api.
+// The body is compressed when asked for, and the response says so.
 func TestTheBodyIsCompressedWhenAskedAndSaysSo(t *testing.T) {
 	h := httpx.Compress()(jsonBody(400))
 
@@ -90,10 +76,7 @@ func TestTheBodyIsCompressedWhenAskedAndSaysSo(t *testing.T) {
 	}
 }
 
-// VARY IS NOT HYGIENE. Without it the next cache in front of this stores one
-// representation under one key and serves compressed bytes to a client that
-// did not ask for them — which is not a slow client, it is a client that
-// cannot read the answer at all.
+// vary is not hygiene.
 func TestVaryNamesAcceptEncodingOnBothAnswers(t *testing.T) {
 	h := httpx.Compress()(jsonBody(400))
 
@@ -113,11 +96,7 @@ func TestVaryNamesAcceptEncodingOnBothAnswers(t *testing.T) {
 	}
 }
 
-// THE ETAG IS A FACT ABOUT THE LOG AND NOT ABOUT THE ENCODING. A middleware
-// that appends `-gzip` to the tag — which is what several off-the-shelf ones
-// do, and what a hand-rolled one reaches for to keep caches honest — makes a
-// client that switches Accept-Encoding re-download an unchanged log. Vary is
-// what keeps the caches honest here; the tag stays put.
+// The etag is a fact about the log and not about the encoding.
 func TestTheETagIsUnchangedByTheEncoding(t *testing.T) {
 	h := httpx.Compress()(jsonBody(400))
 
@@ -133,11 +112,8 @@ func TestTheETagIsUnchangedByTheEncoding(t *testing.T) {
 	}
 }
 
-// A SMALL BODY IS NOT COMPRESSED, and the reason is arithmetic rather than
-// taste: gzip's header, trailer and deflate block overhead make a short body
-// LARGER, and every error in this API is a body of about twenty bytes. So the
-// vocabulary's twelve words would each be sent as ~40 bytes of gzip framing
-// around nothing.
+// A small body is not compressed, and the reason is arithmetic rather than
+// taste.
 func TestAShortBodyIsSentUncompressed(t *testing.T) {
 	h := httpx.Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -159,9 +135,7 @@ func TestAShortBodyIsSentUncompressed(t *testing.T) {
 	}
 }
 
-// A 304 HAS NO BODY AND MUST NOT GROW ONE. This is the response DEC-31 exists
-// to produce, so a compressor that wrote a gzip header into it would break the
-// cheapest and most common answer the API gives.
+// A 304 has no body and must not grow one.
 func TestA304IsNotGivenABody(t *testing.T) {
 	h := httpx.Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `W/"2-7"`)
@@ -181,10 +155,7 @@ func TestA304IsNotGivenABody(t *testing.T) {
 	}
 }
 
-// CONTENT-LENGTH MUST NOT SURVIVE THE COMPRESSION. A handler that sets it —
-// mux.go's envelope writer does, on every stdlib 404 — describes the
-// UNCOMPRESSED body, and a wrong Content-Length is a connection the client
-// hangs on or truncates.
+// content-length must not survive the compression.
 func TestAHandlerSetContentLengthIsDroppedWhenCompressing(t *testing.T) {
 	body := strings.Repeat(`{"id":"kyoto"},`, 400)
 	h := httpx.Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,9 +174,7 @@ func TestAHandlerSetContentLengthIsDroppedWhenCompressing(t *testing.T) {
 	}
 }
 
-// A CLIENT THAT SPELLS IT DIFFERENTLY IS STILL A CLIENT THAT ASKED. Accept-
-// Encoding is a comma-separated list with optional q-values, and `deflate,
-// gzip;q=0.8` names gzip.
+// A client that spells it differently is still A client that asked.
 func TestGzipIsRecognisedInsideAList(t *testing.T) {
 	h := httpx.Compress()(jsonBody(400))
 

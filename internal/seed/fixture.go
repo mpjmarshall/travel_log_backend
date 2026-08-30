@@ -1,23 +1,5 @@
 // The captured client document -> a Dataset, which is one row per column of
 // the ten tables the load writes.
-//
-// TWO MAPPINGS NEED CARE AND BOTH ARE LOAD-BEARING ON READ:
-//
-//   - VISIT ORDINALS are assigned in the fixture's OWN ARRAY ORDER, because
-//     the client reads `visits.first.at` as "last visited" and the captured
-//     document is newest-first. `readVisitsSQL` orders by `place_id, ordinal,
-//     id`, so the ordinal is the only thing carrying that order across
-//     storage. Sorting by date here — the obvious "tidy" thing — silently
-//     rebinds every P1 header to the wrong day, with every individual field
-//     still correct.
-//   - TRIP_CITIES ORDINALS are assigned in `cityIds` order, because that list
-//     is TRAVEL ORDER (DEC-64, DEC-26) rather than a set.
-//
-// THE DATES ARE FORMATTED AS `date` LITERALS AND NOT AS TIMESTAMPS.
-// `trips.started_on`, `trips.ended_on` and `walks.recorded_on` are `date`
-// columns (DEC-68); binding a time.Time and letting PostgreSQL cast makes the
-// answer depend on the SESSION's TimeZone, which is a fact about the container
-// rather than about the log. `2027-09-17` is the same day in every timezone.
 package seed
 
 import (
@@ -34,28 +16,11 @@ const dateLayout = "2006-01-02"
 
 // FromDocument turns a rewritten logbook document into one whole database's
 // worth of rows.
-//
-// IT TAKES THE TRAVELLER ROW RATHER THAN AN ID, and that is a divergence from
-// the plan's `FromDocument(travellerID, doc)` with a reason. DEC-97 generates
-// the passphrase PER RUN so a fixture cannot become a shipped credential, so
-// the credential is made by the command and cannot be invented here — and a
-// travellers row with an empty passphrase_hash is refused by
-// `travellers_passphrase_hash_present_ck` five statements before anything
-// interesting happens.
-//
-// IT TAKES THE MEDIA OBJECTS TOO, AND REFUSES A DOCUMENT THAT ADDRESSES ONE
-// THEY DO NOT DECLARE. `photos_asset_fk` would refuse it as well — five tables
-// later, as SQLSTATE 23503 naming a constraint. Here the refusal names the
-// digest nothing uploaded.
 func FromDocument(tr Traveller, objects []MediaObject, doc logbook.Document) (*Dataset, error) {
 	if doc.Traveller != nil && doc.Traveller.Name != "" && tr.Name == nil {
 		name := doc.Traveller.Name
 		tr.Name = &name
 	}
-	// A LOADED LOG IS AT VERSION 1 AND NOT 0. A traveller at 0 is served 200
-	// with NO ETag by design, which is right for a log nobody has written and
-	// wrong for one that was just loaded: every phone would re-fetch it for
-	// ever.
 	if tr.LogbookVersion < 1 {
 		tr.LogbookVersion = 1
 	}
@@ -103,22 +68,11 @@ func FromDocument(tr Traveller, objects []MediaObject, doc logbook.Document) (*D
 			SharePhotos: t.SharePhotos, ShareNotes: t.ShareNotes,
 			ShareCoordinates: t.ShareCoordinates, CreatedAt: at,
 		})
-		// TRAVEL ORDER, and the ordinal is the only thing that carries it.
 		for i, cityID := range t.CityIDs {
 			d.TripCities = append(d.TripCities, TripCity{
 				TravellerID: tr.ID, TripID: t.ID, CityID: cityID, Ordinal: i,
 			})
 		}
-		// THE SHARE LINK IS THE CAPTURED TOKEN'S DIGEST, AND THIS LINE IS
-		// WHERE THE PLAINTEXT STOPS. The column holds a digest and never the
-		// token (DEC-85). The captured `shareLinkId` is what the fixture holds
-		// — it has to be, because `/l/{token}` has to resolve for the token
-		// the client document names — and `HashShareToken` is the only thing
-		// that leaves this scope with it.
-		//
-		// `shared` IS DERIVED from this row's existence and its `revoked_at`,
-		// which is why the round-trip leg substitutes
-		// `Shared = ShareLinkID != nil` and then nils the token.
 		if t.ShareLinkID != nil {
 			d.ShareLinks = append(d.ShareLinks, ShareLink{
 				TravellerID: tr.ID, TripID: t.ID,
@@ -138,9 +92,6 @@ func FromDocument(tr Traveller, objects []MediaObject, doc logbook.Document) (*D
 			Lat: p.Coordinates.Lat, Lng: p.Coordinates.Lng,
 			Plan: p.Plan, CoverAsset: p.CoverAsset, CreatedAt: at,
 		})
-		// THE FIXTURE'S OWN ARRAY ORDER. See the file comment: the client reads
-		// visits.first.at as lastVisited, so this ordinal is what "newest
-		// first" is made of once the list has been through storage.
 		for i, v := range p.Visits {
 			d.Visits = append(d.Visits, Visit{
 				TravellerID: tr.ID, ID: v.ID, PlaceID: v.PlaceID, TripID: v.TripID,
@@ -183,16 +134,6 @@ func FromDocument(tr Traveller, objects []MediaObject, doc logbook.Document) (*D
 }
 
 // pointsJSON renders a track as the jsonb array the column holds.
-//
-// IT IS WRITTEN BY HAND AND NOT BY encoding/json, and that is a constraint
-// rather than a preference: internal/httpx's AST sweep names every file in
-// this module that may import the encoder, and this is not one of them (spec
-// L19 is about payload encoding). The shape is two float keys, which is small
-// enough to write once and assert against the round trip.
-//
-// 'g' with -1 precision is the SHORTEST form that round-trips exactly, which is
-// what `(pt.value->>'lat')::double precision` reads back, and what the emitter
-// prints on the way out.
 func pointsJSON(points []logbook.LatLng) string {
 	var b strings.Builder
 	b.WriteByte('[')
@@ -218,7 +159,7 @@ func dayOrNil(i *logbook.Instant) *time.Time {
 	return &t
 }
 
-// dayLiteral is what a `date` column is bound with. See the file comment.
+// dayLiteral is what a `date` column is bound with.
 func dayLiteral(t *time.Time) *string {
 	if t == nil {
 		return nil

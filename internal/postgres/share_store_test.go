@@ -1,13 +1,5 @@
 // H1's three writes against a real PostgreSQL, where the partial index, the
 // column defaults and the digest all actually exist.
-//
-// WHAT ONLY THIS CAN SAY. The handler legs in internal/httpapi run against a
-// fake and are about what leaves the process — a 201, a whole Trip, a 404 on a
-// setter. `share_links_one_live` is a PARTIAL UNIQUE INDEX and is the only
-// thing enforcing the "0..1 live" the class diagram claims; the reset's three
-// values are the CLIENT's and only coincidentally the column defaults; and
-// whether the plaintext reaches the table is a question about bytes in a
-// column. None of the three is visible to a twin.
 package postgres
 
 import (
@@ -19,24 +11,13 @@ import (
 	"travellog/internal/logbook"
 )
 
-// STOP THEN NEW LINK, WHICH IS THE EXACT SEQUENCE THAT FAILS OUTRIGHT UNDER
-// THE PRIMARY KEY NOBODY SPECIFIED (DEC-67).
-//
-// With `PRIMARY KEY (traveller_id, trip_id)` — the natural reading of "1 to
-// 0..1" — this is `duplicate key value violates unique constraint`. DEC-67
-// moved the key to (traveller_id, token) and 0004 moved it again to
-// (traveller_id, token_hash), and what makes 'New link' work is that the table
-// REVOKES AND KEEPS.
-//
-// THE REVOCATION RECORD SURVIVING IS ASSERTED, and its meaning has changed:
-// history now shows which DIGEST was live when, not which token. That is
-// DEC-67's argument re-derived rather than carried — see 0004's own comment.
+// stop then new link, which is the exact sequence that fails outright under
+// the primary key nobody specified.
 func TestStopThenNewLinkSucceedsAndTheRevocationRecordSurvives(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
 	ctx := context.Background()
 
-	// seeded() already leaves one live link on kyoto-in-may.
 	if n := count(t, db, liveLinksSQL, tid); n != 1 {
 		t.Fatalf("the fixture has %d live links, want 1", n)
 	}
@@ -64,17 +45,8 @@ func TestStopThenNewLinkSucceedsAndTheRevocationRecordSurvives(t *testing.T) {
 	}
 }
 
-// 'NEW LINK' ON A TRIP THAT IS ALREADY SHARED, WHICH IS THE SEQUENCE THE
-// REVOKE INSIDE THE MINT EXISTS FOR — AND THE ONE THE OBVIOUS LEG MISSES.
-//
-// H1 offers 'New link' whether or not a link is live: "Mints a link, killing
-// whatever one was live". Stop-then-new goes through a StopSharing that has
-// already revoked, so a mint that forgot its own revoke passes that sequence
-// perfectly. MEASURED at this working tree: deleting the revoke from
-// NewShareLink leaves every other leg in this file GREEN. This is the one that
-// reddens, and it reddens on the INSERT raising rather than on two live links
-// existing — which is why it asserts the 201 and the row counts, exactly as
-// the plan says.
+// A new link on an already-shared trip must revoke the old one, which the
+// obvious leg misses.
 func TestNewLinkOnATripThatIsAlreadySharedKillsTheOldOne(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
@@ -104,8 +76,6 @@ func TestNewLinkOnATripThatIsAlreadySharedKillsTheOldOne(t *testing.T) {
 	if n := count(t, db, liveLinksSQL, tid); n != 1 {
 		t.Errorf("%d links are live, want exactly 1", n)
 	}
-	// AND THE ONE THAT IS LIVE IS THE NEW ONE. A revoke that killed the wrong
-	// row would leave the count at one and the wrong capability working.
 	var hash []byte
 	if err := db.QueryRowContext(ctx,
 		`SELECT token_hash FROM share_links WHERE traveller_id=$1 AND trip_id='kyoto-in-may'
@@ -118,15 +88,8 @@ func TestNewLinkOnATripThatIsAlreadySharedKillsTheOldOne(t *testing.T) {
 	}
 }
 
-// AND A MINT WITHOUT THE REVOKE RAISES RATHER THAN CREATING A SECOND LIVE
-// LINK, which is why the leg above asserts the ROW COUNTS and not the absence
-// of an error.
-//
-// This is the plan's own named mutation, run as a leg instead: skipping the
-// revoke does not quietly hand out two capabilities for one trip — the partial
-// index refuses the INSERT. So a build with that defect FAILS LOUDLY, and a
-// leg written as "NewShareLink returns no error" would have been proving the
-// index rather than the code.
+// A mint without the revoke raises rather than creating A second live
+// link.
 func TestASecondLiveLinkForOneTripIsRefusedByTheIndex(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -142,17 +105,8 @@ func TestASecondLiveLinkForOneTripIsRefusedByTheIndex(t *testing.T) {
 	}
 }
 
-// THE STOP RESETS THE THREE FLAGS BY NAME, AND THE COORDINATE ONE IS THE
-// PRIVACY HALF.
-//
-// Turn coordinates on, stop sharing, and the NEXT link must not carry them: a
-// killed link that leaves a coordinate switch armed hands out exact pins on
-// the next link without anybody having turned that on.
-//
-// THE OTHER TWO GO THE OTHER WAY AND THE ASYMMETRY IS THE CLIENT'S. It writes
-// `Trip.defaultSharePhotos` and `defaultShareNotes`, both true, and
-// `defaultShareCoordinates`, false — because a pin on your accommodation is
-// not something to hand out by link, so it has to be actively turned on.
+// The stop resets the three flags by name, and the coordinate one is the
+// privacy half.
 func TestStoppingSharingResetsTheThreeFlagsToTheClientsDefaults(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
@@ -190,13 +144,7 @@ func TestStoppingSharingResetsTheThreeFlagsToTheClientsDefaults(t *testing.T) {
 	}
 }
 
-// THE PLAINTEXT NEVER REACHES THE TABLE (DEC-85).
-//
-// IT IS ASSERTED OVER THE WHOLE ROW AND NOT OVER `token_hash` ALONE, because
-// the mistake this catches is not a wrong hash — it is a column somebody adds
-// beside it. `share_links::text` renders every column of the row, so a
-// `token`, a `label` or a `last_seen_token` carrying the plaintext is caught
-// by the same query.
+// The plaintext never reaches the table.
 func TestAMintedTokenIsNowhereInTheClear(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -230,12 +178,8 @@ func TestAMintedTokenIsNowhereInTheClear(t *testing.T) {
 	}
 }
 
-// DEC-89 AGAINST THE REAL COLUMNS: a body naming one switch leaves the other
-// two exactly as the row had them.
-//
-// The fake in internal/httpapi asserts the same thing about the handler; this
-// asserts it about the STATEMENT, which is where the CASE WHEN lives and where
-// an EXCLUDED-form rewrite would silently reset the group.
+// against the real columns: a body naming one switch leaves the other two
+// exactly as the row had them.
 func TestAShareOptionsWriteTouchesOnlyTheColumnsItWasSent(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
@@ -259,9 +203,7 @@ func TestAShareOptionsWriteTouchesOnlyTheColumnsItWasSent(t *testing.T) {
 	}
 }
 
-// AN EMPTY BODY IS LEGAL AND WRITES NOTHING. DEC-89's contract is that absence
-// is not an error, and refusing it would refuse exactly the retry a client
-// makes after a lost response.
+// an empty body is legal and writes nothing.
 func TestAShareOptionsWriteNamingNothingChangesNoColumn(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
@@ -282,11 +224,8 @@ func TestAShareOptionsWriteNamingNothingChangesNoColumn(t *testing.T) {
 	}
 }
 
-// ALL THREE ARE SETTERS AND AN UNKNOWN TRIP IS logbook.ErrNoTrip, which the
-// handler turns into a 404. Without the existence check every one of them is
-// an UPDATE matching nothing, which reports SUCCESS — and the re-read then
-// fails, so the caller gets a 404 anyway but by way of an error that says
-// nothing.
+// All three are setters and an unknown trip is logbook.ErrNoTrip, which the
+// handler turns into a 404.
 func TestTheShareWritesRefuseATripThatIsNotInTheLog(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
@@ -314,14 +253,8 @@ func TestTheShareWritesRefuseATripThatIsNotInTheLog(t *testing.T) {
 	}
 }
 
-// AND A SHARE WRITE MOVES logbook_version, WHICH IS DEC-50's LIST RATHER THAN
-// A JUDGEMENT CALL.
-//
-// `share_links` is on the bumping side because DEC-91's `shared` is derived
-// from it on every trip read. A mint or a revoke that moved no version would
-// leave every phone answering 304 to a log whose `shared` has changed, and
-// 'Stop sharing' would appear to do nothing until some unrelated write
-// happened.
+// A share write moves logbook_version, which is the list rather than A
+// judgement call.
 func TestEveryShareWriteMovesTheVersion(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}

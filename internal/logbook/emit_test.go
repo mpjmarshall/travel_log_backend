@@ -1,13 +1,4 @@
 // The emitter, against the client's own 85 KB document.
-//
-// THE STRONGEST LEG IN THIS FILE IS THE ROUND TRIP, and it is strong because
-// the reference is not a fixture written beside the code that has to satisfy
-// it. `testdata/client_sample_log.json` is what the Flutter app's own encoder
-// produced before its fixture was deleted (DEC-75, sha256 03e88872…): seven
-// trips, twelve cities, seventeen places, 284 photographs, two walks, and the
-// edge cases the schema was designed around. Decoding it into these types and
-// emitting it back asserts every key, every date string and every number at
-// once, against a document neither this package nor its tests wrote.
 package logbook_test
 
 import (
@@ -27,10 +18,7 @@ import (
 
 const clientFixture = "testdata/client_sample_log.json"
 
-// clientLogbook is the `logbook` object out of the client's envelope, as raw
-// JSON. The envelope's own `version` is the client's 1 and is deliberately not
-// carried in: DEC-40 moves the server to 2, and the leg about the version is
-// separate from the leg about the shape.
+// clientLogbook is the logbook object out of the client's envelope, as raw JSON.
 func clientLogbook(t *testing.T) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(clientFixture)
@@ -69,26 +57,11 @@ func emitted(t *testing.T, doc logbook.Document) []byte {
 	return out
 }
 
-// serverAddedKeys is EVERY KEY THE SERVER EMITS THAT THE CLIENT'S OWN DOCUMENT
-// DOES NOT HAVE, named once and read by the three legs below.
-//
-// IT IS A LIST RATHER THAN A FUDGE IN EACH LEG, and that is the point. The
-// round trip, the golden and the golden-against-the-fixture leg all have to
-// know about an additive key, and three independent exceptions is how a shape
-// drifts one key at a time with every leg still green. Adding a key to this
-// list is a deliberate act with a ruling beside it; adding one without is
-// three red legs.
-//
-// `logbook.trips[].shared` is DEC-91's: derived from share_links, additive
-// with a default, and therefore NOT a format-version move by the client's own
-// rule ("an added key that is nullable or defaulted needs no bump",
-// lib/src/logbook/logbook_format.dart:14-18, read on `wipe/mock-data`). It IS
-// an EmitterVersion move, which is a different number — see
-// TestTheEmitterVersionMovedWhenTheShapeDid.
+// serverAddedKeys is every key the server emits that the client's own
+// document does not have, named once and read by's three legs below.
 var serverAddedKeys = []string{"logbook.trips[].shared"}
 
-// THE ROUND TRIP. Every date string, every coordinate, every null and every
-// key, in one assertion against a document this repository did not author.
+// The round trip.
 func TestTheClientsOwnLogRoundTripsThroughTheseTypes(t *testing.T) {
 	out := emitted(t, clientDocument(t))
 
@@ -104,9 +77,6 @@ func TestTheClientsOwnLogRoundTripsThroughTheseTypes(t *testing.T) {
 		t.Fatalf("re-decoding the client's log: %v", err)
 	}
 
-	// The server-added keys are stripped rather than added to the reference:
-	// the reference is the CLIENT'S document and nothing in this repository
-	// may edit it, which is the whole reason the round trip means anything.
 	stripServerAdded(t, got.Logbook)
 
 	if reflect.DeepEqual(got.Logbook, want) {
@@ -117,10 +87,8 @@ func TestTheClientsOwnLogRoundTripsThroughTheseTypes(t *testing.T) {
 	}
 }
 
-// DEC-68 asks for one golden round-trip leg PER DATE-BEARING FIELD, asserting
-// the emitted string is byte-identical to what the client sent. There are six,
-// and three of them are `date` columns in storage that must come back out as
-// midnight UTC with milliseconds.
+// asks for one golden round-trip leg per date-bearing field, asserting the
+// emitted string is byte-identical to what the client sent.
 func TestEveryDateBearingFieldIsByteIdenticalToWhatTheClientSent(t *testing.T) {
 	got := walkStrings(t, emitted(t, clientDocument(t)))
 	want := walkStrings(t, clientLogbook(t))
@@ -146,16 +114,8 @@ func TestEveryDateBearingFieldIsByteIdenticalToWhatTheClientSent(t *testing.T) {
 	}
 }
 
-// THE SIXTH DATE-BEARING FIELD HAS NO FIXTURE, AND THAT IS A MEASUREMENT
-// RATHER THAN AN OMISSION: all 284 photographs in the client's log carry
-// `"filedLater": null`, so the leg above has nothing to compare it against and
-// says so rather than passing vacuously. It is the one field that needs a
-// synthesised value, and this is that leg — written against the string a Dart
-// `DateTime.toIso8601String()` produces, not against what Go happens to do.
-//
-// The two inputs are chosen for what they break: a source time in a NON-UTC
-// zone (Go renders the offset unless it is converted first) and a whole second
-// with no fractional part (Go's RFC 3339 marshaller trims `.000` away).
+// The sixth date-bearing field has no fixture, and that is a measurement
+// Than an omission.
 func TestASynthesisedInstantCarriesMillisecondsAndZ(t *testing.T) {
 	tokyo := time.FixedZone("JST", 9*60*60)
 
@@ -187,12 +147,7 @@ func TestASynthesisedInstantCarriesMillisecondsAndZ(t *testing.T) {
 	}
 }
 
-// L2 FOUND THIS GAP AND IT IS WORTH THE EXTRA LEG. `At` converts to UTC, so
-// every leg that builds an Instant through it proves At's conversion and never
-// the marshaller's — deleting `.UTC()` from MarshalJSON left the whole package
-// green. A store scanning a `timestamptz` gets whatever zone the pgx session is
-// in and may reach for the bare conversion, which is the caller `At` does not
-// protect.
+// L2 found this gap and it is worth the extra leg.
 func TestAnInstantBuiltByConversionIsStillRenderedInUTC(t *testing.T) {
 	tokyo := time.FixedZone("JST", 9*60*60)
 	raw := logbook.Instant(time.Date(2027, 10, 2, 19, 15, 0, 0, tokyo))
@@ -209,8 +164,7 @@ func TestAnInstantBuiltByConversionIsStillRenderedInUTC(t *testing.T) {
 }
 
 // A nil slice marshals to `null`, which is neither an absent key nor an empty
-// list — and `as List<dynamic>` throws on it. This is the leg behind "the four
-// unimplemented lists are EMPTY rather than ABSENT".
+// list — and `as List<dynamic>` throws on it.
 func TestEveryListIsEmptyRatherThanNull(t *testing.T) {
 	out := emitted(t, logbook.Document{})
 
@@ -233,10 +187,7 @@ func TestEveryListIsEmptyRatherThanNull(t *testing.T) {
 	}
 }
 
-// The nested lists, and the one route that answers a bare entity. `cityIds` is
-// `as List<dynamic>` on the client with no null branch, so a nil slice is the
-// single shape that throws — and the write path does not go through Emit,
-// which is how it shipped as `null` once.
+// The nested lists, and the one route that answers a bare entity.
 func TestATripsCityIdsAreEmptyRatherThanNull(t *testing.T) {
 	inside := emitted(t, logbook.Document{Trips: []logbook.Trip{{ID: "kyoto", Name: "Kyoto"}}})
 	if !strings.Contains(string(inside), `"cityIds":[]`) {
@@ -287,9 +238,8 @@ func TestTheEnvelopeCarriesTheFormatVersionItWasGiven(t *testing.T) {
 	}
 }
 
-// The parameter exists so a SECOND version is possible; today there is one
-// value, and a version the emitter cannot write is refused rather than
-// silently emitted as the one it can.
+// The parameter exists so a second version is possible; today there is one
+// value.
 func TestEmitRefusesAFormatVersionItCannotWrite(t *testing.T) {
 	for _, v := range []int{0, 1, 3, -1} {
 		if _, err := logbook.Emit(v, logbook.Document{}); err == nil {
@@ -306,18 +256,7 @@ func TestFormatsNamesWhatTheEmitterCanWrite(t *testing.T) {
 	}
 }
 
-// DEC-49's first half, asserted on the constant so it cannot be dropped.
-//
-// IT WAS 1 UNTIL R1 AND THE LEG SAID SO IN TERMS: "the shape is final at VS7,
-// so the re-plan inherits it without a bump". DEC-91 added `shared` to every
-// emitted trip, which is exactly the event emit.go's own instruction describes
-// — "BUMP IT BY HAND whenever this package changes what the document looks
-// like. Without it a deploy that renames a key, adds a field or renders a date
-// differently moves no data, so every phone holding a cached body gets 304 for
-// ever and keeps serving the OLD SHAPE until somebody happens to write."
-//
-// So the number is tied to the list rather than written twice: one server-added
-// key, one bump past the shape VS7 froze.
+// The first half, asserted on the constant so it cannot be dropped.
 func TestTheEmitterVersionMovedWhenTheShapeDid(t *testing.T) {
 	want := int64(1 + len(serverAddedKeys))
 	if logbook.EmitterVersion != want {
@@ -329,10 +268,7 @@ func TestTheEmitterVersionMovedWhenTheShapeDid(t *testing.T) {
 	}
 }
 
-// The golden key file. It is the shape as a checked-in artefact, so a renamed
-// or added key reddens even for a field the client fixture happens not to
-// exercise — and the leg below asserts the golden IS the client's key set, so
-// a golden regenerated to match a mistake reddens too.
+// The golden key file.
 func TestTheKeySetAtEveryLevelEqualsTheGolden(t *testing.T) {
 	got := keyPaths(t, emitted(t, clientDocument(t)))
 
@@ -354,9 +290,7 @@ func TestTheKeySetAtEveryLevelEqualsTheGolden(t *testing.T) {
 	}
 }
 
-// THE ONE THAT MAKES THE GOLDEN EVIDENCE RATHER THAN A RECORDING. A golden
-// regenerated from a broken emitter agrees with itself; this leg asks the
-// client's own document what the keys are.
+// The one that makes the golden evidence rather than A recording.
 func TestTheGoldenKeySetIsTheClientFixturesKeySet(t *testing.T) {
 	raw, err := os.ReadFile("testdata/logbook_keys.golden")
 	if err != nil {
@@ -370,10 +304,6 @@ func TestTheGoldenKeySetIsTheClientFixturesKeySet(t *testing.T) {
 	}
 	fixture := keyPaths(t, raw)
 
-	// The golden is the client's key set PLUS exactly serverAddedKeys, and the
-	// assertion is two-directional on purpose: a key the golden gained without
-	// a ruling shows up in the first list, and a key the client has that the
-	// server stopped emitting shows up in the second.
 	if extra := missing(got, fixture); !reflect.DeepEqual(extra, serverAddedKeys) {
 		t.Errorf("the golden holds %v beyond the client's own log, want exactly %v — "+
 			"every server-added key needs a line in serverAddedKeys and a ruling "+
@@ -385,11 +315,7 @@ func TestTheGoldenKeySetIsTheClientFixturesKeySet(t *testing.T) {
 }
 
 // stripServerAdded removes exactly the keys in serverAddedKeys from a decoded
-// document, so the round trip compares like with like. It understands only the
-// `logbook.<list>[].<key>` shape, which is every entry in the list today; a
-// key at another depth is a Fatalf rather than a silent no-op, because a strip
-// that quietly does nothing turns the round trip back into a leg that cannot
-// fail.
+// document, so the round trip compares like with like.
 func stripServerAdded(t *testing.T, doc map[string]any) {
 	t.Helper()
 	for _, path := range serverAddedKeys {
@@ -415,10 +341,8 @@ func stripServerAdded(t *testing.T, doc map[string]any) {
 	}
 }
 
-// DEC-49's cache dies the moment a value in the body changes on every request,
-// and a presigned URL is exactly such a value. THE ASSERTION IS STRUCTURAL —
-// the key set above is the guard — and this is the direct one beside it,
-// deterministic in the slice because nothing here mints a URL.
+// The cache dies the moment a value in the body changes on every request, and
+// a presigned URL is exactly such a value.
 func TestNoValueInTheEmittedDocumentIsAURL(t *testing.T) {
 	urlish := regexp.MustCompile(`^https?://`)
 	for path, values := range walkStrings(t, emitted(t, clientDocument(t))) {
@@ -431,8 +355,7 @@ func TestNoValueInTheEmittedDocumentIsAURL(t *testing.T) {
 	}
 }
 
-// Two consecutive emissions of one document are byte-identical. Map iteration
-// order is the classic way this fails, and it fails intermittently.
+// Two consecutive emissions of one document are byte-identical.
 func TestTwoEmissionsOfOneDocumentAreByteIdentical(t *testing.T) {
 	doc := clientDocument(t)
 	first := emitted(t, doc)
@@ -525,8 +448,7 @@ func missing(from, in []string) []string {
 	return out
 }
 
-// brief keeps a failure readable: the round trip's reference is 85 KB, and a
-// difference reported by printing both documents is a difference nobody reads.
+// brief keeps a failure readable.
 func brief(v any) string {
 	s := fmt.Sprintf("%#v", v)
 	if len(s) > 120 {
@@ -595,22 +517,7 @@ func firstDifferences(t *testing.T, got, want map[string]any, limit int) []strin
 	return out
 }
 
-// THE SIZE PREMISE, MEASURED THROUGH THIS BUILD RATHER THAN CARRIED (DEC-102).
-//
-// Every size argument in the plan carried 85,422 bytes, which is the CLIENT's
-// format-1 file on disk — a fact about `testdata/client_sample_log.json` and
-// NOT about what this server sends. Two things make the emitted body bigger,
-// and both are structural rather than incidental: DEC-46 replaces 31-32
-// character bundle paths with 64-hex object ids on `Photo.asset` and the three
-// coverAssets, and DEC-91 adds `shared` to every trip. The drift GROWS with the
-// photograph count, which is why carrying the old number understates every
-// argument that rests on it — DEC-31's conditional read most of all.
-//
-// SO THE LEG COMPUTES IT INSTEAD OF ASSERTING A CONSTANT. A byte count written
-// down here would be a number to be wrong about; what is asserted is the
-// RELATIONSHIP — the emitted body is larger than the client's file, and the
-// object-id form is larger again — and the numbers are logged so a reader gets
-// the measurement without a leg that reddens on an unrelated change.
+// The size premise, measured through this build rather than carried.
 func TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch(t *testing.T) {
 	clientFile, err := os.ReadFile(clientFixture)
 	if err != nil {
@@ -637,9 +544,8 @@ func TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch(t *testing.T) {
 	}
 }
 
-// withContentAddresses is the fixture as it will be AFTER DEC-46: every asset
-// locator a 64-character hex object id. It is a size experiment and nothing
-// else — the ids are not real digests and nothing reads them.
+// withContentAddresses is the fixture as it will be after: every asset
+// locator a 64-character hex object id.
 func withContentAddresses(doc logbook.Document) logbook.Document {
 	id := func(n int) string {
 		return fmt.Sprintf("%064x", n)
@@ -667,19 +573,8 @@ func withContentAddresses(doc logbook.Document) logbook.Document {
 	return doc
 }
 
-// EmitPlace IS THE SECOND HALF OF THE SAME RULE, AND THE MEASUREMENT IS IN THE
-// FAILURE MESSAGE (CF-BLO-3, PD-15).
-//
-// A bare `Place` marshals `"visits":null`, and `place.g.dart:30-32` reads it as
-// `(json['visits'] as List<dynamic>).map(...)` — non-nullable, no null branch —
-// so the app throws on the answer to its own write. This is not an edge case on
-// `PUT /v1/places/{id}`: C1's pin is a WISHLIST PLACE with no visits, which is
-// the one client control that drives the route.
-//
-// THE INPUT OMITS THE LIST RATHER THAN CARRYING AN EMPTY ONE, which is the
-// distinction the request contract makes arriving on the response — a `Place`
-// built with `Visits: []logbook.Visit{}` would already marshal as `[]` and the
-// leg would prove nothing.
+// EmitPlace is's second half of the same rule, and the measurement is in
+// the failure message.
 func TestAPlacesVisitsAreEmptyRatherThanNull(t *testing.T) {
 	wishlist := logbook.Place{ID: "tofuku-ji", CityID: "kyoto", Name: "Tofuku-ji"}
 	if wishlist.Visits != nil {
@@ -710,21 +605,8 @@ func TestAPlacesVisitsAreEmptyRatherThanNull(t *testing.T) {
 	}
 }
 
-// A WALK'S POINTS ARE THE SAME RULE A THIRD TIME, AND THIS IS THE ROUTE THE
-// CLIENT THROWS ON (CF-BLO-3, PD-15).
-//
-// `photo.g.dart:47-49` reads `points` as `(json['points'] as List<dynamic>)`
-// with no null branch, and `PUT /v1/walks/{id}` answers a Walk — so N1's 'Name
-// it' and N1's 'Discard' both get an answer the app cannot decode without
-// EmitWalk.
-//
-// THE INPUT IS A WALK WITH NO POINTS, WHICH IS A SHAPE NO ROW CAN HOLD, AND
-// THAT IS THE POINT RATHER THAN A FLAW IN THE LEG. Since 0003's
-// `walks_points_present_ck` an empty track is refused by the schema, so what
-// EmitWalk guards is a Walk that was ASSEMBLED rather than read back — a zero
-// value, a re-read that forgot to join the points, a store answering the
-// request instead of the row. Those are exactly the shapes that put
-// `"cityIds":null` on a running server before EmitTrip existed.
+// A walk's points are the same rule A third time, and this is the route the
+// client throws on.
 func TestAWalksPointsAreEmptyRatherThanNull(t *testing.T) {
 	unread := logbook.Walk{ID: "w-busan", TripID: "autumn-crossing", CityID: "busan"}
 	if unread.Points != nil {
@@ -755,18 +637,8 @@ func TestAWalksPointsAreEmptyRatherThanNull(t *testing.T) {
 	}
 }
 
-// AND THE THREE ENTITIES THAT NEED NO EmitX ARE ASSERTED TO NEED NONE, so
+// The three entities that need no EmitX are asserted to need none, so
 // nobody adds three functions that are noise and nobody deletes the reason.
-//
-// `City`, `Traveller` and `Photo` carry no list field at all, so there is no
-// nil slice for encoding/json to write as null — which is a fact about the
-// STRUCT rather than about a call site, and the day somebody adds a list to
-// any of them, this leg is what says an emitter has to arrive with it.
-//
-// PHOTO JOINS AT R7, AND IT IS THE ONE WORTH NAMING: `PUT /v1/photos/{id}` and
-// `POST /v1/photos/{id}/refile` both answer a bare `Photo`, so this leg is the
-// only thing standing between that decision and an `EmitPhoto` somebody adds
-// for symmetry.
 func TestACityATravellerAndAPhotoCarryNoListAndThereforeNeedNoEmitter(t *testing.T) {
 	for _, entity := range []struct {
 		name  string
@@ -796,17 +668,6 @@ func TestACityATravellerAndAPhotoCarryNoListAndThereforeNeedNoEmitter(t *testing
 			}
 		}
 
-		// AND THE CLAIM IS ASSERTED ON THE STRUCT RATHER THAN ONLY ON ONE
-		// VALUE'S JSON, which is what makes it about the TYPE.
-		//
-		// IT USED TO BE A NULL-COUNTING HEURISTIC — "a null that is not
-		// `coverAsset` is suspicious" — and R7 is where that stopped scaling:
-		// `Photo` has SIX nullable fields (placeId, visitId, caption,
-		// coordinates, accuracyMetres, filedLater) and every one of them is a
-		// legal null the client reads. Widening the name list would have
-		// weakened the check to nothing. Asking the type whether any field is
-		// a slice is the thing the heuristic was standing in for, and it
-		// cannot be satisfied by a value that happens to be populated.
 		for i, kind := 0, reflect.TypeOf(entity.value); i < kind.NumField(); i++ {
 			switch field := kind.Field(i); field.Type.Kind() {
 			case reflect.Slice, reflect.Array:

@@ -21,11 +21,8 @@ func upload(body string, contentType string) (media.Key, media.Upload, []byte) {
 		[]byte(body)
 }
 
-// THE TWO-VARIABLE MISTAKE IS A STATE THIS API CAN EXPRESS, AND THIS IS WHERE
-// IT REDDENS (DEC-88). Key.Object and Upload.SHA256 hold one fact between
-// them, so the only safe answer to a disagreement is to refuse: picking either
-// one silently signs a capability to write bytes at an address that does not
-// name them.
+// The two-variable mistake is a state this api can express, and this is where
+// it reddens.
 func TestPresignPutRefusesADigestThatDisagreesWithTheKey(t *testing.T) {
 	store := media.NewMemory()
 	key, up, _ := upload("the bytes the client promised", "image/png")
@@ -60,7 +57,7 @@ func TestPresignPutRefusesWhatCannotBeSigned(t *testing.T) {
 }
 
 // The header map is the same four names at both seams, so a handler leg
-// written against Memory is a leg about the real set (DEC-88).
+// written against Memory is a leg about the real set.
 func TestTheTwinHandsBackTheSameFourHeaders(t *testing.T) {
 	store := media.NewMemory()
 	key, up, _ := upload("a photograph", "image/png")
@@ -92,8 +89,6 @@ func TestTheTwinHandsBackTheSameFourHeaders(t *testing.T) {
 			"already passed", headers["content-type"])
 	}
 
-	// And the same honesty check the integration tier runs: the map's key set
-	// is the URL's signed headers minus host.
 	signed, err := media.SignedHeaders(url)
 	if err != nil {
 		t.Fatalf("SignedHeaders: %v", err)
@@ -110,9 +105,7 @@ func TestTheTwinHandsBackTheSameFourHeaders(t *testing.T) {
 	}
 }
 
-// WHICH LIFETIME EACH AUDIENCE GETS, at the seam with no daemon (DEC-84). The
-// integration tier asserts the same thing off a real signature; this one is
-// what a handler leg in R3 and R8 can rely on.
+// Lifetime each audience gets, at the seam with no daemon.
 func TestEachAudienceGetsItsOwnLifetimeInTheTwin(t *testing.T) {
 	store := media.NewMemory()
 	store.TTL[media.Private] = 2 * time.Minute
@@ -136,9 +129,7 @@ func TestEachAudienceGetsItsOwnLifetimeInTheTwin(t *testing.T) {
 	}
 }
 
-// THE TWIN REFUSES WHAT MINIO REFUSES, or a handler leg proves nothing. Each
-// row names the S3 code the real server answers, because that is what the
-// integration legs assert on.
+// The twin refuses what minio refuses, or a handler leg proves nothing.
 func TestTheTwinEnforcesTheFourRefusals(t *testing.T) {
 	key, up, body := upload("the bytes the client promised", "image/png")
 
@@ -187,7 +178,6 @@ func TestTheTwinEnforcesTheFourRefusals(t *testing.T) {
 			t.Fatalf("the second Put at a committed address answered %v — and the "+
 				"client's retry story reads this as SUCCESS, not failure", err)
 		}
-		// The positive half: the bytes that are there are the first ones.
 		got, err := store.Stat(t.Context(), key)
 		if err != nil {
 			t.Fatalf("Stat: %v", err)
@@ -213,14 +203,7 @@ func TestStatAnswersTheSentinelForAKeyThatIsNotThere(t *testing.T) {
 	}
 }
 
-// THE TWIN'S READ URLs CARRY THE DISPOSITION, BECAUSE THE REAL ONE'S DO.
-//
-// A twin that accepts what MinIO refuses turns a handler leg into evidence
-// about nothing, and the same holds for what a twin OMITS: without this, the
-// handler leg asserting "every presigned GET is marked as a download" would
-// pass against a handler that stopped asking for one. On the real store the
-// parameter is inside the signature, so a holder cannot strip it — measured:
-// deleting it answers 403 SignatureDoesNotMatch.
+// The twin's read URLs carry the disposition, because the real one's do.
 func TestTheTwinsReadURLsAreMarkedAsDownloadsForBothAudiences(t *testing.T) {
 	m := media.NewMemory()
 	key := media.Key{Traveller: traveller, Object: digestOf("a photograph")}
@@ -241,14 +224,8 @@ func TestTheTwinsReadURLsAreMarkedAsDownloadsForBothAudiences(t *testing.T) {
 	}
 }
 
-// ExpiresIn READS THE WINDOW BACK OFF THE URL, which is what gives the begin
-// response's `expiresAt` ONE SOURCE.
-//
-// A handler computing it from a configured lifetime would be two variables
-// holding one fact, and this one fails silently: the client is told a window
-// the signature does not carry, and the upload dies with
-// SignatureDoesNotMatch some minutes later with nothing on either side saying
-// why.
+// ExpiresIn reads the window back off the url, which is what gives the begin
+// response's `expiresAt` one source.
 func TestExpiresInReadsTheWindowTheURLCarries(t *testing.T) {
 	m := media.NewMemory()
 	key := media.Key{Traveller: traveller, Object: digestOf("a photograph")}
@@ -265,9 +242,6 @@ func TestExpiresInReadsTheWindowTheURLCarries(t *testing.T) {
 		t.Errorf("ExpiresIn = %s, want %s", got, want)
 	}
 
-	// A URL WITH NO WINDOW IS AN ERROR AND NOT A ZERO. A zero duration would
-	// put `expiresAt` at exactly now and read as an upload window that has
-	// already closed, which is a client giving up on a capability that works.
 	for _, bad := range []string{
 		"https://memory.invalid/x",
 		"https://memory.invalid/x?X-Amz-Expires=",

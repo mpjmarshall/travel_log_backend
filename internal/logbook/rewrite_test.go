@@ -1,13 +1,4 @@
-// PD-03's RewriteAssets, and the decoder `make seed` reads the fixture with.
-//
-// THE FUNCTION IS NAMED RATHER THAN INLINE FOR ONE MEASURED REASON. The
-// client's 284 photographs carry exactly TWO distinct locators — 189 of one
-// and 95 of the other (DEC-75) — so a rewrite that points one locator at the
-// other's digest changes 189 rows and leaves every count, every foreign key
-// and every referential-integrity check green. The only thing that can see it
-// is a diff of the emitted document against the client's own, which is what
-// internal/seed's round trip does. A named function is what gives that
-// mutation somewhere to be applied.
+// The RewriteAssets, and the decoder `make seed` reads the fixture with.
 package logbook_test
 
 import (
@@ -18,9 +9,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// The two locators the client's own document actually holds, and two digests
-// that are 64 lowercase hex characters because that is what
-// media_objects_id_sha256_ck constrains an id to.
+// The two locators the client's own document actually holds.
 const (
 	cardIreland  = "assets/imagery/card-ireland.png"
 	heroMountain = "assets/imagery/hero-mountain.png"
@@ -33,11 +22,7 @@ func fixtureMapping() map[string]string {
 	return map[string]string{cardIreland: cardDigest, heroMountain: heroDigest}
 }
 
-// FOUR COLUMNS, AND THE COUNT IS THE POINT (DEC-46). DEC-40's format bump
-// describes four fields whose MEANING changed, and a rewrite that reaches
-// three of them leaves a bundle path in a column the schema constrains to
-// 64 hex characters — which fails at the INSERT, but only for the columns
-// that have the CHECK, and cities.cover_asset is one of the ones that does.
+// Four columns, and the count is the point.
 func TestRewriteAssetsReachesAllFourColumns(t *testing.T) {
 	doc := logbook.Document{
 		Photos: []logbook.Photo{{ID: "p1", Asset: cardIreland}},
@@ -65,9 +50,7 @@ func TestRewriteAssetsReachesAllFourColumns(t *testing.T) {
 	}
 }
 
-// A NULL COVER IS NOT AN UNMAPPED ONE. Seven of the client's own rows have no
-// cover at all — one trip, three cities, eight places — so a rewrite that
-// treated absence as a miss would refuse the very document it exists for.
+// A null cover is not an unmapped one.
 func TestRewriteAssetsLeavesAnAbsentCoverAbsent(t *testing.T) {
 	doc := logbook.Document{
 		Trips:  []logbook.Trip{{ID: "t1"}},
@@ -85,10 +68,7 @@ func TestRewriteAssetsLeavesAnAbsentCoverAbsent(t *testing.T) {
 	}
 }
 
-// IT REFUSES AN UNMAPPED LOCATOR AND NAMES IT. The alternative — passing an
-// unknown locator through — writes a bundle path into a column whose CHECK is
-// `^[0-9a-f]{64}$`, and the failure arrives as SQLSTATE 23514 naming a
-// constraint rather than naming the file nobody uploaded.
+// It refuses an unmapped locator and names it.
 func TestRewriteAssetsRefusesAnUnmappedLocatorAndNamesIt(t *testing.T) {
 	for _, tc := range []struct {
 		what string
@@ -123,13 +103,8 @@ func TestRewriteAssetsRefusesAnUnmappedLocatorAndNamesIt(t *testing.T) {
 	}
 }
 
-// THE INPUT IS NOT MUTATED, AND THIS IS THE LEG THAT COSTS SOMETHING TO GET
-// WRONG. A Document is six slice headers; assigning one copies the headers and
-// shares every backing array, so the obvious implementation rewrites the
-// CALLER's document in place. The round trip in internal/seed compares the
-// client's own decoded document against what came back out of PostgreSQL — and
-// an in-place rewrite makes both sides the same memory, so the strongest leg
-// this project can write would pass against anything at all.
+// The input is not mutated, and this is the leg that costs something to get
+// wrong.
 func TestRewriteAssetsDoesNotTouchTheDocumentItWasGiven(t *testing.T) {
 	doc := logbook.Document{
 		Photos: []logbook.Photo{{ID: "p1", Asset: cardIreland}},
@@ -149,9 +124,7 @@ func TestRewriteAssetsDoesNotTouchTheDocumentItWasGiven(t *testing.T) {
 	}
 }
 
-// THE CLIENT'S OWN DOCUMENT, WHICH IS THE ONLY INPUT THIS FUNCTION HAS. Every
-// one of the four columns is exercised by it, and the assertion is that
-// NOTHING is left holding a bundle path afterwards.
+// The client's own document, which is the only input this function has.
 func TestRewriteAssetsLeavesNoBundlePathInTheClientsOwnLog(t *testing.T) {
 	out, err := logbook.RewriteAssets(clientDocument(t), fixtureMapping())
 	if err != nil {
@@ -184,9 +157,6 @@ func TestRewriteAssetsLeavesNoBundlePathInTheClientsOwnLog(t *testing.T) {
 		}
 	}
 
-	// TWO DIGESTS ACROSS THE WHOLE LIBRARY, and that is DEC-38's whole
-	// argument rather than a curiosity: content addressing collapses 284
-	// photographs and 19 covers onto two objects.
 	if len(seen) != 2 {
 		t.Errorf("distinct object ids = %d (%v), want 2", len(seen), seen)
 	}
@@ -223,10 +193,6 @@ func TestDecodeEnvelopeReadsTheClientsOwnFile(t *testing.T) {
 		t.Fatalf("DecodeEnvelope: %v", err)
 	}
 
-	// The client's own file is format 1; the server emits 2. DecodeEnvelope
-	// reports the version and does NOT judge it — the seed is loading a
-	// captured document rather than serving a request, and DEC-40's refusal
-	// belongs on the wire.
 	if envelope.Version != 1 {
 		t.Errorf("version = %d, want the client's 1", envelope.Version)
 	}

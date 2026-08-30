@@ -48,12 +48,8 @@ func firstLine(t *testing.T, buf *bytes.Buffer) map[string]any {
 	return lines[0]
 }
 
-// === Chain ===
-
 // The fold direction is the whole of this function and it is invisible by
-// inspection: reverse the loop and the chain still compiles, still runs every
-// middleware exactly once, and runs them INSIDE OUT — recover innermost, where
-// it catches nothing that happens above it.
+// inspection.
 func TestChainAppliesTheFirstMiddlewareOutermost(t *testing.T) {
 	var order []string
 	mark := func(name string) httpx.Middleware {
@@ -90,9 +86,7 @@ func TestChainWithNoMiddlewareIsTheHandler(t *testing.T) {
 	}
 }
 
-// === Recover ===
-
-// The panic value is the one string in this test that must NOT travel to the
+// The panic value is the one string in this test that must not travel to the
 // wire.
 func TestAPanickingHandlerAnswers500AndTheEnvelope(t *testing.T) {
 	log, _ := testLogger()
@@ -116,10 +110,7 @@ func TestAPanickingHandlerAnswers500AndTheEnvelope(t *testing.T) {
 	}
 }
 
-// RECOVER IS OUTERMOST, so the request it holds predates the id. It reads the
-// id off the response header the request-id middleware has already set on the
-// shared ResponseWriter — without that, the one log line that matters most is
-// the one line that cannot be correlated.
+// recover is outermost, so the request it holds predates the id.
 func TestThePanicItselfGoesToTheLogWithTheRequestID(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -154,10 +145,8 @@ func TestThePanicItselfGoesToTheLogWithTheRequestID(t *testing.T) {
 	}
 }
 
-// http.ErrAbortHandler is the stdlib's own signal that a handler is abandoning
-// the response ON PURPOSE. net/http suppresses its log and closes the
-// connection; a recover that swallows it instead turns a deliberate abort into
-// a 500 with a body, on a connection the handler has already given up on.
+// http.ErrAbortHandler is the stdlib's own signal that a handler is
+// abandoning the response on purpose.
 func TestRecoverRepanicsErrAbortHandler(t *testing.T) {
 	log, _ := testLogger()
 	rec := httptest.NewRecorder()
@@ -173,10 +162,7 @@ func TestRecoverRepanicsErrAbortHandler(t *testing.T) {
 	}), httpx.Recover(log)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 }
 
-// A handler that wrote 200 and then panicked has already sent its status. A
-// second WriteHeader is a no-op with a "superfluous" line in the server log,
-// and appending the envelope to a body that is already half a document
-// produces something the client cannot parse at all.
+// A handler that wrote 200 and then panicked has already sent its status.
 func TestRecoverDoesNotWriteOverAResponseThatHasStarted(t *testing.T) {
 	log, _ := testLogger()
 	rec := httptest.NewRecorder()
@@ -193,8 +179,6 @@ func TestRecoverDoesNotWriteOverAResponseThatHasStarted(t *testing.T) {
 		t.Errorf("body = %s, want the handler's own body unamended", got)
 	}
 }
-
-// === RequestID ===
 
 func TestRequestIDIsOnTheResponseAndInTheContext(t *testing.T) {
 	rec := httptest.NewRecorder()
@@ -230,11 +214,7 @@ func TestTwoRequestsGetTwoIDs(t *testing.T) {
 	}
 }
 
-// An inbound X-Request-Id is a string a stranger chose. It lands in every log
-// line for the request, so trusting it hands anyone on the internet a way to
-// forge, collide with or inject into the log — and there is no proxy in front
-// of this server whose header could be trusted instead. Caddy is deferred, and
-// so is the question of trusting anything it sets.
+// An inbound X-Request-Id is a string a stranger chose.
 func TestAnInboundRequestIDIsNotTrusted(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -246,8 +226,6 @@ func TestAnInboundRequestIDIsNotTrusted(t *testing.T) {
 		t.Errorf("the client's own id was adopted: %q", got)
 	}
 }
-
-// === AccessLog ===
 
 func TestAccessLogWritesOneLineWithTheRequestsFacts(t *testing.T) {
 	log, buf := testLogger()
@@ -280,9 +258,7 @@ func TestAccessLogWritesOneLineWithTheRequestsFacts(t *testing.T) {
 	}
 }
 
-// A handler that writes a body and never calls WriteHeader has sent 200, and a
-// recorder that reports 0 for it makes every successful request look like a
-// request that answered nothing.
+// A handler that writes a body and never calls WriteHeader has sent 200.
 func TestAnImplicit200IsLoggedAs200(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -296,9 +272,7 @@ func TestAnImplicit200IsLoggedAs200(t *testing.T) {
 	}
 }
 
-// The query string is not logged. DEC-10/DEC-11's share path is deferred, but
-// its shape is settled: a capability lives in the URL. A logger that records
-// query strings records capabilities, in plain text, forever.
+// The query string is not logged.
 func TestTheQueryStringIsNotLogged(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -327,17 +301,8 @@ func TestAFailedRequestIsLoggedAtError(t *testing.T) {
 	}
 }
 
-// === Timeout ===
-
-// http.TimeoutHandler writes its OWN body, which is the one response DEC-12's
-// AST sweep structurally cannot see. So the handler is constructed with the
-// envelope as its message — and the body must PARSE, not merely contain the
-// word.
-//
-// The handler sleeps for a BOUNDED time rather than waiting on a channel the
-// test closes at cleanup: with a no-op timeout — which is what a broken one
-// looks like — a handler waiting on cleanup deadlocks the test binary instead
-// of failing it.
+// http.TimeoutHandler writes its own body, which is the one response's ast
+// sweep structurally cannot see.
 func TestATimedOutRequestGetsTheJSONEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 
@@ -381,11 +346,7 @@ func TestAFastHandlerPassesThroughTheTimeoutUntouched(t *testing.T) {
 	}
 }
 
-// === The chain as it actually ships ===
-
-// FIVE SINCE DEC-96. It was four, and the count is asserted rather than
-// derived on purpose: a middleware silently added to the shipped chain is a
-// behaviour nothing else in this package would notice.
+// five since.
 func TestBaseIsTheFiveMiddlewaresInTheOrderTheChainNeeds(t *testing.T) {
 	log, _ := testLogger()
 	if got := len(httpx.Base(log, time.Minute)); got != 5 {
@@ -394,11 +355,7 @@ func TestBaseIsTheFiveMiddlewaresInTheOrderTheChainNeeds(t *testing.T) {
 	}
 }
 
-// AND THE POSITION, PROVEN BY WHAT IT PRODUCES. Retry-After must be ABOVE
-// Timeout: http.TimeoutHandler writes its own 503 from inside net/http, so a
-// wrapper below it never sees that status at all. A leg reading the slice
-// order would pass against a chain folded the other way; this one hangs a
-// handler and reads the header off the answer.
+// The position, proven by what it produces.
 func TestTheTimeoutsOwn503CarriesRetryAfter(t *testing.T) {
 	log, _ := testLogger()
 	release := make(chan struct{})
@@ -420,20 +377,7 @@ func TestTheTimeoutsOwn503CarriesRetryAfter(t *testing.T) {
 	}
 }
 
-// Order, proven by what it produces rather than by reading the slice. A panic
-// answered as JSON proves recover is above the handler; the access line
-// carrying the response's id proves request id is above access log; and an
-// access line existing AT ALL for a timed-out request proves access log is
-// above the timeout — inside it, TimeoutHandler would have returned first and
-// the line would never be written.
-//
-// MEASURED CONSEQUENCE OF RECOVER BEING OUTERMOST, and the reason the access
-// line's status is asserted to be 0: the access log's defer runs as the panic
-// unwinds — BEFORE the outer recover has written anything — so the line records
-// the status the HANDLER wrote, which is none. 0 is the honest answer and the
-// request id is what joins the two lines. Do not "fix" this by moving recover
-// inside the access log: it would then catch nothing that happens in the
-// middlewares above it.
+// Order, proven by what it produces rather than by reading the slice.
 func TestThroughTheWholeChainAPanicIsAJSON500WithACorrelatedAccessLine(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -495,25 +439,7 @@ func TestThroughTheWholeChainATimeoutIsLoggedAndAnswered(t *testing.T) {
 	}
 }
 
-// === DEC-101: the access log answers a latency question ===
-
-// MEASURED over 21.35 hours of the live stack, 15,960 access lines:
-// `durationMs` is an int64 of MILLISECONDS, so 15,151 of them read
-// `durationMs:0` and NO LATENCY QUESTION IS ANSWERABLE FROM THOSE LOGS AT ALL.
-// The only non-zero values in the whole sample were 4 and 9.
-//
-// THE NON-ZERO ASSERTION IS THE ONE THAT MATTERS. A leg asserting only that
-// the field EXISTS would have passed against the defect for 21 hours, which is
-// exactly what happened.
-//
-// AND THE HANDLER SLEEPS FOR LESS THAN A MILLISECOND, WHICH IS THE WHOLE
-// DESIGN OF THIS LEG. The first draft slept 2ms and the mutation — rename the
-// field and keep `Milliseconds()` — SURVIVED IT, because two milliseconds is
-// two milliseconds either way. That mutation is the one the ruling calls "a
-// rename that looks like a fix and is not", so the leg has to run in the range
-// where the two units disagree: 95% of this API's requests, and 15,151 of the
-// 15,960 lines that were measured. 200µs is comfortably under one millisecond
-// and comfortably over one microsecond, so neither assertion is a race.
+// measured over 21.35 hours of the live stack, 15,960 access lines.
 func TestTheAccessLineCarriesMicrosecondsAndTheyAreNotZero(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -540,16 +466,8 @@ func TestTheAccessLineCarriesMicrosecondsAndTheyAreNotZero(t *testing.T) {
 	}
 }
 
-// `travellerId` ON THE LINE WHERE AUTH RESOLVED ONE, AND ABSENT WHERE IT DID
-// NOT. It costs nothing at one traveller, and it is the field that has to
-// thread through middleware — which is the whole difficulty: the access log is
-// ABOVE auth, and its deferred line runs against the request auth was HANDED,
-// not the one auth created. A slot in the context is what closes that, and a
-// leg that only checked the authenticated case would pass against a slot that
-// is never cleared between requests.
-//
-// The redactor is keyed on substrings of token/passphrase/authorization, so an
-// id is safe to log.
+// `travellerId` on the line where auth resolved one, and absent where it did
+// not.
 func TestTheAccessLineNamesTheTravellerWhenThereIsOne(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -586,14 +504,7 @@ func TestTheAccessLineNamesTheTravellerWhenThereIsOne(t *testing.T) {
 	}
 }
 
-// THE MATCHED PATTERN BESIDE THE RAW PATH. `path` alone is the raw URL, so once
-// `/v1/trips/{id}` exists nothing aggregates: every trip is its own line and
-// "how slow is the trip write" has no query that answers it.
-//
-// IT IS RECORDED AND NOT DERIVED, because `http.ServeMux` sets `r.Pattern` on a
-// CLONE it passes downwards — the outer request the access log holds never sees
-// it. httpapi.Mount records it from the route table, which is the same string
-// and is the one the table is already the authority for.
+// The matched pattern beside the raw path.
 func TestTheAccessLineCarriesTheMatchedPatternBesideTheRawPath(t *testing.T) {
 	log, buf := testLogger()
 
@@ -615,12 +526,7 @@ func TestTheAccessLineCarriesTheMatchedPatternBesideTheRawPath(t *testing.T) {
 	}
 }
 
-// /healthz OFF THE INFO LOG. The disk cost is survivable anywhere; the SIGNAL
-// cost is a 20:1 dilution of the one file you read at 3am — the container
-// probes every five seconds forever.
-//
-// IT IS DEMOTED AND NOT DROPPED, and it is demoted only while it is HEALTHY. A
-// probe that fails is the most interesting line in the file.
+// /healthz off the info log.
 func TestHealthzIsOffTheInfoLogWhileItIsHealthy(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -646,8 +552,7 @@ func TestHealthzIsOffTheInfoLogWhileItIsHealthy(t *testing.T) {
 	}
 }
 
-// AND THE CONTROL: an ordinary route is NOT demoted. Without it the leg above
-// is satisfied by an access log that writes everything at Debug.
+// The control: an ordinary route is not demoted.
 func TestAnOrdinaryRequestStaysAtInfo(t *testing.T) {
 	log, buf := testLogger()
 	httpx.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

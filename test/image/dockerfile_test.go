@@ -1,8 +1,5 @@
-// What the runtime image IS, read off the built artefact rather than off the
-// Dockerfile's text. A grep of the Dockerfile can only prove that somebody
-// typed a line; these legs prove the line survived the build — which is a
-// different claim, and the one that matters when a base image, a COPY path or
-// a build flag changes underneath it.
+// What the runtime image is, read off the built artefact rather than off the
+// Dockerfile's text.
 package image_test
 
 import (
@@ -19,7 +16,7 @@ import (
 )
 
 // The four things `scratch` does not supply, per the root Dockerfile's own
-// comment. These constants are the paths those compensations land at.
+// comment.
 const (
 	caBundlePath = "etc/ssl/certs/ca-certificates.crt"
 	binaryPath   = "api"
@@ -57,20 +54,8 @@ func inspectImage(t *testing.T, tag string) imageConfig {
 	return got[0]
 }
 
-// exportImage lists every path in the image's filesystem and returns the bytes
-// of one of them.
-//
-// `docker export` of a created-but-never-started container is the only way to
-// see inside `scratch` from the host: there is no shell to exec, and `docker
-// cp` needs a path you already know. Note that export adds the runtime's own
-// mounts — .dockerenv, /dev, /etc/hosts, /proc, /sys — so absence assertions
-// below name specific paths rather than claiming an exact inventory.
-//
-// The returned keys are NORMALISED — directories arrive from the tar with a
-// trailing slash and files without. MEASURED, not tidied: without it the
-// absence assertions looked for "usr/share/zoneinfo" while the export held
-// "usr/share/zoneinfo/", and a mutation that COPYed the whole zone database
-// into the image left them green. The layer count is what caught it.
+// exportImage lists every path in the image's filesystem and returns the
+// bytes of one of them.
 func exportImage(t *testing.T, tag, want string) (map[string]*tar.Header, []byte) {
 	t.Helper()
 
@@ -117,13 +102,7 @@ func exportImage(t *testing.T, tag, want string) (map[string]*tar.Header, []byte
 	return headers, wanted
 }
 
-// The user must be NUMERIC on both sides of the colon. A name here resolves
-// against an /etc/passwd this image does not have.
-//
-// TestRuntimeImageRunsAsANumericNonRootUser guards the third of the four
-// scratch compensations. The NUMERIC half is the part that cannot be inferred
-// from "non-root": scratch has no /etc/passwd, so `USER nonroot` builds
-// happily and fails at container start with "unable to find user nonroot".
+// The user must be numeric on both sides of the colon.
 func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -149,24 +128,8 @@ func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 	}
 }
 
-// TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag is the HEALTHCHECK
-// WIRING leg, as distinct from the -healthcheck flag it invokes — which VS1's
-// backfill already covers with eleven unit legs. The wiring is what turns a
-// working flag into a health status, and nothing in `go test` can see it.
-//
-// The exec form is the load-bearing half. A HEALTHCHECK written as a bare
-// string becomes ["CMD-SHELL", …] and needs /bin/sh, which scratch does not
-// have — it would build, ship, and report every container unhealthy forever.
-//
-// TWO RELATIONS BETWEEN THE DURATIONS ARE ASSERTED. A timeout at or above the
-// interval overlaps probes rather than spacing them, and a probe that never
-// finishes before the next one starts turns a slow dependency into a
-// permanently pending health status. And the timeout must leave room for the
-// flag's own budget: the root Dockerfile documents four budgets that must nest,
-// innermost first — /healthz's database ping < the probe's request < this
-// timeout < this interval. Only the outer two relations are checked here; the
-// inner two are constants in cmd/api, another package's to change, and a leg
-// pinning them from here would break on a correct edit.
+// TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag is the healthcheck
+// wiring leg, as distinct from the -healthcheck flag it invokes.
 func TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -195,9 +158,7 @@ func TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag(t *testing.T) {
 	}
 }
 
-// TestRuntimeImageEntrypointIsTheBinary — with no CMD, so no argument survives
-// from a base image and `docker run <image>` starts the server rather than a
-// shell.
+// TestRuntimeImageEntrypointIsTheBinary — with no cmd.
 func TestRuntimeImageEntrypointIsTheBinary(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -210,16 +171,8 @@ func TestRuntimeImageEntrypointIsTheBinary(t *testing.T) {
 	}
 }
 
-// TestRuntimeImageCarriesTheCABundle guards the first scratch compensation as
-// an artefact: the file is there, it is not empty, and every user can read it.
-// That last part is not decoration — the bundle is copied from a stage where
-// it is owned by root, and this container runs as 65532, so a 0600 bundle
-// would be invisible to the process that needs it. Whether it FUNCTIONS is a
-// separate leg, in container_test.go, and it runs the container.
-//
-// A real Debian bundle is ~220 KB. The 50 KB floor is deliberately far below
-// that and far above zero: what it rejects is a COPY that produced an empty or
-// truncated file.
+// TestRuntimeImageCarriesTheCABundle guards's first scratch compensation as
+// an artefact.
 func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 	requireDocker(t)
 	files, _ := exportImage(t, image(t), "")
@@ -236,10 +189,8 @@ func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 	}
 }
 
-// TestTheShippedBinaryIsReadableAndExecutableByAnyUser is the second half of
-// the numeric-USER claim, and it is the half that is easy to miss: a correct
-// USER line in front of a 0700 root-owned binary is a container that exits
-// immediately with "permission denied" and no other clue.
+// TestTheShippedBinaryIsReadableAndExecutableByAnyUser is's second half of
+// the numeric-user claim, and it is the half that is easy to miss.
 func TestTheShippedBinaryIsReadableAndExecutableByAnyUser(t *testing.T) {
 	requireDocker(t)
 	files, _ := exportImage(t, image(t), "")
@@ -256,15 +207,7 @@ func TestTheShippedBinaryIsReadableAndExecutableByAnyUser(t *testing.T) {
 	}
 }
 
-// The layer count is TWO — the CA bundle and the binary. Anything more means
-// stage 2 gained a base image or another COPY, which is the change that quietly
-// invalidates the absences below.
-//
-// TestRuntimeImageIsScratchAndHasNothingToFallBackOn measures the PREMISE the
-// other three compensations rest on. Every one of them is only load-bearing
-// because these paths are absent; if a base image ever supplied them, the
-// Dockerfile's comment would be describing a different image and this leg is
-// what says so.
+// The layer count is two — the CA bundle and the binary.
 func TestRuntimeImageIsScratchAndHasNothingToFallBackOn(t *testing.T) {
 	requireDocker(t)
 	files, _ := exportImage(t, image(t), "")
@@ -286,17 +229,8 @@ func TestRuntimeImageIsScratchAndHasNothingToFallBackOn(t *testing.T) {
 	}
 }
 
-// TestTheShippedBinaryEmbedsTheTimezoneDatabase reads the artefact rather than
-// cmd/api/main.go's import line, because the import can be present and the
-// linker can still drop it — and because the source is another agent's file.
-//
-// The signature is the embedded zoneinfo.zip's own entry names, which a zip
-// stores uncompressed in both the local header and the central directory.
-// Measured on this image: "Asia/Tokyo" ×2, "America/New_York" ×2, "TZif" ×598.
-// The negative control is in container_test.go, where the SAME image is shown
-// to have no zoneinfo on disk at all. TZif is the magic at the head of every
-// compiled zone file: one or two could be an accident of some other string,
-// six hundred is the database.
+// TestTheShippedBinaryEmbedsTheTimezoneDatabase reads the artefact rather
+// than cmd/api/main.go's import line.
 func TestTheShippedBinaryEmbedsTheTimezoneDatabase(t *testing.T) {
 	requireDocker(t)
 	_, binary := exportImage(t, image(t), binaryPath)

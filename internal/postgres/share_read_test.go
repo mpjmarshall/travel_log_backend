@@ -1,19 +1,5 @@
-// THE THREE ROW RULES, against a real PostgreSQL where a row either exists or
-// does not (PD-07, docs/PUBLIC-ENVELOPE.md §5).
-//
-// WHAT ONLY THIS CAN SAY. internal/logbook's legs are about KEYS and FLAGS
-// over a source somebody handed it; internal/httpapi's are about statuses,
-// headers and the shape that leaves the process. Neither can see which rows a
-// SELECT returned, and the leak PD-07 found is entirely a question of rows:
-// every key in the leaking document is on the allowlist.
-//
-// THE FIXTURE IS BUILT FOR THE THREE CASES THAT LEAK, and each is asserted to
-// exist before anything relies on it:
-//
-//	a WISHLIST place            in a city the shared trip visits, never been to
-//	ANOTHER TRIP'S place        in the same city, visited on a different trip
-//	a place visited on BOTH     which is the nested case, and the one a
-//	                            place-level filter passes while it leaks
+// The three row rules, against a real PostgreSQL where a row either exists or
+// does not (docs/public-envelope.md §5).
 package postgres
 
 import (
@@ -24,44 +10,27 @@ import (
 	"travellog/internal/logbook"
 )
 
-// theSharedTrip is the trip the link in this file is for. `kyoto-in-may` is
-// deliberately the OTHER one: seeded() already gives it the live link, so a
-// filter that ignored the trip id entirely would answer this file's questions
-// about the wrong trip and be visible.
+// theSharedTrip is the trip the link in this file is for.
 const theSharedTrip = "autumn-crossing"
 
 const otherTripToken = "mnpqrstuvwxy"
 
-// sharedFixture extends seeded() with the three leaking shapes and a link on
+// sharedFixture extends seeded with's three leaking shapes and a link on
 // the trip under test.
-//
-// EVERYTHING IT ADDS IS IN A CITY THE SHARED TRIP ACTUALLY VISITS. A place in
-// some unrelated city is filtered out by any implementation at all, including
-// a wrong one, so a fixture built that way proves nothing.
 func sharedFixture(t *testing.T) *logbook.PublicSource {
 	t.Helper()
 	db := seeded(t)
 
-	// The place visited on BOTH trips. seeded() gives fushimi-inari one visit
-	// on kyoto-in-may; this is its visit on the shared trip.
-	//
-	// THE ORDINALS ARE NEWEST FIRST, which is the client's own order and what
-	// `visits_place_ordinal_uq` makes a fact about the row rather than about
-	// the query. The September visit is the newer of the two, so it takes
-	// ordinal 0 and May's moves to 1 — a place accumulates visits across
-	// trips, which is the whole shape this file is about.
 	mustExec(t, db, `UPDATE visits SET ordinal = 1 WHERE traveller_id=$1 AND id='v-fushimi-may'`, tid)
 	mustExec(t, db, `INSERT INTO visits (traveller_id, id, place_id, trip_id, ordinal, at, note)
 		VALUES ($1,'v-fushimi-autumn','fushimi-inari',$2,0,'2027-09-20T07:05:00Z','the torii went on for ever')`,
 		tid, theSharedTrip)
 
-	// ANOTHER TRIP'S PLACE, in kyoto, which the shared trip does visit.
 	mustExec(t, db, `INSERT INTO places (traveller_id, id, city_id, name, lat, lng)
 		VALUES ($1,'nishiki','kyoto','Nishiki',35.00,135.76)`, tid)
 	mustExec(t, db, `INSERT INTO visits (traveller_id, id, place_id, trip_id, ordinal, at)
 		VALUES ($1,'v-nishiki-may','nishiki','kyoto-in-may',0,'2027-05-04T07:05:00Z')`, tid)
 
-	// A walk on the shared trip, and a DISMISSED one beside it.
 	mustExec(t, db, `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points, dismissed)
 		VALUES ($1,'w-autumn',$2,'kyoto','2027-09-20',5.5,
 		        '[{"lat":34.96,"lng":135.77},{"lat":34.97,"lng":135.78}]'::jsonb,false),
@@ -71,9 +40,6 @@ func sharedFixture(t *testing.T) *logbook.PublicSource {
 	mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token_hash) VALUES ($1,$2,$3)`,
 		tid, theSharedTrip, logbook.HashShareToken(otherTripToken))
 
-	// THE FIXTURE IS ASSERTED BEFORE IT IS RELIED ON. Every number below is a
-	// premise of a leg in this file, and a fixture that quietly stopped
-	// holding one would make the leg pass while proving nothing.
 	if n := count(t, db, `SELECT count(*) FROM visits WHERE place_id='wishlist-pin'`); n != 0 {
 		t.Fatalf("wishlist-pin has %d visits; this file needs a place nobody has been to", n)
 	}
@@ -98,12 +64,7 @@ func sharedFixture(t *testing.T) *logbook.PublicSource {
 	return &src
 }
 
-// THE FAILING TEST THIS STEP WAS WRITTEN AGAINST (PD-07).
-//
-// Every key in the document a key-set walk sees is on the allowlist; the
-// defect is WHICH ROWS are there. A place the traveller has never been to, and
-// a place visited on an entirely different trip, both leak the shape of a
-// private log through a link that was shared for one trip.
+// The failing test this step was written against.
 func TestThePublicEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	src := sharedFixture(t)
 
@@ -130,12 +91,7 @@ func TestThePublicEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	}
 }
 
-// THE NESTED CASE, WHICH THE LEG ABOVE PASSES WHILE IT LEAKS.
-//
-// A place correctly published because it is on the shared trip carries every
-// OTHER trip's visits with it — their dates, and their notes. A key-set walk
-// passes. A "no other trip's id appears" leg passes too, once `tripId` is off
-// the allowlist, which it is.
+// The nested case, which the leg above passes while it leaks.
 func TestAPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	src := sharedFixture(t)
 
@@ -157,18 +113,12 @@ func TestAPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	if published.Visits[0].TripID != theSharedTrip {
 		t.Errorf("published visit %s belongs to %s", published.Visits[0].ID, published.Visits[0].TripID)
 	}
-	// The visible half, before the leak: the client reads the first day's `at`
-	// as when the place was last visited, so an unfiltered array dates the
-	// public page to a trip the link was never shared for.
 	if got := published.Visits[0].At.Time().Year(); got != 2027 {
 		t.Errorf("the first day is dated %d", got)
 	}
 }
 
-// PHOTOGRAPHS AND WALKS ARE `trip_id`, AND A DISMISSED WALK IS NOT PUBLISHED.
-//
-// N1's 'Discard' is an action the owner took to be rid of a track; publishing
-// it would publish the thing they got rid of.
+// photographs and walks are `trip_id`, and A dismissed walk is not published.
 func TestThePublicEnvelopeCarriesOneTripsPhotographsAndNoDiscardedTrack(t *testing.T) {
 	src := sharedFixture(t)
 
@@ -200,11 +150,7 @@ func TestThePublicEnvelopeCarriesOneTripsPhotographsAndNoDiscardedTrack(t *testi
 	}
 }
 
-// THE CITIES ARE THE TRIP'S OWN, IN `trip_cities.ordinal` ORDER.
-//
-// Travel order is load-bearing on the wire and `ordinal` is the only thing
-// that carries it — the private read orders cities by id, and the trip's own
-// `cityIds` is what puts them back in the order somebody travelled.
+// The cities are the trip's own, in `trip_cities.ordinal` order.
 func TestThePublicEnvelopeCarriesTheTripsCitiesInTravelOrder(t *testing.T) {
 	src := sharedFixture(t)
 
@@ -212,9 +158,6 @@ func TestThePublicEnvelopeCarriesTheTripsCitiesInTravelOrder(t *testing.T) {
 	for _, city := range src.Cities {
 		got = append(got, city.ID)
 	}
-	// seeded(): autumn-crossing is kyoto at ordinal 0 and seoul at 1. Sorted
-	// by id that would be kyoto, seoul as well — so the leg asserts the TRIP's
-	// own cityIds agree with it, which is the field the client reads.
 	if len(got) != 2 || got[0] != "kyoto" || got[1] != "seoul" {
 		t.Errorf("cities = %v, want [kyoto seoul] in trip_cities.ordinal order", got)
 	}
@@ -223,15 +166,7 @@ func TestThePublicEnvelopeCarriesTheTripsCitiesInTravelOrder(t *testing.T) {
 	}
 }
 
-// REVOKED AND UNKNOWN, AT THE STORE (PD-12, DEC-10).
-//
-// THE LOOKUP IS THE ONLY BRANCH. This method selects the row REGARDLESS of
-// `revoked_at` and answers what it found, so the caller decides once and
-// nothing downstream can tell "this token was once real" from "this token
-// never existed" by what work was done. A store that filtered
-// `AND revoked_at IS NULL` would be correct and would make that impossible to
-// arrange, because the caller would have no way to answer both cases the same
-// way.
+// revoked and unknown, at the store.
 func TestTheLookupAnswersARevokedRowRatherThanNothing(t *testing.T) {
 	db := seeded(t)
 	store := ShareReadStore{DB: db}

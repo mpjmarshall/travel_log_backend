@@ -1,32 +1,4 @@
-// THE PUBLIC ENVELOPE AT FIXTURE SCALE, against the client's own log.
-//
-// WHY THIS FILE EXISTS BESIDE internal/postgres/share_read_test.go, which
-// tests the same store. That file's fixture is three places and two trips,
-// built to hold the three leaking shapes; every number in it was chosen by
-// whoever wrote it. THIS one is the log the client actually encoded, and the
-// numbers were MEASURED rather than chosen:
-//
-//	fushimi-inari       28 visits across 4 trips, exactly 1 on the shared one
-//	                    — and 1 of the other 27 carries a NOTE, on a trip whose
-//	                    shareNotes is true, so the note filter does not save it
-//	autumn-crossing     5 places have a visit on it; 8 places sit in its five
-//	                    cities, so the city-scoped rule publishes 3 pins the
-//	                    trip never went to, one of them a wishlist
-//	                    (`tofuku-ji`, zero visits)
-//	                    96 photographs, 31 of them carrying a coordinate
-//
-// THE 28-VERSUS-1 IS THE WHOLE ARGUMENT. A place accumulates visits across
-// trips by design — it is what makes 'Third visit' and P1's year rows possible
-// — so a place published because of ONE visit drags twenty-seven others in
-// with it, with their dates and their notes. Every key in that document is on
-// the allowlist and a key-set walk passes.
-//
-// THE SEEDED LOG'S ONLY LIVE LINK IS `kyoto-9f2a`, WHICH IS NOT A TOKEN THIS
-// SERVER WOULD MINT: ten characters with a hyphen, against
-// `^[a-z0-9]{12,64}$`. It is what the client's own encoder wrote and what
-// `make seed` hashes into `share_links`, and it is the reason the public read
-// does not validate the token it is handed — see internal/httpapi's
-// publicShare.
+// The public envelope at fixture scale, against the client's own log.
 package seed_test
 
 import (
@@ -44,9 +16,6 @@ const (
 	sharedTrip  = "autumn-crossing"
 	sharedToken = "kyoto-9f2a"
 
-	// MEASURED ON THE CLIENT'S OWN FIXTURE, and every one is asserted before
-	// it is relied on. A number that quietly stopped holding would make the
-	// leg below pass while proving nothing.
 	fixtureFushimiVisits    = 28
 	fixtureFushimiOnTrip    = 1
 	fixturePlacesOnTrip     = 5
@@ -82,11 +51,10 @@ func publishedBySeed(t *testing.T) (*sql.DB, logbook.PublicSource) {
 	return db, src
 }
 
-// THE PLAN'S FIRST NAMED FAILING TEST, at the scale it was written against.
+// The plan's first named failing test, at the scale it was written against.
 func TestTheSeededEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	db, src := publishedBySeed(t)
 
-	// THE FIXTURE, ASSERTED FIRST.
 	if got := rows(t, db, `SELECT count(*) FROM visits WHERE place_id='tofuku-ji'`); got != 0 {
 		t.Fatalf("tofuku-ji has %d visits; this leg needs a wishlist place", got)
 	}
@@ -121,8 +89,7 @@ func TestTheSeededEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	}
 }
 
-// THE PLAN'S SECOND NAMED FAILING TEST: the nested rows the first one cannot
-// see (PD-07).
+// The nested rows, which the leg above passes while it leaks.
 func TestASeededPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	db, src := publishedBySeed(t)
 
@@ -163,7 +130,7 @@ func TestASeededPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	}
 }
 
-// THE ROW RULES FOR PHOTOGRAPHS, WALKS AND CITIES, at fixture scale.
+// The row rules for photographs, walks and cities, at fixture scale.
 func TestTheSeededEnvelopeCarriesOneTripsPhotographsWalksAndCities(t *testing.T) {
 	db, src := publishedBySeed(t)
 
@@ -185,10 +152,6 @@ func TestTheSeededEnvelopeCarriesOneTripsPhotographsWalksAndCities(t *testing.T)
 			"in trip_cities.ordinal order, out of %d in the log",
 			len(src.Cities), fixtureCitiesOnTrip, rows(t, db, `SELECT count(*) FROM cities`))
 	}
-	// TRAVEL ORDER, AGAINST THE ITINERARY ROW AND NOT AGAINST A SORT. The
-	// client's own encoder wrote kyoto first and the store's private read
-	// orders cities by id, so the two disagree the moment a trip visits a city
-	// whose id sorts earlier.
 	for i, city := range src.Cities {
 		want := rows(t, db, `SELECT count(*) FROM trip_cities
 			WHERE trip_id=$1 AND city_id=$2 AND ordinal=$3`, sharedTrip, city.ID, i)
@@ -210,17 +173,8 @@ func TestTheSeededEnvelopeCarriesOneTripsPhotographsWalksAndCities(t *testing.T)
 	}
 }
 
-// AND THE WHOLE ENVELOPE, THROUGH THE EMITTER, AT FIXTURE SCALE — which is
-// where DEC-108's measurement lives.
-//
-// 31 OF 96 PHOTOGRAPHS CARRY A COORDINATE, so a photograph's coordinate is a
-// MOVEMENT TRACE — where the traveller stood, to metres, with a timestamp
-// beside it — rather than a set of places they chose to pin. DEC-108 ruled
-// that ONE switch governs both, because H1 says 'share coordinates' and the
-// user reading it means all of them; a control that silently governs less than
-// its label says is the same defect as D2's subtitle promising more than the
-// model could keep. This leg is that ruling at the scale the measurement was
-// taken.
+// The whole envelope, through the emitter, at fixture scale — which is
+// where the measurement lives.
 func TestTheSeededEnvelopeHonoursOneSwitchForPinsAndTraces(t *testing.T) {
 	db, src := publishedBySeed(t)
 
@@ -236,9 +190,6 @@ func TestTheSeededEnvelopeHonoursOneSwitchForPinsAndTraces(t *testing.T) {
 			media.Key{Traveller: travellerUUID, Object: objectID}, media.Public)
 	}
 
-	// WITH THE SWITCH ON. The seeded trip's own value is false — the client's
-	// default, because a pin on your accommodation has to be turned on every
-	// time — so this leg turns it on rather than assuming it.
 	on := src
 	on.Trip.ShareCoordinates = true
 	withPins, err := logbook.EmitPublic(on, mint)
@@ -253,9 +204,6 @@ func TestTheSeededEnvelopeHonoursOneSwitchForPinsAndTraces(t *testing.T) {
 			countWalkPoints(withPins))
 	}
 
-	// WITH THE SWITCH OFF: the only coordinates left are the five city
-	// centres. That is the scalpel — a city centre is coarse, it IS a city,
-	// and it is what a map opens on when there are no pins to fit.
 	off := src
 	off.Trip.ShareCoordinates = false
 	withoutPins, err := logbook.EmitPublic(off, mint)
@@ -267,18 +215,13 @@ func TestTheSeededEnvelopeHonoursOneSwitchForPinsAndTraces(t *testing.T) {
 			"the five city centres and nothing else. Every other one is somewhere a "+
 			"person stood.", got, fixtureCitiesOnTrip)
 	}
-	// AND THE DOCUMENT IS OTHERWISE WHOLE. A filter that emptied it satisfies
-	// the line above.
 	if len(withoutPins.Photos) != fixturePhotosOnTrip || len(withoutPins.Places) != fixturePlacesOnTrip {
 		t.Errorf("the coordinate switch took rows with it: %d photographs and %d places",
 			len(withoutPins.Photos), len(withoutPins.Places))
 	}
 }
 
-// countLats counts every `lat` anywhere in the marshalled document. It is a
-// COUNT and not a path claim on purpose — the path claim is
-// internal/httpapi's structural walk, and this is the arithmetic that walk
-// cannot do at fixture scale.
+// countLats counts every `lat` anywhere in the marshalled document.
 func countLats(t *testing.T, env logbook.Public) int {
 	t.Helper()
 	raw, err := json.Marshal(env)

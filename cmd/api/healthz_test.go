@@ -1,11 +1,4 @@
-// TEST-FIRST (agent-graph-spec-V4 §6.7). These legs were written and watched to
-// fail against VS1's placeholder /healthz — the one that answers a constant —
-// which is precisely the pre-state VS2's step text names for its mutation
-// proof: "make healthz return a constant and the 503 leg reddens". The red
-// output is in CLAUDE.md under "VS2".
-//
-// The legs in main_test.go are BACKFILL and say so in their own header. These
-// are not, and are kept in a separate file so the two labels cannot blur.
+// test-first (agent-graph-spec-V4 §6.7).
 package main
 
 import (
@@ -22,17 +15,12 @@ import (
 	"travellog/internal/logging"
 )
 
-// quiet is the logger every leg that is not ABOUT logging passes in. newMux
-// takes a *slog.Logger rather than reaching for slog.Default() so a test can
-// read what the handler wrote — see TestHealthzLogsTheDriverErrorItRefusesToShow.
+// quiet is the logger every leg that is not about logging passes in.
 func quiet() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
-// stubPinger stands in for *sql.DB. newMux takes the narrow interface rather
-// than the concrete type precisely so the database-down branch is reachable
-// without a database — the 503 leg is the one VS2 exists for, and a leg that
-// needs Postgres running is a leg that gets skipped.
+// stubPinger stands in for *sql.DB.
 type stubPinger struct {
 	err         error
 	calls       int
@@ -58,9 +46,7 @@ func healthz(t *testing.T, db *stubPinger) *httptest.ResponseRecorder {
 	return rec
 }
 
-// THE LEG THE STEP IS FOR. VS1's /healthz answered 200 unconditionally, so a
-// container whose database had gone was reported healthy by Docker and kept
-// receiving traffic. Nothing else in the repository can tell that apart.
+// A failing ping must answer 503, not 200.
 func TestHealthzAnswers503WhenTheDatabasePingFails(t *testing.T) {
 	rec := healthz(t, &stubPinger{err: errDatabaseDown})
 
@@ -83,9 +69,7 @@ func TestHealthzReportsUnavailableInTheBodyWhenTheDatabasePingFails(t *testing.T
 	}
 }
 
-// The failure body is still JSON. A 503 that answers text is a 503 the client's
-// decoder cannot read, and the envelope is the half most likely to be dropped
-// on an error path.
+// The failure body is still JSON.
 func TestHealthzStaysJSONWhenTheDatabaseIsDown(t *testing.T) {
 	rec := healthz(t, &stubPinger{err: errDatabaseDown})
 
@@ -94,8 +78,7 @@ func TestHealthzStaysJSONWhenTheDatabaseIsDown(t *testing.T) {
 	}
 }
 
-// The ping must not leak into the body. It carries a DSN with a password in it,
-// and /healthz is the one route reachable without authentication.
+// The ping must not leak into the body.
 func TestHealthzDoesNotEchoTheDatabaseError(t *testing.T) {
 	rec := healthz(t, &stubPinger{err: errDatabaseDown})
 
@@ -107,10 +90,7 @@ func TestHealthzDoesNotEchoTheDatabaseError(t *testing.T) {
 func contains(haystack, needle string) bool { return strings.Contains(haystack, needle) }
 
 // The other half of the leg above, and the pair is the point: the detail the
-// body refuses to carry is not thrown away, it goes to the log. DEC-12 states
-// the rule for the API's error envelope — "real detail goes to slog, never to
-// the body" — and /healthz predates that envelope, so it is written here
-// directly. A 503 whose cause is nowhere is an outage nobody can diagnose.
+// body refuses to carry is not thrown away, it goes to the log.
 func TestHealthzLogsTheDriverErrorItRefusesToShow(t *testing.T) {
 	var buf bytes.Buffer
 	rec := httptest.NewRecorder()
@@ -125,8 +105,7 @@ func TestHealthzLogsTheDriverErrorItRefusesToShow(t *testing.T) {
 	}
 }
 
-// And the healthy path is silent. A route Docker hits every five seconds must
-// not write a line every five seconds — that is how a log stops being read.
+// And the healthy path is silent.
 func TestHealthzIsSilentWhenTheDatabaseIsUp(t *testing.T) {
 	var buf bytes.Buffer
 	rec := httptest.NewRecorder()
@@ -138,9 +117,7 @@ func TestHealthzIsSilentWhenTheDatabaseIsUp(t *testing.T) {
 	}
 }
 
-// A cached answer is the same defect as a constant one, arriving later. Docker
-// probes every five seconds and the whole value of the route is that the fifth
-// probe can disagree with the fourth.
+// A cached answer is the same defect as a constant one, arriving later.
 func TestHealthzPingsOnEveryRequest(t *testing.T) {
 	db := &stubPinger{}
 	for i := 1; i <= 3; i++ {
@@ -151,11 +128,8 @@ func TestHealthzPingsOnEveryRequest(t *testing.T) {
 	}
 }
 
-// spec L22: "Use the standard `context` package to handle request timeouts."
-// An unbounded Ping against a wedged server holds the handler until the
-// client's own deadline, and the container's HEALTHCHECK timeout is 3s — so a
-// deadline-free ping turns a slow database into a hung probe rather than an
-// unhealthy report.
+// An unbounded Ping against a wedged server holds the handler open, so the
+// probe must carry its own deadline.
 func TestHealthzPingsWithADeadline(t *testing.T) {
 	db := &stubPinger{}
 	healthz(t, db)
@@ -173,10 +147,8 @@ func TestHealthzStillAnswers200WhenTheDatabaseIsUp(t *testing.T) {
 	}
 }
 
-// The container's two halves, wired: the real mux with a dead database behind a
-// real listener, probed by the real -healthcheck flag. VS1 proved probe reports
-// a non-200 as unhealthy; this is the leg that says the non-200 actually
-// happens when Postgres goes, which is the whole chain Docker relies on.
+// The container's two halves, wired: the real mux with a dead database behind
+// a real listener, probed by the real -healthcheck flag.
 func TestProbeReportsUnhealthyWhenTheDatabaseIsDown(t *testing.T) {
 	srv := httptest.NewServer(newMux(&stubPinger{err: errDatabaseDown}, quiet()))
 	defer srv.Close()

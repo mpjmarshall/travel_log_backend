@@ -1,8 +1,4 @@
-// The Service layer's SHAPE, which is the thing PD-05 is about.
-//
-// What CommitMedia DOES is exercised at internal/httpapi (over the real mux,
-// against media.Memory) and at internal/postgres (against a real database).
-// This file is about the rule that a fourth method arrives as a decision.
+// The Service layer's shape, which is the thing is about.
 package logbook_test
 
 import (
@@ -14,28 +10,8 @@ import (
 	"travellog/internal/logbook"
 )
 
-// THE SERVICE IS THREE OPERATIONS, R3 BUILT THE FIRST AND R6 BUILDS THE
-// SECOND (DEC-62, PD-05).
-//
-// DEC-62 named them — RefilePhoto, RemovePlace and the media commit flow — and
-// ruled IN THE SAME BREATH that most routes are plain CRUD where a service
-// method forwards to the repository, and that such a file is noise.
-//
-// THE THREE LAND IN THREE DIFFERENT STEPS, WHICH IS WHY THIS LEG EXISTS.
-// CommitMedia is R3's, RemovePlace is R6's and RefilePhoto is R7's, so nobody
-// ever sees the pattern in one sitting and a worker looking for symmetry
-// applies "there is a Service" uniformly — at which point every route goes
-// through a method that forwards to a store, and the layer stops meaning
-// anything.
-//
-// IT ASSERTS THE WHOLE SET AND NOT A CEILING. A leg saying "at most three"
-// passes against a Service with one method wrongly named; this names the ones
-// that may be there, so a method arriving reddens it and a method LEAVING
-// reddens it too.
+// The service is three operations, built in two stages.
 func TestTheServiceHasOnlyTheOperationsDEC62Named(t *testing.T) {
-	// The three DEC-62 named, and the step each belongs to. A method not on
-	// this list is a fourth operation and needs the conversation the first
-	// three had.
 	planned := map[string]string{
 		"CommitMedia": "R3",
 		"RemovePlace": "R6",
@@ -57,17 +33,6 @@ func TestTheServiceHasOnlyTheOperationsDEC62Named(t *testing.T) {
 		}
 	}
 
-	// AND THE ONES THE SHIPPED STEPS OWN ARE ACTUALLY THERE. Without this the
-	// loop above passes against a Service with no methods at all.
-	//
-	// THE LIST GROWS ONE ENTRY PER STEP AND IS NOT DERIVED FROM `planned`,
-	// which would make it say "the methods that are there are there". R3
-	// shipped CommitMedia; R6 ships RemovePlace, which is the operation
-	// DEC-62 named for "two branches, and a statement ORDER that silently
-	// inverts D2's promise if reversed". R7 ships RefilePhoto, which is the
-	// operation DEC-62 named for the server VALIDATING the occasion the client
-	// chose rather than choosing one — and which is the last of the three, so
-	// this list stops growing here.
 	for _, shipped := range []string{"CommitMedia", "RefilePhoto", "RemovePlace"} {
 		if !slicesContains(got, shipped) {
 			t.Fatalf("logbook.Service has %v and not %s, which is a shipped step's "+

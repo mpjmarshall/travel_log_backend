@@ -1,11 +1,4 @@
-// The two helpers, and the membership split DEC-50 exists for.
-//
-// TEST-FIRST. Every leg here was written and watched to fail before tx.go had
-// a body, and each was reddened again by its own mutation afterwards.
-//
-// The whole file needs a real PostgreSQL and skips, saying so, when there is
-// none — internal/postgres/testdb decides that, and it refuses a server below
-// 15 rather than skipping it.
+// The two helpers, and the membership split exists for.
 package postgres
 
 import (
@@ -27,24 +20,19 @@ const (
 	noTraveller = "44444444-4444-4444-4444-444444444444"
 )
 
-// blockedFor is how long a leg waits before calling a block a deadlock. It is
-// generous because the alternative — a flake on a loaded machine — is worse
-// than a slow failure.
+// blockedFor is how long a leg waits before calling a block a deadlock.
 const blockedFor = 15 * time.Second
 
 func timeout() <-chan time.Time { return time.After(blockedFor) }
 
-// withTraveller is `migrated` plus one traveller at logbook_version 0. The
-// helpers are keyed on a traveller that exists; the row is the whole fixture.
+// withTraveller is `migrated` plus one traveller at logbook_version 0.
 func withTraveller(t *testing.T) *sql.DB {
 	t.Helper()
 	db, _ := withTravellers(t)
 	return db
 }
 
-// withTravellers answers a migrated schema holding BOTH travellers, and the
-// schema name — which is what testdb.Second needs to open a genuinely separate
-// session on the same tables.
+// withTravellers answers a migrated schema holding both travellers.
 func withTravellers(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	db, schema := testdb.Open(t)
@@ -57,10 +45,8 @@ func withTravellers(t *testing.T) (*sql.DB, string) {
 	return db, schema
 }
 
-// lockIsFree asks a SEPARATE session whether the per-traveller lock can be
-// taken, deriving the key from DEC-06's formula independently of tx.go. Two
-// spellings of one formula is the point: a helper that changed its key would
-// still exclude itself and would stop excluding everything already deployed.
+// lockIsFree asks a separate session whether the per-traveller lock can be
+// taken, deriving the key from the formula independently of tx.go.
 func lockIsFree(t *testing.T, other *sql.DB, travellerID string) bool {
 	t.Helper()
 	ctx := context.Background()
@@ -89,7 +75,7 @@ func version(t *testing.T, db *sql.DB, id string) int64 {
 	return v
 }
 
-// insertTrip is the shape of the write VS7 will make: a row in the payload,
+// insertTrip is the shape of the write will make: a row in the payload,
 // written inside whatever transaction it is handed.
 func insertTrip(ctx context.Context, tx *sql.Tx, id string) error {
 	_, err := tx.ExecContext(ctx,
@@ -161,9 +147,7 @@ func TestWithTravellerTxRollsBackTheBumpWhenTheBodyFails(t *testing.T) {
 	}
 }
 
-// A panicking body must not leave the transaction open. Without the recover the
-// connection stays checked out with an idle-in-transaction session holding the
-// advisory lock, and the NEXT write for that traveller blocks for ever.
+// A panicking body must not leave the transaction open.
 func TestWithTravellerTxRollsBackAPanickingBodyAndDoesNotStrandTheLock(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -245,9 +229,8 @@ func TestWithTravellerLockRollsBackWhenTheBodyFails(t *testing.T) {
 	}
 }
 
-// THE LEG THE SLICE EXISTS FOR, at the store's own level: the two helpers put
-// the same two writes on opposite sides of the version. Route the session write
-// through WithTravellerTx and this reddens.
+// At the store's own level: a session write moves no version and a trip write
+// does.
 func TestASessionWriteDoesNotMoveTheVersionAndATripWriteDoes(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -301,10 +284,8 @@ func TestBothHelpersRefuseATravellerThatIsNotThere(t *testing.T) {
 	}
 }
 
-// The ::text cast in DEC-06 is not decoration, and here it is structural: the
-// id is cast to uuid first, so `hashtextextended` can only be reached through
-// text. Drop the ::text and every leg in this file fails at prepare time with
-// `function hashtextextended(uuid, integer) does not exist`.
+// The::text cast in is not decoration, and here it is structural: the id is
+// cast to uuid first, so `hashtextextended` can only be reached through text.
 func TestATravellerIdThatIsNotAUuidIsRefusedRatherThanHashed(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -319,8 +300,7 @@ func TestATravellerIdThatIsNotAUuidIsRefusedRatherThanHashed(t *testing.T) {
 }
 
 // The lock is per traveller, and both halves are asserted: held against the
-// same id, free against another. A single-id leg passes just as well against a
-// database-wide lock, which would serialise every traveller in the system.
+// same id, free against another.
 func TestTheLockIsHeldForOneTravellerAndNotForAnother(t *testing.T) {
 	db, schema := withTravellers(t)
 	other := testdb.Second(t, schema)
@@ -425,12 +405,7 @@ func TestConcurrentWritersEachGetTheirOwnVersion(t *testing.T) {
 	}
 }
 
-// THE WRITER-ORDERING LEG. What a reader must never see is a trip that is
-// visible under a version that does not count it — which is the one cache bug
-// that never self-corrects, because the phone stores the body under that
-// number and stops asking.
-//
-// Run at -count=50; the failure rate under the mutation is in CLAUDE.md.
+// The writer-ordering leg.
 func TestAReaderNeverSeesATripTheVersionDoesNotCount(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -495,33 +470,7 @@ func TestAReaderNeverSeesATripTheVersionDoesNotCount(t *testing.T) {
 	}
 }
 
-// FOUND AT VS6, AND IT IS A BLOCKER RATHER THAN A TIDY-UP.
-//
-// WithTravellerTx had no `defer tx.Rollback()`. Every one of its four error
-// exits — begin's lock, the bump's ErrNoRows, the bump's driver error, and the
-// body's own error — returned with the transaction still open, so the pooled
-// connection was never checked back in, the session sat `idle in transaction`
-// for the life of the process, and it kept the traveller's advisory lock and
-// every row lock the body had taken. The next write for that traveller blocks
-// for ever, which is the exact failure tx.go's own comment describes for a
-// session-scoped lock and then walks into by another door.
-//
-// THE TWO LEGS THAT ALREADY EXISTED COULD NOT SAY SO. Both of them assert
-// through a SECOND connection, and a SELECT reads the pre-commit snapshot
-// happily under MVCC, so both passed their assertions and then hung in
-// testdb's cleanup, where `DROP SCHEMA … CASCADE` waits on the stranded
-// transaction's relation lock. Measured at `62a7821`, on the committed tree:
-//
-//	$ go test ./internal/postgres/ -run TestWithTravellerTxRollsBackTheBumpWhenTheBodyFails -timeout 20s
-//	=== RUN   TestWithTravellerTxRollsBackTheBumpWhenTheBodyFails
-//	panic: test timed out after 20s
-//	goroutine 37 [chan receive]:
-//	database/sql.(*Tx).awaitDone(…)
-//
-// So this leg exists to give that failure a NAME. db.Stats().InUse is the
-// cheapest true statement about it: a helper that has returned owns no
-// connection. A guard whose only failure mode is a ten-minute timeout is a
-// guard somebody eventually deletes.
+// found at, and it is a blocker rather than A tidy-UP.
 func TestAFailedWriteChecksItsConnectionBackIn(t *testing.T) {
 	db, schema := withTravellers(t)
 	ctx := context.Background()
@@ -559,10 +508,7 @@ func TestAWriteForATravellerWhoIsNotThereChecksItsConnectionBackIn(t *testing.T)
 	}
 }
 
-// freeTheStrandedTransaction is called ONLY on the failing path. Without it
-// the legible failure above turns back into the timeout it was written to
-// replace: testdb's cleanup cannot drop a schema whose tables a stranded
-// transaction still holds.
+// freeTheStrandedTransaction is called only on the failing path.
 func freeTheStrandedTransaction(t *testing.T, schema string) {
 	t.Helper()
 	other := testdb.Second(t, schema)

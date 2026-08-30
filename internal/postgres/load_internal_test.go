@@ -1,11 +1,5 @@
 // What the runner will and will not accept as a migration directory, tested
 // without a database.
-//
-// The filename rule is a guard rather than a convention. S05 says "lexical
-// order", and lexical order over an embed.FS is correct ONLY while every name
-// is zero-padded to the same width: `10_x.up.sql` sorts BEFORE `2_x.up.sql`,
-// so one unpadded name silently reorders the schema. The runner refuses the
-// name rather than trusting the convention.
 package postgres
 
 import (
@@ -119,12 +113,6 @@ func TestLoadMigrationsReadsTheNoTransactionDirectiveOnTheFirstLineOnly(t *testi
 		body string
 		want bool
 	}{
-		// The re-runnability declaration rides along on the first case
-		// because loadMigrations REFUSES a no-transaction file without it
-		// (DEC-99(b)) — so a case testing the directive has to be a file the
-		// runner would actually accept. The other two carry no directive, so
-		// the requirement does not reach them, which is the point of the
-		// third case: a directive on the second line is not a directive.
 		{"first line", "-- migrate:no-transaction\n-- migrate:re-runnable\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (c);\n", true},
 		{"absent", "CREATE TABLE t (x int);\n", false},
 		{"second line", "-- a header\n-- migrate:no-transaction\nCREATE TABLE t (x int);\n", false},

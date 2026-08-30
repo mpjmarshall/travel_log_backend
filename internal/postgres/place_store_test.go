@@ -1,23 +1,4 @@
-// C1's pin and D2's removal against a real PostgreSQL. Test-first.
-//
-// This file needs a database and SKIPS, saying so, when there is none.
-//
-// WHAT ONLY THIS FILE CAN SAY, and it is why the handler legs run against a
-// fake rather than duplicating any of it:
-//
-//  1. A NO-OP RE-SEND OF AN UNCHANGED VISITS ARRAY DOES NOT UNFILE ANYTHING.
-//     Delete-then-insert of identical rows leaves every count where it was and
-//     nulls `photos.visit_id` through `photos_visit_fk … ON DELETE SET NULL`.
-//     No twin executes that FK, so no twin can see it.
-//  2. THE ORDINAL OFFSET GOES UPWARD AND IS BIG ENOUGH. Downward violates
-//     `visits_ordinal_ck`; a fixed `+ 1000` collides on an array longer than
-//     a thousand, because a UNIQUE index is checked per ROW.
-//  3. D2's DELETE BRANCH IS THE ORDER OF TWO STATEMENTS. Reverse them and
-//     `photos_place_fk` clears `place_id` first, so the DELETE matches
-//     nothing and the photographs the user asked to destroy survive.
-//  4. THE KEEP BRANCH CLEARS BOTH COLUMNS AND NOTHING ELSE, which is the
-//     schema doing it rather than Go — and a Go implementation clearing only
-//     one would pass a pair check written on the other.
+// C1's pin and D2's removal against a real PostgreSQL.
 package postgres
 
 import (
@@ -37,8 +18,7 @@ func placeStore(t *testing.T) (PlaceStore, *sql.DB) {
 }
 
 // visitFilings answers photograph id -> visit_id, so a leg can compare the
-// WHOLE map before and after rather than a count. A count of filed
-// photographs is satisfied by two photographs swapping occasions.
+// whole map before and after rather than a count.
 func visitFilings(t *testing.T, db *sql.DB) map[string]string {
 	t.Helper()
 	rows, err := db.QueryContext(context.Background(),
@@ -89,25 +69,7 @@ func at(text string) logbook.Instant {
 	return logbook.At(parsed)
 }
 
-// === THE LEG WRITTEN FIRST ===
-
-// A NO-OP RE-SEND MUST BE A NO-OP (PD-06, DB-BLO-1).
-//
-// Reproduced on this project's own postgres:17.11 against 0001's constraints:
-// delete-then-insert of an IDENTICAL visits array leaves every photograph
-// filed to that place with `visit_id` NULL, because `photos_visit_fk` is
-// ON DELETE SET NULL (visit_id) and re-inserting the same id does not restore
-// the reference.
-//
-// THE PLAN'S OWN STANDING GUARDS ARE BLIND TO THIS AND THAT IS THE LESSON. The
-// reference is GONE, not dangling, so R5's dangling-reference check answers 0
-// either way; and the state it produces — a photograph naming a place with no
-// occasion — is one the client's model has never expressed. Measured across
-// all 284 photographs of the client's own log: 95 carry both, 189 carry
-// neither, place-only 0, visit-only 0.
-//
-// IT COMPARES THE WHOLE MAP AND NOT A COUNT, because a count of filed
-// photographs is satisfied by two photographs swapping occasions.
+// a no-op re-send must be a no-op.
 func TestReSendingAnUnchangedVisitsArrayDoesNotUnfileItsPhotographs(t *testing.T) {
 	store, db := placeStore(t)
 	ctx := context.Background()
@@ -117,8 +79,6 @@ func TestReSendingAnUnchangedVisitsArrayDoesNotUnfileItsPhotographs(t *testing.T
 		t.Fatalf("no photographs are filed at fushimi-inari — this leg would pass vacuously: %v", before)
 	}
 
-	// BYTE FOR BYTE WHAT A READ WOULD HAVE ANSWERED. The client does exactly
-	// this whenever a screen re-saves a place it did not change.
 	current, _, err := store.PutPlace(ctx, tid, logbook.PlaceWrite{ID: ptr("fushimi-inari")})
 	if err != nil {
 		t.Fatalf("reading the place through a no-op write: %v", err)
@@ -145,20 +105,13 @@ func TestReSendingAnUnchangedVisitsArrayDoesNotUnfileItsPhotographs(t *testing.T
 		t.Errorf("%d photographs now name a place with no occasion, want 0 — a state the "+
 			"client's log has never held", n)
 	}
-	// The count that must not fall (DEC-89, SAF-MAJ-5). Zero has to be zero
-	// for the right reason: unfiling every photograph in the log satisfies the
-	// half-filed check above perfectly.
 	if n := count(t, db, `SELECT count(*) FROM photos WHERE place_id IS NOT NULL`); n != 2 {
 		t.Errorf("%d photographs still name a place, want 2", n)
 	}
 }
 
-// ABSENT `visits` LEAVES THEM ALONE, AND THAT IS WHAT MAKES createPlace
-// CORRECT BY CONSTRUCTION (DEC-89, SAF-MAJ-4).
-//
-// This is the body a rename actually sends. PD-06's upsert fix does not cover
-// it: the mandated shape ends "DELETE only the ids absent from the incoming
-// array", and when the key is absent every id is absent.
+// absent `visits` leaves them alone, and that is what makes createPlace
+// correct by construction.
 func TestAPlaceWriteWithNoVisitsKeyLeavesEveryVisitAndEveryFilingAlone(t *testing.T) {
 	store, db := placeStore(t)
 
@@ -196,8 +149,8 @@ func TestAPlaceWriteWithNoVisitsKeyLeavesEveryVisitAndEveryFilingAlone(t *testin
 	}
 }
 
-// C1's PIN, THROUGH THE STORE: a wishlist place is a place with no visits, and
-// creating one must not need a `visits` key at all.
+// C1's pin, through the store: a wishlist place is a place with no visits,
+// Creating one must not need a `visits` key at all.
 func TestCreatingAPlaceWithNoVisitsIsAWishlistPlace(t *testing.T) {
 	store, db := placeStore(t)
 
@@ -220,19 +173,12 @@ func TestCreatingAPlaceWithNoVisitsIsAWishlistPlace(t *testing.T) {
 	}
 }
 
-// THE REORDER, AND IT IS THE FIRST TIME THE NON-DEFERRABLE UNIQUE ON VISIT
-// ORDINALS IS EXERCISED BY A ROUTE.
-//
-// `visits_place_ordinal_uq` is checked per ROW during a statement, so an
-// in-place renumber collides even when the final state is unique. Measured on
-// this database: `UPDATE visits SET ordinal = 1 - ordinal` answers `duplicate
-// key value violates unique constraint "visits_place_ordinal_uq"`, and
-// `ordinal - 1000` answers `violates check constraint "visits_ordinal_ck"`.
+// The reorder, and the first time the non-deferrable unique on visit
+// ordinals is exercised by A route.
 func TestReorderingTheVisitsArrayRewritesTheOrdinalsAndKeepsTheFiling(t *testing.T) {
 	store, db := placeStore(t)
 	ctx := context.Background()
 
-	// A second occasion at the same place, so there is an order to change.
 	two := []logbook.Visit{
 		{ID: "v-fushimi-autumn", PlaceID: "fushimi-inari", TripID: "autumn-crossing", At: at("2027-09-20T07:05:00Z")},
 		{ID: "v-fushimi-may", PlaceID: "fushimi-inari", TripID: "kyoto-in-may", At: at("2027-05-03T07:05:00Z")},
@@ -264,19 +210,8 @@ func TestReorderingTheVisitsArrayRewritesTheOrdinalsAndKeepsTheFiling(t *testing
 	}
 }
 
-// THE OFFSET IS DERIVED AND THE PLAN'S `+ 1000` IS A CONSTANT, AND THIS IS THE
-// LEG THAT SEPARATES THEM.
-//
-// R6's step text mandates `UPDATE visits SET ordinal = ordinal + 1000`, which
-// is correct for every place holding fewer than a thousand occasions and
-// silently wrong above it: park {0..1100} at {1000..2100} and the row moving
-// 0 -> 1000 collides with the row still sitting at 1000, because the UNIQUE
-// index is checked per ROW. `GREATEST(len(incoming), max(ordinal)+1)` has no
-// such number in it.
-//
-// 1,100 IS CHOSEN AS THE SMALLEST FIGURE THAT MAKES THE POINT and is well
-// inside one statement — `maxVisitsPerStatement` is 5,000 and the wire
-// protocol's own ceiling at this width is 13,106.
+// The offset is derived and the plan's `+ 1000` is a constant, and this is
+// the leg that separates them.
 func TestAVisitsArrayLongerThanAThousandStillReorders(t *testing.T) {
 	store, db := placeStore(t)
 	ctx := context.Background()
@@ -285,9 +220,7 @@ func TestAVisitsArrayLongerThanAThousandStillReorders(t *testing.T) {
 	long := make([]logbook.Visit, many)
 	for i := range long {
 		long[i] = logbook.Visit{
-			ID: "v-" + strings.Repeat("0", 4-len(itoa(i))) + itoa(i),
-			// The path carries the place, so an empty placeId is the ordinary
-			// case and this leg uses it deliberately.
+			ID:     "v-" + strings.Repeat("0", 4-len(itoa(i))) + itoa(i),
 			TripID: "kyoto-in-may",
 			At:     at("2027-05-03T07:05:00Z"),
 		}
@@ -316,12 +249,7 @@ func TestAVisitsArrayLongerThanAThousandStillReorders(t *testing.T) {
 	}
 }
 
-// A PLACE WRITE DOES NOT MOVE AN OCCASION BETWEEN PINS.
-//
-// `visits_pkey` is (traveller_id, id) rather than (traveller_id, place_id,
-// id), so an upsert naming a visit that belongs somewhere else would silently
-// take it — with its instant, its note and every photograph filed to it.
-// M2.2's re-file is R7's and moves a PHOTOGRAPH, through its own route.
+// A place write does not move an occasion between pins.
 func TestAPlaceWriteCannotStealAnotherPlacesOccasion(t *testing.T) {
 	store, db := placeStore(t)
 
@@ -346,23 +274,12 @@ func TestAPlaceWriteCannotStealAnotherPlacesOccasion(t *testing.T) {
 	}
 }
 
-// DROPPING AN OCCASION THAT STILL HOLDS PHOTOGRAPHS IS REFUSED, AND AN EMPTY
-// ONE MAY GO.
-//
-// This is R6's own addition rather than something the plan names, and the
-// argument is SAF-MAJ-4's at row granularity: the mandated shape ends "DELETE
-// only the ids absent from the incoming array", and a visit deleted that way
-// takes `photos.visit_id` with it and leaves `photos.place_id` standing —
-// which is the half-filed state the whole log has never held, and which all
-// three standing guards are blind to. `visits: []` is simply the n-row case.
-//
-// BOTH HALVES ARE ASSERTED, because a store that refused every departure would
-// pass the first and make a legitimate tidy-up impossible.
+// dropping an occasion that still holds photographs is refused, and an empty
+// one may go.
 func TestDroppingAnOccupiedOccasionIsRefusedAndAnEmptyOneMayGo(t *testing.T) {
 	store, db := placeStore(t)
 	ctx := context.Background()
 
-	// Two occasions: one holds both photographs, the other holds none.
 	both := []logbook.Visit{
 		{ID: "v-fushimi-may", TripID: "kyoto-in-may", At: at("2027-05-03T07:05:00Z")},
 		{ID: "v-fushimi-empty", TripID: "autumn-crossing", At: at("2027-09-20T07:05:00Z")},
@@ -429,19 +346,7 @@ func TestAPlaceCreatedWithoutItsRequiredFieldsIsRefusedByName(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------- D2: THE BRANCHES
-
-// D2's DELETE BRANCH, AND IT IS ABOUT THE ORDER OF TWO STATEMENTS.
-//
-// The sheet says "all N, and the notes you wrote on them". Delete the place
-// first and `photos_place_fk` clears `place_id` on every one of them, so the
-// DELETE that follows matches nothing and the photographs survive — with the
-// user having explicitly asked for them to go, and no error anywhere.
-//
-// ASSERT ON THE SURVIVING ROW COUNT, NEVER ON ERROR/NO-ERROR (DBA F2). Before
-// DEC-66's column-list SET NULL the wrong order raised a NOT NULL violation
-// instead, so a leg written against an error would have reddened for the wrong
-// reason, which DEC-28 forbids.
+// D2's delete branch, and it is about the order of two statements.
 func TestRemovingAPlaceAndItsPhotographsActuallyRemovesThem(t *testing.T) {
 	store, db := placeStore(t)
 
@@ -483,14 +388,7 @@ func TestRemovingAPlaceAndItsPhotographsActuallyRemovesThem(t *testing.T) {
 	}
 }
 
-// D2's KEEP BRANCH, AND ALL FOUR OF ITS PROMISES.
-//
-// "They lose the pin but keep their date and city" is
-// `Photo.copyWith(clearPlace: true)`, which clears BOTH `placeId` and
-// `visitId`. All four fields are asserted because a mutation clearing only one
-// of the two would otherwise pass — and the CAPTION is asserted with them,
-// because the sheet's destructive branch is the one that names "the notes you
-// wrote on them" and the keep branch must not touch a word of them.
+// D2's keep branch, and all four of its promises.
 func TestKeepingThePhotographsLeavesTheirDateCityAndCaptionAndClearsBothColumns(t *testing.T) {
 	store, db := placeStore(t)
 	mustExec(t, db, `UPDATE photos SET caption = 'the torii at dawn' WHERE traveller_id=$1::uuid AND id='p-may'`, tid)
@@ -542,20 +440,13 @@ func TestKeepingThePhotographsLeavesTheirDateCityAndCaptionAndClearsBothColumns(
 	if n := count(t, db, `SELECT count(*) FROM walks`); n != walksBefore {
 		t.Errorf("walks moved from %d to %d on the KEEP branch too", walksBefore, n)
 	}
-	// The pair stays coherent: both columns NULL is a pair that agrees, and
-	// the count that must not fall has fallen for a reason the sheet states.
 	if n := count(t, db, `SELECT count(*) FROM photos WHERE place_id IS NOT NULL AND visit_id IS NULL`); n != 0 {
 		t.Errorf("%d photographs name a place with no occasion, want 0", n)
 	}
 }
 
-// A REMOVAL OF SOMETHING ABSENT TAKES NOTHING WITH IT — INCLUDING ON THE
-// DESTRUCTIVE BRANCH.
-//
-// `?photos=delete` runs the photograph DELETE before it knows whether the
-// place is there, so the whole body has to ride one transaction's rollback. A
-// two-transaction implementation would delete a place's photographs and then
-// discover the place is gone, which is the one failure this arrangement has.
+// A removal of something absent takes nothing with it — including on the
+// destructive branch.
 func TestRemovingAPlaceThatIsNotInTheLogTakesNoPhotographWithIt(t *testing.T) {
 	store, db := placeStore(t)
 
@@ -580,8 +471,8 @@ func TestRemovingAPlaceThatIsNotInTheLogTakesNoPhotographWithIt(t *testing.T) {
 	}
 }
 
-// itoa is strconv.Itoa under another name, so the long-array leg reads without
-// a second import in a file that is otherwise about SQL.
+// itoa is strconv.Itoa under another name, so the long-array leg reads
+// without a second import in a file that is otherwise about SQL.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

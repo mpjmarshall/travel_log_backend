@@ -1,5 +1,5 @@
 // Reading the credential off the request, and carrying the traveller down the
-// chain. Test-first.
+// chain.
 package auth
 
 import (
@@ -48,11 +48,6 @@ func TestBearerRefusesEverythingThatIsNotOne(t *testing.T) {
 }
 
 func TestBearerDoesNotTrimTheTokenItself(t *testing.T) {
-	// A token is base64url and holds no spaces, so anything that survives the
-	// single separator is the client's problem and not this function's to
-	// tidy. Trimming here would make "Bearer  abc" and "Bearer abc" the same
-	// credential, and the store would then be asked about a token the client
-	// did not send.
 	if got, ok := Bearer(requestWith("Bearer  abc123")); ok {
 		t.Errorf("Bearer(%q) = (%q, true); a second space is not a credential", "Bearer  abc123", got)
 	}
@@ -80,11 +75,9 @@ func TestTravellerFromAnswersFalseForAContextThatCarriesNone(t *testing.T) {
 	}
 }
 
-// The context key is unexported and typed, so nothing outside this package can
-// plant a traveller in a request. A string key would let any package — or any
-// middleware from anywhere — write to the same slot.
+// The context key is unexported and typed, so nothing outside this package
+// can plant a traveller in a request.
 func TestAStringKeyCannotForgeATraveller(t *testing.T) {
-	//lint:ignore SA1029 that is the point of the leg
 	ctx := context.WithValue(context.Background(), "traveller", Traveller{ID: "forged"})
 	if tr, ok := TravellerFrom(ctx); ok {
 		t.Errorf("a string key planted %+v into the traveller slot", tr)

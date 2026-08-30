@@ -1,25 +1,4 @@
 // The deployment files, against the variables this package reads.
-//
-// ARTEFACT TIER, AND LABELLED AS ONE. Nothing here can fail because the code is
-// wrong; it fails when a variable is added to internal/config and not to the
-// files that have to set it. That is a real regression and a cheap one to
-// catch, and it is not evidence that anything works — see CLAUDE.md on what an
-// artefact check can and cannot find.
-//
-// THE README ALREADY CLAIMED THIS TEST EXISTED. It said "deploy/.env.example is
-// the template, and a test asserts it lists everything the config package
-// reads", and no such test was in the tree — measured with
-// `grep -rn 'env.example' --include='*_test.go' .`, which matched three
-// comments and nothing executable. The claim was also not true as written:
-// DATABASE_URL and PORT are read by this package and are deliberately NOT in
-// .env.example, because compose composes DATABASE_URL out of the POSTGRES_*
-// variables and pins PORT to the port the container publishes. So the guard is
-// written in the two halves that ARE true:
-//
-//  1. every variable this package reads is set by the api service in
-//     deploy/docker-compose.yml — the file that actually has to supply them;
-//  2. every variable compose interpolates from the environment is documented in
-//     deploy/.env.example — which is what makes that file the template.
 package config_test
 
 import (
@@ -42,8 +21,7 @@ func readDeployFile(t *testing.T, name string) string {
 }
 
 // composeAPIEnvironment is the api service's `environment:` block, by
-// indentation. Reading the whole file instead would let a variable set on the
-// POSTGRES service satisfy a claim about the API's.
+// indentation.
 func composeAPIEnvironment(t *testing.T) string {
 	t.Helper()
 	compose := readDeployFile(t, "docker-compose.yml")
@@ -72,7 +50,7 @@ func TestComposeSetsEveryVariableTheConfigPackageReads(t *testing.T) {
 	}
 }
 
-// interpolated is every ${VAR} and ${VAR:-default} in the compose file.
+// interpolated is every ${var} and ${var:-default} in the compose file.
 var interpolated = regexp.MustCompile(`\$\{([A-Z0-9_]+)`)
 
 func TestEveryComposeOverrideIsDocumentedInTheEnvTemplate(t *testing.T) {

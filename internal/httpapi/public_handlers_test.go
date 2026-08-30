@@ -1,18 +1,5 @@
 // `GET /l/{token}` over the real mux, the real middleware chain and the real
 // route table.
-//
-// WHAT ONLY THIS CAN SAY. internal/logbook's legs are about keys and flags and
-// internal/postgres's are about rows; neither can see a status, a header, or
-// the two answers that have to be one answer. What leaves the process is this
-// package's subject, and on this route what leaves the process is the whole
-// security question of the step.
-//
-// THE STRUCTURAL WALK IS HERE AND NOT A SUBSTRING SEARCH, and
-// docs/PUBLIC-ENVELOPE.md §1 says why: with `shareCoordinates` false the claim
-// is "the only `lat` in this document is under cities[].centre", and a
-// `grep -c lat` would have to be zero — which is WRONG, because the centre
-// stays. It is a PATH claim rather than a WORD claim and only a walk can make
-// it.
 package httpapi
 
 import (
@@ -34,19 +21,10 @@ import (
 	"travellog/internal/media"
 )
 
-// theToken is what the tests mint. Twelve characters of the client's own
-// alphabet, so it is a token `POST /v1/trips/{id}/share` accepts.
+// theToken is what the tests mint.
 const theToken = "mnpqrstuvwxy"
 
-// -------------------------------------------------------------- THE ALLOWLIST
-
-// theAllowlist is docs/PUBLIC-ENVELOPE.md §3, typed out.
-//
-// IT IS THE AUTHORITY AND THE GOLDEN IS NOT. A golden file records what the
-// code emitted; regenerate it after a mistake and it records the mistake. This
-// map is read off the specification, so the leg below asserts THREE things
-// against each other — the response, the golden, and this — and a golden
-// regenerated to match a wrong answer reddens.
+// theAllowlist is docs/public-envelope.md §3, typed out.
 var theAllowlist = map[string][]string{
 	"":                     {"cities", "photos", "places", "trip", "version", "walks"},
 	"trip":                 {"cityIds", "coverUrl", "end", "id", "name", "start", "summary"},
@@ -63,13 +41,8 @@ var theAllowlist = map[string][]string{
 	"walks[].points[]":     {"lat", "lng"},
 }
 
-// keyPaths walks a decoded document and answers "path -> the keys seen there",
-// merged across every element of every list.
-//
-// MERGED ACROSS ELEMENTS ON PURPOSE. A photograph with a null coordinate and
-// one with a coordinate carry the same KEYS — nothing here is `omitempty` — so
-// the union is the object's shape rather than a sample of it, and a key that
-// appears on one row out of ninety-six is still a key on the allowlist or not.
+// keyPaths walks a decoded document and answers "path -> the keys seen
+// there", merged across every element of every list.
 func keyPaths(value any, at string, into map[string]map[string]bool) {
 	switch v := value.(type) {
 	case map[string]any:
@@ -112,10 +85,7 @@ func walkOf(t *testing.T, body []byte) map[string][]string {
 	return out
 }
 
-// renderWalk sorts BOTH the paths and the keys, so the golden is a fact about
-// the SET at each level rather than about the order a map happened to answer
-// in — and so the allowlist above can be typed out in whatever order reads
-// best without moving a golden.
+// renderWalk sorts both the paths and the keys.
 func renderWalk(walk map[string][]string) string {
 	var paths []string
 	for path := range walk {
@@ -136,21 +106,9 @@ func renderWalk(walk map[string][]string) string {
 	return b.String()
 }
 
-// THE STRUCTURAL GUARD (PD-07's other half, and DEC-24's whole point).
-//
-// Parse, walk, and assert the key set AT EVERY LEVEL equals the allowlist. Not
-// "contains", not "does not contain the bad ones" — EQUALS, in both
-// directions, because an allowlist that only checks for known-bad keys is a
-// deny-list somebody has to remember to add to, and every field this project
-// adds after today would be published by default.
+// The structural guard (the other half, and the whole point).
 func TestThePublicEnvelopeCarriesExactlyTheAllowlistAtEveryLevel(t *testing.T) {
 	h := newHarness(t, options{})
-	// ALL THREE SWITCHES ON, AND THE THIRD ONE HAS TO BE ASKED FOR. Migration
-	// 0002's defaults are the CLIENT's — true, true, FALSE — because a pin on
-	// your accommodation is not something to hand out by link, so it has to be
-	// actively turned on every time. Without this line the document under test
-	// is the coordinates-off one and three levels of the allowlist are simply
-	// absent, which is what this leg first said when it was written.
 	h.setFlags(t, `{"shareCoordinates":true}`)
 	body := h.sharedTrip(t, theToken)
 
@@ -178,8 +136,6 @@ func TestThePublicEnvelopeCarriesExactlyTheAllowlistAtEveryLevel(t *testing.T) {
 		}
 	}
 
-	// THE GOLDEN IS COMPARED TO THE ALLOWLIST AS WELL AS TO THE RESPONSE, so a
-	// golden regenerated to match a mistake reddens instead of blessing it.
 	golden(t, "share_all_on.golden", renderWalk(walk))
 	golden(t, "share_allowlist.golden", renderWalk(theAllowlist))
 }
@@ -191,12 +147,8 @@ func levelName(path string) string {
 	return path
 }
 
-// AND THE SCALPEL: with shareCoordinates off, the only `lat` left is the
+// The scalpel: with shareCoordinates off, the only `lat` left is the
 // city's centre.
-//
-// THIS IS THE LEG THAT PROVES THE FILTER IS NOT A BLANKET, and it is the exact
-// claim §1 says a substring search cannot make. `grep -c lat` would have to be
-// zero and zero is the wrong answer.
 func TestWithCoordinatesOffTheOnlyLatLeftIsTheCitysCentre(t *testing.T) {
 	h := newHarness(t, options{})
 	h.setFlags(t, `{"shareCoordinates":false}`)
@@ -219,13 +171,8 @@ func TestWithCoordinatesOffTheOnlyLatLeftIsTheCitysCentre(t *testing.T) {
 	golden(t, "share_coordinates_off.golden", renderWalk(walkOf(t, body)))
 }
 
-// SHARE PHOTOS OFF, OVER THE WIRE: the key SET does not change and the CONTENT
-// does.
-//
-// The keys are the same because `photos` is an EMPTY ARRAY rather than a
-// missing key — a reader that branches on presence has three states to handle
-// and one that branches on length has two — so this leg is about rows and
-// about `coverUrl`, and the golden records both.
+// share photos off, over the wire: the key set does not change and the
+// content does.
 func TestWithPhotosOffTheArrayIsEmptyAndTheCoverIsNull(t *testing.T) {
 	h := newHarness(t, options{})
 	h.setFlags(t, `{"sharePhotos":false}`)
@@ -261,20 +208,7 @@ func TestWithPhotosOffTheArrayIsEmptyAndTheCoverIsNull(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------- REVOKED, UNKNOWN, AND WORK
-
-// BYTE-IDENTICAL **AND** THE SAME WORK (PD-12, DEC-10).
-//
-// DEC-10 says "the SAME 404 WITH THE SAME WORK DONE". Byte-identical is
-// necessary and is not sufficient: a handler that returned early on "no row"
-// but, for a revoked row, resolved the trip, read three flags and minted a
-// dozen URLs would answer identical bytes and still be a clean oracle for
-// "this token was once real" — and DEC-67's revoke-and-keep design means every
-// token ever issued is still a row to ask about.
-//
-// THE WORK IS COUNTED AND NOT TIMED, in the shape internal/auth's own
-// countingHasher already uses. A timing assertion on a shared runner is a
-// flake; a call count is a fact.
+// byte-identical **and** the same work.
 func TestARevokedTokenAndAnUnknownOneAreOneAnswerAndOneAmountOfWork(t *testing.T) {
 	h := newHarness(t, options{})
 	h.sharedTrip(t, theToken) // mint it, then kill it
@@ -299,20 +233,16 @@ func TestARevokedTokenAndAnUnknownOneAreOneAnswerAndOneAmountOfWork(t *testing.T
 		t.Errorf("revoked body %s, unknown body %s — a different body is a plain oracle "+
 			"for which tokens once existed", revoked.body, unknown.body)
 	}
-	// HEADERS MINUS X-Request-Id, which is per-request by construction.
 	if got, want := headersFor(revoked), headersFor(unknown); got != want {
 		t.Errorf("revoked headers\n  %s\nunknown headers\n  %s", got, want)
 	}
 
-	// AND THE WORK. This is what byte-identical cannot say.
 	if revokedWork != unknownWork {
 		t.Errorf("a revoked token cost %+v and an unknown one cost %+v.\n"+
 			"    Equal bytes and unequal work is still an oracle for 'this token was\n"+
 			"    once real': the lookup has to be the ONLY branch.",
 			revokedWork, unknownWork)
 	}
-	// THE POSITIVE CONTROL. Two zeroes are equal too, and a handler that never
-	// reached the store at all would satisfy the line above.
 	if revokedWork.lookups != 1 {
 		t.Errorf("a revoked token cost %d share-link lookups, want 1 — this leg is not "+
 			"measuring anything", revokedWork.lookups)
@@ -323,18 +253,7 @@ func TestARevokedTokenAndAnUnknownOneAreOneAnswerAndOneAmountOfWork(t *testing.T
 	}
 }
 
-// ------------------------------------------------------------- THE TWO HEADERS
-
-// ASSERTED BY PRESENCE AND NOT BY SAMENESS (PD-09).
-//
-// v7.0's only header-adjacent leg compared two answers to each other and would
-// have passed with the header absent from both. These name the values.
-//
-// AND THEY ARE ON THE 404 AS WELL. A refusal carries no capability, but a
-// policy that applies only on success is a policy whose absence is invisible
-// until the one response that needed it — and the middleware is applied from
-// the route table, above the handler, precisely so that it cannot be
-// conditional on what the handler decided.
+// asserted by presence and not by sameness.
 func TestThePublicReadCarriesTheCapabilityHeadersOnEveryAnswer(t *testing.T) {
 	h := newHarness(t, options{})
 
@@ -366,20 +285,7 @@ func TestThePublicReadCarriesTheCapabilityHeadersOnEveryAnswer(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------------ THE TTL
-
-// EVERY MINTED URL USES THE PUBLIC LIFETIME, ASSERTED BY CALL SITE (DEC-84).
-//
-// R2's TTL leg was DELETED at v7.1 for being unfalsifiable — it compared the
-// two configured values to each other, so a handler reaching for the private
-// one would have reddened nothing. THE RULING ORDERED A REPLACEMENT and this
-// is it: the number is read back off the URL the signer produced, and the
-// mutation `media.Public` -> `media.Private` in public_handlers.go turns 900
-// into 120.
-//
-// THE TWIN'S LIFETIMES ARE THE DEPLOYED ONES. media.NewMemory defaults to
-// DEC-44's two minutes and DEC-84's fifteen, which are the numbers
-// deploy/.env.example carries.
+// Every minted url uses the public lifetime, asserted by call site.
 func TestEveryURLTheEnvelopeEmbedsIsMintedAtThePublicLifetime(t *testing.T) {
 	const publicSeconds = "900" // fifteen minutes, DEC-84
 	const privateSeconds = "120"
@@ -429,18 +335,7 @@ func TestEveryURLTheEnvelopeEmbedsIsMintedAtThePublicLifetime(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------- THE THIRD BUCKET
-
-// EXHAUSTING THE PUBLIC READ DOES NOT REFUSE A SIGN-IN (PD-09).
-//
-// Under the derivation the route table used to make, `GET /l/{token}` would
-// have inherited AUTH_RATE_LIMIT_PER_MIN — a CREDENTIAL budget of 10/min —
-// FROM THE SAME BUCKET INSTANCE as register and sign-in. Twelve reads of a
-// shared trip and nobody can sign in for a minute.
-//
-// BOTH HALVES ARE ASSERTED. That the public read IS limited, so this is not a
-// leg about an unlimited route; and that the credential routes are untouched
-// by it.
+// exhausting the public read does not refuse A sign-IN.
 func TestExhaustingThePublicReadDoesNotRefuseASignIn(t *testing.T) {
 	h := newHarness(t, options{publicPerMin: 2})
 	h.sharedTrip(t, theToken)
@@ -464,14 +359,7 @@ func TestExhaustingThePublicReadDoesNotRefuseASignIn(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------------ THE TWINS
-
 // countingObjects wraps the real media twin and counts read mints.
-//
-// IT WRAPS RATHER THAN REPLACES, for the reason the harness uses media.Memory
-// in the first place: a twin that accepts what MinIO refuses turns a handler
-// leg into evidence about nothing. What is added here is a counter, and
-// nothing else.
 type countingObjects struct {
 	media.Store
 	mints int
@@ -484,13 +372,7 @@ func (c *countingObjects) PresignGet(ctx context.Context, key media.Key, aud med
 
 func (c *countingObjects) reset() { c.mints = 0 }
 
-// fakePublic is logbook.PublicStore over the same document every other twin in
-// this package writes, plus the `share_links` rows fakeShare keeps beside it.
-//
-// IT APPLIES THE THREE ROW RULES, because a twin that published rows the store
-// would not would make every leg in this file evidence about nothing. That the
-// SQL applies them is internal/postgres's leg and internal/seed's; that a
-// document filtered this way carries the allowlist and no more is this file's.
+// fakePublic is a logbook.PublicStore over one fixed document.
 type fakePublic struct {
 	books   *fakeLogbook
 	lookups int
@@ -505,9 +387,6 @@ func (f *fakePublic) ShareLink(_ context.Context, tokenHash []byte) (logbook.Sha
 	f.lookups++
 	for _, link := range f.books.links {
 		if link.hash == string(tokenHash) {
-			// REGARDLESS OF `revoked`, which is the whole of PD-12: the row
-			// comes back and the caller decides, so the lookup is the only
-			// branch.
 			return logbook.ShareLink{
 				TravellerID: link.travellerID, TripID: link.tripID, Revoked: link.revoked,
 			}, nil
@@ -532,7 +411,6 @@ func (f *fakePublic) PublicLog(_ context.Context, _, tripID string) (logbook.Pub
 		return logbook.PublicSource{}, fmt.Errorf("%w: %s", logbook.ErrNoTrip, tripID)
 	}
 
-	// The trip's cities, in the trip's own order.
 	for _, id := range src.Trip.CityIDs {
 		for _, city := range f.books.doc.Cities {
 			if city.ID == id {
@@ -540,8 +418,6 @@ func (f *fakePublic) PublicLog(_ context.Context, _, tripID string) (logbook.Pub
 			}
 		}
 	}
-	// RULE 1 and RULE 2 together: a place is published because it has a visit
-	// on this trip, and it carries only those visits.
 	for _, place := range f.books.doc.Places {
 		var mine []logbook.Visit
 		for _, visit := range place.Visits {
@@ -555,7 +431,6 @@ func (f *fakePublic) PublicLog(_ context.Context, _, tripID string) (logbook.Pub
 		place.Visits = mine
 		src.Places = append(src.Places, place)
 	}
-	// RULE 3.
 	for _, photo := range f.books.doc.Photos {
 		if photo.TripID == tripID {
 			src.Photos = append(src.Photos, photo)
@@ -568,8 +443,6 @@ func (f *fakePublic) PublicLog(_ context.Context, _, tripID string) (logbook.Pub
 	}
 	return src, nil
 }
-
-// ---------------------------------------------------------------- THE HELPERS
 
 type publicWork struct{ lookups, reads, mints int }
 
@@ -612,10 +485,6 @@ func (h *harness) token(t *testing.T) string {
 
 // sharedTrip builds a trip with one of everything the envelope can carry,
 // shares it, and answers the public body.
-//
-// IT GOES THROUGH THE REAL ROUTES rather than writing to the twin, so what it
-// proves includes the wiring: a share minted by `POST /v1/trips/{id}/share` is
-// one `GET /l/{token}` can resolve.
 func (h *harness) sharedTrip(t *testing.T, token string) []byte {
 	t.Helper()
 	bearerToken := h.token(t)
@@ -654,16 +523,7 @@ func (h *harness) setFlags(t *testing.T, body string) {
 }
 
 // fillTheLog puts one of everything the envelope can carry into the twin's
-// document, WITH EVERY FLAG-SENSITIVE FIELD POPULATED — a note, a caption, a
-// pin, a photograph's coordinate with its accuracy, a track and a cover.
-//
-// A LEG THAT SAYS "THIS IS GONE" IS ABOUT A FILTER AND NEVER ABOUT A FIXTURE
-// THAT NEVER HAD ONE, which is why this writes directly rather than through
-// eight more routes: what it is setting up is the SHAPE, and the routes that
-// write each field have their own legs elsewhere in this package.
-//
-// IT ALSO PLANTS THE TWO ROWS THAT MUST NOT BE PUBLISHED: a wishlist place in
-// the same city, and a walk N1's 'Discard' was pressed on.
+// document, with every flag-sensitive field populated.
 func (h *harness) fillTheLog(t *testing.T) {
 	t.Helper()
 	h.logbook.mu.Lock()
@@ -700,12 +560,9 @@ func (h *harness) fillTheLog(t *testing.T) {
 			Coordinates: logbook.LatLng{Lat: 34.9671, Lng: 135.7727},
 			Visits: []logbook.Visit{
 				{ID: "v-0", PlaceID: placeID, TripID: "kyoto", At: at, Note: &note},
-				// ANOTHER TRIP'S VISIT ON THE SAME PLACE — the nested row a
-				// place-level filter publishes.
 				{ID: "v-other", PlaceID: placeID, TripID: "elsewhere", At: at, Note: &note},
 			},
 		},
-		// A WISHLIST PIN in the same city, never been to.
 		{ID: "tofuku-ji", CityID: "kyoto", Name: "Tofuku-ji",
 			Coordinates: logbook.LatLng{Lat: 34.97, Lng: 135.77}},
 	}
@@ -719,7 +576,6 @@ func (h *harness) fillTheLog(t *testing.T) {
 		{ID: "w-0", TripID: "kyoto", CityID: "kyoto", RecordedOn: at, DistanceKm: 6.4,
 			Points: []logbook.LatLng{{Lat: 34.9, Lng: 135.7}, {Lat: 34.91, Lng: 135.71}},
 			Name:   strPtr("the long way round")},
-		// N1's 'Discard'.
 		{ID: "w-discarded", TripID: "kyoto", CityID: "kyoto", RecordedOn: at, DistanceKm: 0.4,
 			Points: []logbook.LatLng{{Lat: 34.9, Lng: 135.7}}, Dismissed: true},
 	}
@@ -739,7 +595,8 @@ func headersFor(a answer) string {
 	return strings.Join(names, "\n  ")
 }
 
-// golden compares against internal/httpapi/testdata and rewrites with -update.
+// golden compares against internal/httpapi/testdata and rewrites with
+// -update.
 func golden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", name)

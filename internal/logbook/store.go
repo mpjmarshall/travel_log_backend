@@ -1,23 +1,4 @@
-// The storage contract the domain declares and internal/postgres satisfies
-// (DEC-62: the business rules own the contract and the storage implementation
-// meets it).
-//
-// READ TAKES A CALLBACK RATHER THAN ANSWERING A DOCUMENT, AND THAT IS THE
-// WHOLE OF THE 304. DEC-31 says the version lookup happens FIRST — one indexed
-// SELECT before any other query — so a conditional request that has not
-// changed never assembles the five lists. Two facts make a callback the only
-// honest shape for that:
-//
-//   - the version and the document must come out of ONE repeatable-read
-//     snapshot, or the phone stores a torn body under a number describing a
-//     different moment and serves it for ever;
-//   - the decision to assemble belongs to the HANDLER, because it is the
-//     handler that holds If-None-Match and DEC-49's emitter version.
-//
-// A two-call interface — ReadVersion then ReadDocument — cannot keep both: the
-// second call is a second snapshot. Answering (version, document) always
-// assembles. So Read runs the caller's `assemble` inside the snapshot with the
-// version in hand, and builds the document only if it says so.
+// The storage contract: declared by the domain, satisfied by internal/postgres.
 package logbook
 
 import (
@@ -27,52 +8,21 @@ import (
 )
 
 // ErrNoTraveller is a read or a write for a traveller row that is not there.
-// It is reachable even behind an authenticated route: the row can be deleted
-// between the credential being accepted and the query running.
 var ErrNoTraveller = errors.New("logbook: no such traveller")
 
-// ErrNoTrip is a write answering about a trip nothing holds. It exists for the
-// re-read after an upsert, which must never invent a body.
+// ErrNoTrip is a write answering about a trip nothing holds.
 var ErrNoTrip = errors.New("logbook: no such trip")
 
-// ErrNoPlace is a place write answering about a row nothing holds — the same
-// re-read-after-upsert case ErrNoTrip exists for.
-//
-// THERE IS NO ErrNoCity BESIDE IT AND THAT IS NOT AN OVERSIGHT. Every route
-// that names a city either creates it (`PUT /v1/cities/{id}`, whose re-read
-// follows its own upsert) or names it as a FIELD of some other write, where an
-// unknown one is `InvalidFieldError{Field: "cityId"}` and a 422 rather than a
-// 404. A sentinel nothing returns is a branch nothing takes.
+// ErrNoPlace is a place write answering about a row nothing holds.
 var ErrNoPlace = errors.New("logbook: no such place")
 
-// ErrNoPhoto is a route naming a photograph this log does not hold, and it is
-// the first sentinel here that a route answers 404 with rather than only using
-// for a re-read.
-//
-// THE ASYMMETRY IS THE CLIENT'S OWN AND IT IS WORTH READING BESIDE ErrNoTrip.
-// `setPhotoCaption` answers false for an id the log does not hold — a set
-// "asks for a value the log then has to hold" — while `deletePhoto` answers
-// TRUE for one, because the caller asked for that photograph to be absent and
-// it is. So `POST /v1/photos/{id}/refile` is a 404 and `DELETE
-// /v1/photos/{id}` is a 204 on the same unknown id, and neither is a
-// concession.
-//
-// `PUT /v1/photos/{id}` IS NEITHER, AND THAT IS DEC-33 RATHER THAN A THIRD
-// ANSWER. It is an upsert on a client-minted key, so an unknown id is a
-// CREATE — and a create not carrying what a NOT NULL column needs is a 422
-// naming that column, which is exactly what `PUT /v1/places/{id}` already
-// answers a body of `{plan}` on an id the log has never held.
+// ErrNoPhoto is a route naming a photograph this log does not hold.
 var ErrNoPhoto = errors.New("logbook: no such photograph")
 
-// ErrNoWalk is the same for a walk, and it is reachable through ONE route's
-// own re-read only: there is no `DELETE /v1/walks/{id}`, because N1's
-// 'Discard' is a flag and not a deletion. "Discarding the nudge and discarding
-// the recording are different things, and only the first is drawn on N1."
+// ErrNoWalk is the same for a walk, reachable only through a route's re-read.
 var ErrNoWalk = errors.New("logbook: no such walk")
 
-// Snapshot is what one read saw. Document is nil when `assemble` said no,
-// which is exactly the 304 path and is what makes "the 304 does not assemble
-// the document" a fact about the type rather than a claim.
+// Snapshot is what one read saw.
 type Snapshot struct {
 	Version  int64
 	Document *Document
@@ -82,275 +32,77 @@ type Store interface {
 	Read(ctx context.Context, travellerID string, assemble func(version int64) bool) (Snapshot, error)
 	PutTrip(ctx context.Context, travellerID string, w TripWrite) (Trip, int64, error)
 
-	// DeleteTrip implements D3's own table and nothing more, and ANSWERS THE
-	// WHOLE LOG rather than the trip it removed.
-	//
-	// THE CACHE CANNOT SPLICE A CASCADE, which is why this is the one write in
-	// the plan that does not answer a bare entity. DEC-32's write response
-	// exists so the phone can patch one object into its cached document; D3
-	// removes rows from FIVE tables — the trip, its photographs, its walks,
-	// its visits and its itinerary — and clears a column on rows in a sixth.
-	// A client handed a 204 would have to re-derive all of that from a sheet's
-	// copy, which is the definition of two implementations of one rule.
-	//
-	// AN UNKNOWN TRIP IS NOT AN ERROR AND MOVES NO VERSION. The client's own
-	// contract is that a delete of something absent has succeeded — "the
-	// caller asked for that trip to be absent and it is" — so this answers the
-	// log as it stands. Moving the version anyway would be defensible and is
-	// wrong in one specific way: a retried delete would invalidate the phone's
-	// whole cached document, and DEC-103 exists precisely because deletes get
-	// retried against servers that did not have the route.
 	DeleteTrip(ctx context.Context, travellerID, tripID string) (Snapshot, error)
 
-	// SetTravellerName is U1's pencil, and it BUMPS logbook_version because
-	// the traveller's name is in the emitted document — `traveller: {name}` is
-	// the sixth key, and a phone holding a cached log would otherwise never
-	// see the change.
-	//
-	// AN EMPTY NAME IS REFUSED AND IS NOT A WAY TO CLEAR IT, matching the
-	// client exactly: `setTravellerName` returns false on a trimmed-empty
-	// name, and the reason is stated there — "a log with an owner keeps one,
-	// and 'no traveller' is a state a log arrives in and never returns to".
-	// The refusal is a named field, so the store answers InvalidFieldError
-	// rather than letting travellers_name_present_ck produce a 500.
 	SetTravellerName(ctx context.Context, travellerID, name string) (Traveller, int64, error)
 }
 
-// CityWritten is what `PUT /v1/cities/{id}` answers, and IT CARRIES BOTH
-// SHAPES BECAUSE THE ROUTE HAS BOTH.
-//
-// With `attachTo` the write appends the new id to that trip's `cityIds` in the
-// SAME TRANSACTION, which makes it CASCADING: two entities moved, and the
-// phone cannot splice a trip it was not sent. Without it, one city was created
-// or renamed and DEC-32's bare entity is the right answer.
-//
-// `Document` IS NIL WHEN `attachTo` WAS ABSENT, which makes "which shape did
-// this write earn" a property of the value rather than a second reading of the
-// request the handler has to get right. It is the same device Snapshot uses
-// for the 304.
+// CityWritten is what PUT /v1/cities/{id} answers, in either of its two shapes.
 type CityWritten struct {
 	City     City
 	Document *Document
 	Version  int64
 }
 
-// CityStore is T5's 'Add a city', declared here and satisfied by
-// internal/postgres.
-//
-// IT IS ITS OWN PORT RATHER THAN TWO MORE METHODS ON Store, on ShareStore's
-// precedent and for the reason stated there: the interface a handler is handed
-// says what that handler can reach. The city handler cannot delete a trip and
-// the trip handler cannot create a city, and neither has to be trusted not to.
+// CityStore is T5's 'Add a city'.
 type CityStore interface {
-	// PutCity is createCity, and `attachTo` is what makes it cascading.
-	//
-	// AN `attachTo` NAMING A TRIP THIS LOG DOES NOT HOLD IS A 422 AND NOT A
-	// 404, and the client's own method is why: `createCity` answers null
-	// without writing when `log.trip(attachTo) == null`, so the trip is being
-	// treated as a FIELD of the request rather than as the thing the request
-	// is about. The thing this request is about is the city, and it is in the
-	// path.
 	PutCity(ctx context.Context, travellerID string, w CityWrite) (CityWritten, error)
 }
 
-// PlaceStore is C1's pin and D2's removal, declared here and satisfied by
-// internal/postgres.
+// PlaceStore is C1's pin and D2's removal.
 type PlaceStore interface {
-	// PutPlace writes the place and, when the body carried one, the WHOLE
-	// ORDERED visits array — as an UPSERT and never as a delete-then-insert.
-	// See internal/postgres/place_store.go for what that distinction costs.
 	PutPlace(ctx context.Context, travellerID string, w PlaceWrite) (Place, int64, error)
 
-	// RemovePlace is D2, and it ANSWERS THE WHOLE LOG for the reason
-	// DeleteTrip does: the cache cannot splice a cascade. Removing a place
-	// takes its visits either way and then either clears two columns on the
-	// photographs filed there or deletes them outright — rows in three tables
-	// from one request.
-	//
-	// `deletePhotos` IS A BOOL HERE AND A THREE-VALUED TYPE ONE LAYER UP, and
-	// that is deliberate rather than inconsistent. By the time a call reaches
-	// this method the question HAS been answered; what must not have a default
-	// is the REQUEST, and logbook.PhotoDisposition is where that is enforced —
-	// see Service.RemovePlace.
-	//
-	// AN UNKNOWN PLACE IS A SUCCESS AND MOVES NO VERSION, exactly as an
-	// unknown trip is on DeleteTrip: the client's `removePlace` answers true
-	// for an id the log does not hold, because the caller asked for that place
-	// to be absent and it is.
 	RemovePlace(ctx context.Context, travellerID, placeID string, deletePhotos bool) (Snapshot, error)
 }
 
-// PhotoStore is R7's four photograph routes, declared here and satisfied by
-// internal/postgres.
-//
-// IT IS ITS OWN PORT rather than four more methods on Store, on ShareStore's
-// and PlaceStore's precedent and for the reason stated there: the interface a
-// handler is handed says what that handler can reach. The photo handlers
-// cannot delete a trip and the trip handler cannot unfile a photograph.
+// PhotoStore is the four photograph routes.
 type PhotoStore interface {
-	// PutPhoto is M2's note and DEC-33's create, and IT WRITES NEITHER
-	// `place_id` NOR `visit_id` — see logbook.PhotoWrite, which has no slot
-	// for either.
 	PutPhoto(ctx context.Context, travellerID string, w PhotoWrite) (Photo, int64, error)
 
-	// DeletePhoto is D1, and it is NON-CASCADING: nothing in this schema
-	// references a photograph. An unknown id is a SUCCESS that MOVES NO
-	// VERSION, exactly as it is on DeleteTrip and RemovePlace — the client's
-	// own `deletePhoto` answers true for an id the log does not hold, and a
-	// bump on a retried delete throws away the phone's whole cached document.
-	//
-	// It answers the version rather than a document, because the caller can
-	// splice a deletion: one id left the log and nothing else moved.
 	DeletePhoto(ctx context.Context, travellerID, photoID string) (int64, error)
 
-	// SnoozePhotos is N1's 'Later', ALL-OR-NOTHING IN ONE TRANSACTION WITH ONE
-	// VERSION BUMP.
-	//
-	// AN UNKNOWN ID IS SKIPPED RATHER THAN FATAL, matching the client's own
-	// method: "the row was derived from the log a frame ago and a photograph
-	// deleted since is one that no longer needs filing". A group that matches
-	// NOTHING writes nothing and moves no version, which is the client's
-	// "returns false without writing when the group is empty".
-	//
-	// It answers the rows it wrote, in id order, NEVER nil — the phone
-	// splices each one, and what is absent from the answer is what was
-	// skipped. See internal/postgres/photo_store.go for why that slice is
-	// made rather than appended to.
 	SnoozePhotos(ctx context.Context, travellerID string, w SnoozeWrite) ([]Photo, int64, error)
 
-	// RefilePhoto is M2.2's 'Change', and it is reached through
-	// `Service.RefilePhoto` rather than directly — see service.go for the one
-	// refusal that lives above this line.
 	RefilePhoto(ctx context.Context, travellerID, photoID string, w RefileWrite) (PhotoRefiled, error)
 }
 
-// WalkStore is N1's two walk writes, and it is ONE METHOD because they are one
-// route: `setWalkName` and `dismissWalk` write two columns of one row, and
-// DEC-89's contract is what tells them apart.
+// WalkStore is N1's two walk writes, one method because they are one route.
 type WalkStore interface {
-	// PutWalk writes the fields that were sent and LEAVES `points` ALONE when
-	// the key is absent. That branch is the whole of SAF-MAJ-6.
 	PutWalk(ctx context.Context, travellerID string, w WalkWrite) (Walk, int64, error)
 }
 
-// ShareStore is H1's three writes, declared here and satisfied by
-// internal/postgres.
-//
-// IT IS SEPARATE FROM Store FOR THE REASON MediaStore IS: not because of the
-// transaction helper — all three of these DO bump logbook_version, because
-// `sharePhotos`, `shareNotes` and `shareCoordinates` are emitted fields and
-// DEC-91's `shared` is derived from the row these writes move — but because
-// the SHARE LINK IS A CAPABILITY and the logbook is a record. Every method
-// here handles a token; no method on Store ever sees one. Keeping them apart
-// is what makes "the plaintext exists in exactly two places" checkable by
-// reading one file.
-//
-// ALL THREE ANSWER A WHOLE Trip (DEC-32), which the phone splices into its
-// cached log. They are the only writes in the plan that can leave
-// `shareLinkId` non-nil, and only one of them does — see NewShareLink.
+// ShareStore is H1's three writes.
 type ShareStore interface {
-	// SetShareOptions writes only the flags that were sent (DEC-89) and
-	// touches no share link at all. H1's three switches are about what the
-	// link SHOWS, not about whether there is one.
 	SetShareOptions(ctx context.Context, travellerID, tripID string, w ShareWrite) (Trip, int64, error)
 
-	// NewShareLink revokes whatever link is live and inserts the client's
-	// token, IN ONE TRANSACTION (DEC-67). Two statements and not one: the
-	// table revokes and keeps, so `share_links_one_live` — the partial unique
-	// index that is the only thing enforcing the 0..1 the class diagram claims
-	// — refuses the insert unless the revoke lands first.
-	//
-	// THE ANSWER CARRIES THE PLAINTEXT TOKEN, and it is ECHOED rather than
-	// recovered: the caller sent it in the request body. This is the only
-	// response in the whole API that can, and it is what leaves DEC-32's
-	// splice a usable `shareLinkId` on the one write that has one.
 	NewShareLink(ctx context.Context, travellerID, tripID, token string) (Trip, int64, error)
 
-	// StopSharing revokes the live link AND resets all three flags EXPLICITLY
-	// to true/true/false — the client's own defaults, which `stopSharing`
-	// writes. The switches belong to the LINK and not to the trip's history:
-	// leaving `shareCoordinates` on after a link is killed means the NEXT link
-	// hands out exact pins without anybody turning that on.
 	StopSharing(ctx context.Context, travellerID, tripID string) (Trip, int64, error)
 }
 
 // ErrNoShare is `GET /l/{token}` asking about a token nothing holds.
-//
-// IT IS ALSO WHAT A REVOKED LINK BECOMES, ONE LAYER UP AND NOT HERE. The store
-// answers the row regardless of `revoked_at` (PD-12, DEC-10) so that the
-// handler can do the SAME WORK for both and answer the same bytes: a handler
-// that returned early on "no row" but, for a revoked row, resolved the trip,
-// read three flags and minted a dozen URLs would be byte-identical and still a
-// clean oracle for "this token was once real" — which DEC-67's revoke-and-keep
-// design makes worth attacking, because every token ever issued is still a row.
 var ErrNoShare = errors.New("logbook: no such share link")
 
-// ShareLink is what a token resolves to, and it carries the revocation rather
-// than hiding it — see ErrNoShare.
-//
-// IT NAMES A TRAVELLER, WHICH IS THE WHOLE REASON THIS PORT IS SEPARATE. Every
-// other read in this API arrives with a traveller already resolved from a
-// bearer token; this one arrives with nothing, and the traveller comes OUT of
-// the lookup. `share_links_token_key` is a GLOBAL unique index on the digest
-// for exactly that reason.
+// ShareLink is what a token resolves to, revocation included.
 type ShareLink struct {
 	TravellerID string
 	TripID      string
 
-	// Revoked is `revoked_at IS NOT NULL`. H1's 'Stop sharing' and U1's own
-	// 'Stop' both write it, and the row stays (DEC-67).
 	Revoked bool
 }
 
-// PublicStore is the read behind `GET /l/{token}`, declared here and satisfied
-// by internal/postgres.
-//
-// IT IS ITS OWN PORT rather than two more methods on Store, on ShareStore's
-// precedent and for the reason stated there: the interface a handler is handed
-// says what that handler can reach. The public handler cannot read a whole
-// log, cannot write anything at all, and cannot mint a share link — and it is
-// the only handler in this API that no bearer token stands in front of, so
-// what it can reach is the question the whole step is about.
-//
-// TWO METHODS AND NOT ONE, AND THE SPLIT IS PD-12's. `ShareLink` is the
-// lookup and `PublicLog` is the work; keeping them apart is what lets the
-// handler do the identical amount of work for a revoked token and an unknown
-// one, and what lets a leg COUNT that rather than time it. One method
-// answering a whole envelope would decide the revocation question inside the
-// store, where nothing above it could arrange for the two cases to agree.
-//
-// THE COST OF TWO CALLS IS TWO TRANSACTIONS, AND IT IS WRITTEN DOWN RATHER
-// THAN HIDDEN: a link revoked in between serves one more envelope. That window
-// is the width of one indexed lookup, against a capability the same request
-// hands out for fifteen minutes (DEC-84) — so the race is dwarfed by the thing
-// it would be protecting, and one transaction would buy nothing while removing
-// the seam PD-12's leg counts on.
+// PublicStore is the read behind GET /l/{token}.
 type PublicStore interface {
-	// ShareLink resolves a token DIGEST (DEC-85) to a link, revoked or not.
-	// ErrNoShare is a digest nothing holds.
 	ShareLink(ctx context.Context, tokenHash []byte) (ShareLink, error)
 
-	// PublicLog reads the rows docs/PUBLIC-ENVELOPE.md §5 allows: the trip,
-	// its cities in travel order, the places it visited with only its own
-	// visits inside them, its photographs, and its walks that were not
-	// discarded. The three sharing flags come back on the Trip; what they
-	// REMOVE is logbook.EmitPublic's, not this method's.
 	PublicLog(ctx context.Context, travellerID, tripID string) (PublicSource, error)
 }
 
-// ErrNoMediaObject is a media route asking about a digest this traveller has
-// never begun. It is a sentinel rather than a bare error because the handler
-// has to tell "no such object" (a 404) from "the bucket is unreachable" (a
-// 503), and both arrive through the same call.
+// ErrNoMediaObject is a digest this traveller has never begun.
 var ErrNoMediaObject = errors.New("logbook: no such media object")
 
 // MediaObject is one row of media_objects, as the domain sees it.
-//
-// `UploadedAt` IS A POINTER AND `alreadyExists` IS DERIVED FROM IT, NEVER FROM
-// ROW PRESENCE. A begin that never uploaded would otherwise report true, the
-// client would skip an upload that never happened, and the commit would 409
-// with no way forward. That is v6's own finding and it is the one thing about
-// this type worth writing down.
 type MediaObject struct {
 	ID          string
 	ByteSize    int64
@@ -359,38 +111,14 @@ type MediaObject struct {
 	UploadedAt  *time.Time
 }
 
-// Committed is `uploaded_at IS NOT NULL`, spelled once.
+// Committed is `uploaded_at is not null`, spelled once.
 func (m MediaObject) Committed() bool { return m.UploadedAt != nil }
 
-// MediaStore is the media half of the storage contract (DEC-62: the domain
-// declares it, internal/postgres satisfies it).
-//
-// IT IS SEPARATE FROM Store, AND THE SPLIT IS DEC-50's. media_objects is not
-// in the emitted logbook document, so a media write takes the traveller's
-// advisory lock and does NOT bump logbook_version — a different helper, a
-// different membership, and the two lists in internal/postgres/tx.go are the
-// spec rather than a description. Folding these three methods into Store would
-// put a non-bumping write behind an interface every other method of which
-// bumps.
+// MediaStore is the media half of the storage contract.
 type MediaStore interface {
-	// BeginMedia upserts the declared object and answers the row as it stands
-	// AFTERWARDS — which is not always the row that was proposed.
 	BeginMedia(ctx context.Context, travellerID string, b MediaBegin) (MediaObject, error)
 
-	// MediaObjects answers the rows for these ids, in no particular order,
-	// and silently omits ones that are not there. The caller decides what a
-	// miss means, because it differs by route: a commit 404s and a mint
-	// refuses the whole request.
 	MediaObjects(ctx context.Context, travellerID string, ids []string) ([]MediaObject, error)
 
-	// MarkMediaUploaded sets uploaded_at if it is not already set, and answers
-	// the row either way. ErrNoMediaObject for a digest nothing holds.
-	//
-	// IT IS IDEMPOTENT BY CONSTRUCTION, WHICH IS THE RETRY CONTRACT (SAF-MIN-12).
-	// The bucket-versus-database seam is the only non-atomic one in the plan:
-	// the bucket confirms, this update fails, and the object exists with
-	// uploaded_at NULL — bytes the user has uploaded and cannot attach. A
-	// SECOND COMMIT OF AN ALREADY-UPLOADED OBJECT IS A 200 AND NOT A 409, so a
-	// client that lost the response can simply ask again.
 	MarkMediaUploaded(ctx context.Context, travellerID, id string) (MediaObject, error)
 }

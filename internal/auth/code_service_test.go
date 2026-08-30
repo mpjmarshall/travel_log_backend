@@ -46,10 +46,6 @@ func TestRequestCodeMintsSomethingMailableAndStoresOnlyTheDigest(t *testing.T) {
 }
 
 func TestRequestCodeIsNotAnAccountOracle(t *testing.T) {
-	// THE WHOLE POINT OF THIS ROUTE'S SHAPE. An unknown address must be
-	// indistinguishable from a known one, or the endpoint tells anybody who
-	// asks which addresses have logs here. It answers no error and nothing to
-	// send, and the CALLER is required to answer the same thing either way.
 	store := newFakeStore()
 	s := newTestService(t, store)
 	ctx := context.Background()
@@ -82,8 +78,6 @@ func TestTheRightCodeSignsInOnce(t *testing.T) {
 		t.Fatal("no token")
 	}
 
-	// Single use: the same code again is refused, and refused the same way a
-	// wrong one is.
 	if _, err := s.SignInWithCode(ctx, "matt@example.com", code); !errors.Is(err, ErrBadCredentials) {
 		t.Fatalf("a replayed code answered %v, want ErrBadCredentials", err)
 	}
@@ -111,9 +105,6 @@ func TestAWrongCodeIsRefusedAndCounted(t *testing.T) {
 }
 
 func TestTheCodeDiesAtTheAttemptCap(t *testing.T) {
-	// The bound. After MaxCodeAttempts the code is gone, so the RIGHT code
-	// stops working too — which is the point: an attacker who has burned the
-	// budget cannot keep going, and the traveller asks for a new one.
 	store := newFakeStore()
 	s := newTestService(t, store)
 	ctx := context.Background()
@@ -139,8 +130,6 @@ func TestTheCodeDiesAtTheAttemptCap(t *testing.T) {
 
 func TestAnExpiredCodeIsRefused(t *testing.T) {
 	store := newFakeStore()
-	// A clock a leg can move, so expiry is asserted by passing time rather
-	// than by writing a stale row and hoping that is the same thing.
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
 	ctx := context.Background()
@@ -155,16 +144,10 @@ func TestAnExpiredCodeIsRefused(t *testing.T) {
 }
 
 func TestACodeIsNotValidForAnotherTraveller(t *testing.T) {
-	// The salt, seen from the service. Two travellers request at the same
-	// moment; one's code must not open the other's log even if the digits
-	// collide, because the digest is over the traveller as well.
 	store := newFakeStore()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	aRegistered(t, s, store, "matt@example.com")
-	// DEC-86 closes registration after the first traveller, so the second one
-	// goes straight into the store. That rule is going in this phase; until
-	// it does, a leg needing two travellers cannot use Register.
 	other := Traveller{ID: fakeUUID(99), Email: "other@example.com"}
 	store.travellers["other@example.com"] = storedTraveller{Traveller: other, hash: dummyHash}
 
@@ -172,7 +155,6 @@ func TestACodeIsNotValidForAnotherTraveller(t *testing.T) {
 	if _, _, _, err := s.RequestCode(ctx, "other@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	// Force the collision the salt exists to survive.
 	hash, _ := HashCode(other.ID, code)
 	_ = hash
 
@@ -188,14 +170,6 @@ func TestSigningInWithACodeForAnUnknownAddressIsNotAnOracle(t *testing.T) {
 		t.Fatalf("an unknown address answered %v, want ErrBadCredentials", err)
 	}
 }
-
-// === the fake store's half of the code methods ===
-//
-// Deliberately as dumb as the real one is careful: one map, replace on issue,
-// increment on attempt, delete on burn. The rules that matter — one row per
-// traveller, the reset, the single statement — are asserted against the REAL
-// store in internal/postgres, because a leg against this would be a leg about
-// this.
 
 func (f *fakeStore) IssueCode(_ context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
 	if f.codes == nil {
@@ -228,15 +202,6 @@ func (f *fakeStore) BurnCode(_ context.Context, travellerID string) error {
 }
 
 func TestACodeFoundAlreadyAtTheCapIsRefusedOnSight(t *testing.T) {
-	// THE GUARD A SURVIVING MUTATION FOUND. SignInWithCode checks the cap
-	// twice: once on the row it reads, and once on the total a wrong guess
-	// returns. The second one burns the code, so in ordinary use the first
-	// never fires — and removing it reddened nothing.
-	//
-	// It is not dead code. Two guesses racing can both increment past the cap
-	// before either burns, and a burn that errors leaves the row standing at
-	// or above it. This reaches that state directly and asserts the RIGHT
-	// code is still refused, which is the property the guard exists for.
 	store := newFakeStore()
 	s := newTestService(t, store)
 	ctx := context.Background()
@@ -253,14 +218,7 @@ func TestACodeFoundAlreadyAtTheCapIsRefusedOnSight(t *testing.T) {
 	}
 }
 
-// === THE MAIL CANNON ===
-
 func TestASecondRequestInsideTheIntervalSendsNothing(t *testing.T) {
-	// WITHOUT THIS THE ROUTE IS A WEAPON POINTED AT SOMEBODY ELSE'S INBOX.
-	// A script asks for a code for a victim's address a thousand times and a
-	// thousand mails arrive. The existing limiter cannot stop it: it keys on
-	// the CLIENT address, and the attacker rotates those. The throttle has to
-	// key on the address being MAILED, which is what this does.
 	store := newFakeStore()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
@@ -283,9 +241,6 @@ func TestASecondRequestInsideTheIntervalSendsNothing(t *testing.T) {
 }
 
 func TestThrottlingIsIndistinguishableFromAnUnknownAddress(t *testing.T) {
-	// The same answer, or asking twice quickly tells an attacker which
-	// addresses have a log here — which is the whole thing RequestCode's
-	// shape exists to prevent.
 	store := newFakeStore()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
@@ -308,10 +263,6 @@ func TestThrottlingIsIndistinguishableFromAnUnknownAddress(t *testing.T) {
 }
 
 func TestAThrottledRequestDOESNOTDisturbTheLiveCode(t *testing.T) {
-	// THE SHARPEST OF THE THREE. If a throttled request replaced or burned
-	// the code, an attacker could stop a traveller signing in AT ALL by
-	// asking for codes in a loop: every one the traveller received would be
-	// dead before they finished typing it.
 	store := newFakeStore()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
@@ -331,8 +282,6 @@ func TestAThrottledRequestDOESNOTDisturbTheLiveCode(t *testing.T) {
 }
 
 func TestAfterTheIntervalANewCodeIsSent(t *testing.T) {
-	// The throttle is a delay and not a lock: a traveller who genuinely did
-	// not receive the first one has to be able to ask again.
 	store := newFakeStore()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
@@ -345,7 +294,6 @@ func TestAfterTheIntervalANewCodeIsSent(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("a request after the interval did not send: ok=%v err=%v", ok, err)
 	}
-	// And the new one replaces the old, which is the one-live-code rule.
 	if _, err := s.SignInWithCode(ctx, "matt@example.com", first); !errors.Is(err, ErrBadCredentials) {
 		t.Fatal("the superseded code still worked")
 	}
@@ -355,13 +303,6 @@ func TestAfterTheIntervalANewCodeIsSent(t *testing.T) {
 }
 
 func TestTheCodeConstantsAreDelaysAndNotLocks(t *testing.T) {
-	// THE LEG A SURVIVING MUTATION FOUND, AND IT IS THE CLASS THAT HIDES.
-	// Every other test here advances the clock BY CodeRequestInterval, so it
-	// passes whatever that constant is — a hundred-year interval, which makes
-	// the throttle a permanent lock on signing in, reddened nothing at all.
-	// A relative assertion cannot see a value that moves both of its terms.
-	//
-	// So these are fixed references rather than the constants restated.
 
 	if CodeRequestInterval <= 0 {
 		t.Fatal("a non-positive interval is no throttle: the mail cannon is loaded")
@@ -372,10 +313,6 @@ func TestTheCodeConstantsAreDelaysAndNotLocks(t *testing.T) {
 			"before they can ask again", CodeRequestInterval)
 	}
 
-	// THE RELATIONSHIP IS THE SHARPER OF THE TWO. If the interval ever
-	// reached the TTL there would be a window in which a traveller's code has
-	// expired AND they are still throttled from asking for another, which is
-	// an account nobody can sign in to for as long as the gap lasts.
 	if CodeRequestInterval >= CodeTTL {
 		t.Fatalf("CodeRequestInterval %v >= CodeTTL %v: a traveller whose code "+
 			"expires cannot ask for another until the throttle clears, and in "+

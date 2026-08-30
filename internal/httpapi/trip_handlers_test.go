@@ -1,11 +1,5 @@
 // D3's route, over the real mux, the real middleware chain and the real auth,
 // with a fake store.
-//
-// WHAT ONLY THIS CAN SAY. internal/seed's cascade legs are the counts, against
-// the real schema and the client's own document; internal/postgres has the
-// version behaviour. These are about what leaves the process: a 200 rather
-// than a 204, a WHOLE ENVELOPE rather than a bare trip, and a repeated delete
-// that is a success rather than a 404.
 package httpapi
 
 import (
@@ -15,12 +9,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// THE ANSWER IS THE WHOLE LOGBOOK, IN THE CLIENT'S OWN ENVELOPE.
-//
-// The cache cannot splice a cascade: D3 removes rows from five tables and
-// clears a column on rows in a sixth, so a bare trip or a 204 would leave the
-// phone re-deriving the cascade from the sheet's copy — two implementations of
-// one rule, and the client's `deleteTrip` is already the other one.
+// The answer is the whole logbook, in the client's own envelope.
 func TestDeletingATripAnswersTheWholeLogbook(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -51,9 +40,6 @@ func TestDeletingATripAnswersTheWholeLogbook(t *testing.T) {
 	if len(trips) != 0 {
 		t.Errorf("the log came back holding %d trips after its only one was deleted", len(trips))
 	}
-	// The five lists are still LISTS and not nulls. Emit normalises, and this
-	// is the second path through it — the write path is where that rule was
-	// broken before (`"cityIds":null`).
 	for _, key := range []string{"cities", "places", "photos", "walks"} {
 		if _, isList := inner[key].([]any); !isList {
 			t.Errorf("%s = %#v, want a list — a nil Go slice marshals to null, and the "+
@@ -62,13 +48,7 @@ func TestDeletingATripAnswersTheWholeLogbook(t *testing.T) {
 	}
 }
 
-// A REPEATED DELETE IS A SUCCESS AND CARRIES THE SAME TAG.
-//
-// The client's own rule: an unknown id satisfies a delete, "the caller asked
-// for that trip to be absent and it is". DEC-103 is the reason it matters —
-// deletes are precisely what a client retries against a server that answered
-// 404 for a route it did not have — so the second call must not 404 AND must
-// not invalidate the phone's whole cached document by moving the version.
+// A repeated delete is a success and carries the same tag.
 func TestARepeatedDeleteIsASuccessAndDoesNotMoveTheTag(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -96,14 +76,8 @@ func TestARepeatedDeleteIsASuccessAndDoesNotMoveTheTag(t *testing.T) {
 	}
 }
 
-// A TRIP THAT NEVER EXISTED IS THE SAME ANSWER, AND ON A LOG NOBODY HAS
-// WRITTEN TO IT CARRIES NO ETag AT ALL.
-//
-// `tagFor` answers "" below version 1, because `FormatETag` panics on a zero
-// half — a tag with one half is the defect DEC-49's first half exists to
-// prevent. That branch is unreachable from `PUT /v1/trips/{id}`, which always
-// bumps; it is reachable here, because a delete that removed nothing moves no
-// version.
+// A trip that never existed gets the same answer, and a log nobody has written
+// to carries no ETag at all.
 func TestDeletingATripFromALogNobodyHasWrittenCarriesNoTag(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -119,10 +93,7 @@ func TestDeletingATripFromALogNobodyHasWrittenCarriesNoTag(t *testing.T) {
 	}
 }
 
-// AND IT NEGOTIATES THE FORMAT, because what leaves here is a whole envelope.
-// A client that can only read a version this build cannot write has to be told
-// so; answering the current version regardless is DEC-40's refetch loop
-// wearing a 200.
+// It negotiates the format, because what leaves here is a whole envelope.
 func TestDeletingATripRefusesAFormatThisBuildCannotWrite(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

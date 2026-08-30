@@ -1,38 +1,5 @@
-// THE EMIT MONOPOLY, AS A MECHANISM RATHER THAN AS A DISCIPLINE (CF-BLO-3,
-// PD-15, definition_of_done 9).
-//
-// The rule: no handler in this package writes a domain entity to
-// `httpx.WriteJSON` without passing it through `internal/logbook` first. A nil
-// slice marshals to `null` and every list key in this document is read by the
-// client as a NON-NULLABLE List, so a bare entity carrying an empty list is
-// the one shape the app throws on — measured twice now, against `"cityIds":
-// null` on a running server before EmitTrip existed, and against
-// `"visits":null` here.
-//
-// IT IS WRITTEN IN R6 AND NOT IN R8, because R6 IS THE FIRST STEP THAT CAN
-// VIOLATE IT. `PUT /v1/places/{id}` is the first route to answer a bare entity
-// that carries a list, and a sweep written after two more steps of unguarded
-// handlers would be a cleanup rather than a guard.
-//
-// A GREP CANNOT MAKE THIS CHECK, which is the same finding VS3 recorded about
-// the encoding/json monopoly: it matches its own source, it matches comments,
-// and it cannot tell `logbook.EmitPlace(place)` from the word "EmitPlace" in a
-// sentence. So this walks the AST of every non-test file in this package,
-// finds every call to `httpx.WriteJSON`, and classifies its FOURTH argument.
-//
-// THREE CLASSIFICATIONS AND ONLY ONE OF THEM NEEDS A LIST ENTRY:
-//
-//   - a call to `logbook.Emit*` — the rule being kept, and always fine;
-//   - a composite literal of a LOCAL type (`mediaBody{…}`) — httpapi's own
-//     response shape rather than a domain entity, and it cannot be one,
-//     because a domain entity's literal would be `logbook.Place{…}` and is
-//     classified as a selector;
-//   - anything else — a bare identifier, a field access, a conversion — which
-//     must be on `bareBodies` with the reason it needs no normalisation.
-//
-// THE LIST IS EQUALITY AND NOT A CEILING, on the jsonImporters precedent: an
-// entry that stops existing reddens this too, so a route that starts
-// normalising cannot leave a stale exemption behind claiming it does not.
+// The emit monopoly, as a mechanism rather than as a discipline (
+// definition_of_done 9).
 package httpapi
 
 import (
@@ -47,14 +14,7 @@ import (
 	"testing"
 )
 
-// bareBodies is every fourth argument to httpx.WriteJSON in this package that
-// is NOT a composite literal of a local type and NOT an Emit call, with the
-// reason it may be written bare.
-//
-// EVERY ENTRY HERE HAS TO ARGUE THAT ITS VALUE CARRIES NO LIST FIELD, because
-// that is the only thing EmitX does. Two of the three are `logbook.Emit`'s own
-// return value, which is the whole document already normalised; the third is a
-// domain entity and it is the one that had to be argued.
+// bareBodies collects every fourth argument to httpx.WriteJSON in this package.
 var bareBodies = map[string]string{
 	"internal/httpapi/logbook_handlers.go:envelope": "logbook.Emit's own return value: " +
 		"every list in the document was normalised by the function that built it",
@@ -131,10 +91,6 @@ func TestEveryDomainEntityOnTheWireGoesThroughInternalLogbook(t *testing.T) {
 			}
 			if literal, isLiteral := body.(*ast.CompositeLit); isLiteral {
 				if _, isForeign := literal.Type.(*ast.SelectorExpr); !isForeign {
-					// A local type: httpapi's own response shape. A domain
-					// entity written as a literal would be
-					// `logbook.Place{…}` — a SelectorExpr — and falls through
-					// to the list below.
 					return true
 				}
 			}
@@ -172,12 +128,6 @@ func TestEveryDomainEntityOnTheWireGoesThroughInternalLogbook(t *testing.T) {
 
 // emitsThroughLogbook answers whether the expression is a call into
 // internal/logbook's emitter family.
-//
-// IT MATCHES THE PACKAGE AND THE PREFIX RATHER THAN A LIST OF NAMES, because
-// the family grows one function per step — EmitTrip at R1, EmitPlace here,
-// EmitWalk in R7 — and a list here would be a second place to remember them.
-// `logbook.Emit` itself is included: it is the whole-document normaliser and is
-// the strongest form of the rule being kept.
 func emitsThroughLogbook(expr ast.Expr) bool {
 	call, isCall := expr.(*ast.CallExpr)
 	if !isCall {
@@ -191,10 +141,7 @@ func emitsThroughLogbook(expr ast.Expr) bool {
 	return isIdent && pkg.Name == "logbook" && strings.HasPrefix(sel.Sel.Name, "Emit")
 }
 
-// THE CHECKER ITSELF IS CHECKED, on the precedent httpx's error sweep set:
-// "a guard proven once against one mutation is proven against that mutation,
-// not against its class". These are the four shapes the classifier has to tell
-// apart, asserted directly rather than through a file on disk.
+// The checker itself is checked, on the precedent httpx's error sweep set.
 func TestTheEmitCheckerTellsTheFourShapesApart(t *testing.T) {
 	for _, tc := range []struct {
 		source string

@@ -1,10 +1,4 @@
-// The two write contracts, and the three answers `visits` can carry.
-//
-// EVERY LEG HERE IS ABOUT A REFUSAL THAT NEEDS NO DATABASE. Existence is the
-// store's — a check made out here is a check made against a database that can
-// move underneath it — so what this file is about is shape: what a field may
-// look like, and the one field where an EMPTY value and an ABSENT value are
-// different requests with different blast radii.
+// The two write contracts, and's three answers `visits` can carry.
 package logbook_test
 
 import (
@@ -15,21 +9,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// `ptr` and `fieldOf` are validate_test.go's, in the same test package.
-
-// === THE ONE THE STEP IS ABOUT ===
-
-// ABSENT, EMPTY AND PRESENT ARE THREE ANSWERS AND ONLY ONE OF THEM IS A NO-OP
-// (DEC-89, SAF-MAJ-4).
-//
-// The middle one is the whole finding. PD-06's upsert fix closes a no-op
-// re-send of an UNCHANGED array and does not close this: the mandated shape
-// ends "DELETE only the ids absent from the incoming array", and when the array
-// is empty EVERY id is absent. Measured against the client's own fixture at
-// `fushimi-inari`: 28 visits and 30 photographs across 3 trips, and the empty
-// array leaves 0 and 0 with `place_id IS NOT NULL AND visit_id IS NULL` at 30.
-// Whole-log it unfiles 95 photographs and destroys 5 visit notes with every
-// table count except `visits` unchanged.
+// absent, empty and present are three answers and only one of them is a no-op
 func TestValidationJudgesTheShapeOfVisitsAndNotWhatWritingItWouldDestroy(t *testing.T) {
 	absent := logbook.PlaceWrite{ID: ptr("fushimi-inari")}
 	if err := logbook.ValidatePlace(absent); err != nil {
@@ -38,17 +18,6 @@ func TestValidationJudgesTheShapeOfVisitsAndNotWhatWritingItWouldDestroy(t *test
 			"all — correct by construction", err)
 	}
 
-	// `visits: []` IS NOT REFUSED HERE, AND IT USED TO BE. Whether clearing
-	// destroys anything is a fact about the place's current occasions, and this
-	// function is handed an array and nothing else. Refusing it on shape
-	// refused nine of the seventeen places in the client's own log — every
-	// wishlist place, for which `Emit` writes exactly this — so the document
-	// the server produced was one it would not accept back.
-	//
-	// The refusal lives in `postgres.writeVisits` now, one query from the
-	// count. `internal/seed` holds the leg that proves both halves against a
-	// real database; this one only proves the shape check has stopped
-	// answering a question it cannot see.
 	empty := logbook.PlaceWrite{ID: ptr("fushimi-inari"), Visits: &[]logbook.Visit{}}
 	if err := logbook.ValidatePlace(empty); err != nil {
 		t.Errorf("`visits: []` = %v, want no error FROM VALIDATION. The destruction it "+
@@ -82,21 +51,13 @@ func TestAVisitsArrayIsCheckedRowByRow(t *testing.T) {
 		}
 	}
 
-	// AN EMPTY placeId IS THE ORDINARY CASE and must not be refused: the path
-	// carries the place, so a client that lets it is not wrong.
 	visits := []logbook.Visit{{ID: "v-1", TripID: "kyoto-in-may"}}
 	if err := logbook.ValidatePlace(logbook.PlaceWrite{ID: &place, Visits: &visits}); err != nil {
 		t.Errorf("a visit with no placeId = %v, want no error", err)
 	}
 }
 
-// === D2's TWO BRANCHES AS A TYPE ===
-
-// `?photos` HAS NO DEFAULT, AND THE ZERO VALUE IS WHAT ENFORCES IT.
-//
-// "A default is a silent answer to the question D2 makes the user answer on
-// screen." A `bool` would have made `false` mean keep, so a caller that never
-// answered would get one of the two branches and no error.
+// `?photos` has no default, and the zero value is what enforces it.
 func TestThePhotoDispositionRefusesEverythingButTheTwoSpellings(t *testing.T) {
 	for _, raw := range []string{"", "keepp", "KEEP", "Delete", "true", "0", "keep,delete"} {
 		got, err := logbook.ParsePhotoDisposition(raw)
@@ -119,10 +80,7 @@ func TestThePhotoDispositionRefusesEverythingButTheTwoSpellings(t *testing.T) {
 	}
 }
 
-// THE ABSENT CASE AND THE MISSPELLED CASE ARE BYTE-IDENTICAL, deliberately: to
-// a caller they are one condition — this route will not guess how far a
-// deletion reaches — and two different sentences would suggest one of them has
-// a safe answer.
+// The absent case and the misspelled case are byte-identical, deliberately.
 func TestAMissingPhotosParameterAndAMisspeltOneSayTheSameThing(t *testing.T) {
 	_, absent := logbook.ParsePhotoDisposition("")
 	_, misspelt := logbook.ParsePhotoDisposition("keepp")
@@ -131,10 +89,7 @@ func TestAMissingPhotosParameterAndAMisspeltOneSayTheSameThing(t *testing.T) {
 	}
 }
 
-// THE ZERO VALUE IS NOT REACHABLE FROM OUTSIDE THE PACKAGE, which is what
-// makes "there is no default" a property of the type rather than a rule a
-// handler remembers. What CAN be built outside is `PhotoDisposition(0)`, and
-// Service.RemovePlace refuses it before the store is reached.
+// The zero value is not reachable from outside the package.
 func TestTheServiceRefusesADispositionNobodyChose(t *testing.T) {
 	var reached int
 	svc := logbook.Service{Places: countingPlaces{reached: &reached}}
@@ -159,8 +114,6 @@ func TestTheServiceRefusesADispositionNobodyChose(t *testing.T) {
 			"everything", reached)
 	}
 }
-
-// === THE CITY ===
 
 func TestACityWriteIsCheckedFieldByField(t *testing.T) {
 	for _, tc := range []struct {
@@ -189,9 +142,6 @@ func TestACityWriteIsCheckedFieldByField(t *testing.T) {
 		}
 	}
 
-	// `country_code = 'JAPAN'` — five characters — INSERTED SUCCESSFULLY before
-	// `cities_country_code_ck` existed, which is 0001's own recorded reason for
-	// the check. This is the Go half naming the field first.
 	if err := logbook.ValidateCity(logbook.CityWrite{
 		ID: ptr("kyoto"), Name: ptr("Kyoto"),
 		Country: &logbook.Country{Code: "JP", Name: "Japan"},
@@ -234,8 +184,7 @@ func TestAPlaceWriteIsCheckedFieldByField(t *testing.T) {
 }
 
 // countingPlaces is a PlaceStore that records being reached and does nothing
-// else. It exists for one leg — "the store was not reached" — and a fuller
-// twin would be a second implementation of D2 with nothing asserting about it.
+// else.
 type countingPlaces struct{ reached *int }
 
 func (c countingPlaces) PutPlace(context.Context, string, logbook.PlaceWrite) (logbook.Place, int64, error) {

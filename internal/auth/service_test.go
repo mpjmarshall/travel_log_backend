@@ -1,13 +1,4 @@
-// Register and sign-in as behaviour, against a fake store. Test-first.
-//
-// THE FIRST LEG IN THIS FILE IS THE ENUMERATION ORACLE, deliberately: it is
-// the one most easily lost, because every later change to sign-in has an
-// obvious, helpful, wrong version of itself — "no account with that address"
-// — and the leg is the only thing in the system that says no.
-//
-// IT RUNS WITHOUT A DATABASE, and that is the point of the Store interface
-// rather than a consequence of it. A leg that only runs behind a
-// TEST_DATABASE_URL skip is a leg that stops being run.
+// Register and sign-in as behaviour, against a fake store.
 package auth
 
 import (
@@ -19,11 +10,7 @@ import (
 	"time"
 )
 
-// fakeStore is the Store interface with a map behind it. It does NOT reproduce
-// the database's rules: lower(email) uniqueness is enforced here in Go, which
-// the real store leaves to travellers_email_lower_key. The two are asserted
-// separately and on purpose — this file is about the service's decisions and
-// internal/postgres is about the schema's.
+// fakeStore is the Store interface with a map behind it.
 type fakeStore struct {
 	codes      map[string]*SignInCode
 	travellers map[string]storedTraveller // keyed by lower(email)
@@ -32,12 +19,6 @@ type fakeStore struct {
 	failWith   error
 	touched    []string
 
-	// clock is what `sessions.last_used_at DEFAULT now()` is in the fake, and
-	// it is not decoration: DEC-100 decides whether to touch by comparing the
-	// STORED value against the clock, so a fake that left LastUsedAt at the
-	// zero time would report every session as infinitely stale and touch on
-	// every request — which is exactly the behaviour the granularity leg
-	// exists to refuse, passing.
 	clock func() time.Time
 }
 
@@ -80,11 +61,6 @@ func (f *fakeStore) CreateTraveller(_ context.Context, email, hash string) (Trav
 		return Traveller{}, ErrEmailTaken
 	}
 	f.nextID++
-	// UUID-SHAPED, AND NOT 'a', 'b', 'c'. The real column is a uuid and
-	// HashCode salts with it, refusing anything else — so a fake handing out
-	// single letters makes every code leg fail for a reason that is about the
-	// fake. This is the smallest change that keeps the fake faithful where it
-	// is now load-bearing.
 	tr := Traveller{ID: fakeUUID(f.nextID), Email: email}
 	f.travellers[key] = storedTraveller{Traveller: tr, hash: hash}
 	return tr, nil
@@ -149,9 +125,8 @@ func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID strin
 	return nil
 }
 
-// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at IS
-// NULL`: a second revoke moves nothing and reports so, which is what makes the
-// bool and the count mean anything.
+// RevokeSession and RevokeEverySession mirror `update … where revoked_at is
+// NULL`.
 func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
 	if f.failWith != nil {
 		return false, f.failWith
@@ -183,8 +158,8 @@ func (f *fakeStore) RevokeEverySession(_ context.Context, travellerID string) (i
 	return moved, nil
 }
 
-// TravellerExists is DEC-86's question, and the fake answers it the way the
-// table does: any row at all, whatever its address.
+// TravellerExists is the question, and the fake answers it the way the table
+// does: any row at all, whatever its address.
 func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
 	if f.failWith != nil {
 		return false, f.failWith
@@ -208,14 +183,8 @@ func newTestService(t *testing.T, store Store) *Service {
 	return newServiceAtClock(t, store, func() time.Time { return at(t, testNow) })
 }
 
-// newServiceAtClock is newTestService with a clock a leg can move, AND IT HANDS
-// THE SAME CLOCK TO THE FAKE STORE.
-//
-// That second half is load-bearing rather than tidy. `sessions.last_used_at`
-// is `NOT NULL DEFAULT now()` in the schema, so a session is born fresh; a
-// fake whose sessions are born at the zero time reports every one of them as
-// infinitely stale, and DEC-100's granularity leg would pass against an
-// implementation that touched on every single request.
+// newServiceAtClock is newTestService with a clock a leg can move, and it
+// hands the same clock to the fake store.
 func newServiceAtClock(t *testing.T, store Store, now func() time.Time) *Service {
 	t.Helper()
 	if fake, held := store.(*fakeStore); held {
@@ -227,8 +196,6 @@ func newServiceAtClock(t *testing.T, store Store, now func() time.Time) *Service
 		Now:    now,
 	}
 }
-
-// === THE ORACLE ===
 
 func TestAWrongPassphraseAndAnUnknownEmailAreTheSameAnswer(t *testing.T) {
 	store := newFakeStore()
@@ -266,8 +233,7 @@ func TestAWrongPassphraseAndAnUnknownEmailAreTheSameAnswer(t *testing.T) {
 }
 
 // The other half of the oracle, and the half a status-code assertion cannot
-// see: an unknown address must cost the same WORK as a wrong passphrase, or
-// the two are told apart with a stopwatch instead of a message.
+// see.
 func TestAnUnknownEmailStillVerifiesAgainstSomething(t *testing.T) {
 	store := newFakeStore()
 	s := newTestService(t, store)
@@ -297,8 +263,6 @@ func (c *countingHasher) Verify(e, p string) (bool, error) {
 	c.verifies++
 	return c.Hasher.Verify(e, p)
 }
-
-// === REGISTER ===
 
 func TestRegisterMintsNoSession(t *testing.T) {
 	store := newFakeStore()
@@ -366,21 +330,6 @@ func TestRegisterStoresTheAddressAsTypedAndDoesNotLowercaseIt(t *testing.T) {
 	}
 }
 
-// DEC-86. REGISTRATION CLOSES AFTER THE FIRST TRAVELLER, AND THE ADDRESS HAS
-// STOPPED MATTERING — which is the whole of the change and is why this leg
-// replaces TestRegisterRefusesAnAddressThatIsAlreadyHeld rather than sitting
-// beside it.
-//
-// The old leg asserted a second registration of ONE address was refused, and
-// its name promised that the address was the reason. It is not the reason any
-// more: a second registration of ANY address is refused, so a leg that only
-// tried the same address would pass against a build that still handed a
-// stranger an account.
-//
-// THE ORACLE SHRINKS RATHER THAN GROWS. Before, a 409 told a caller that THAT
-// ADDRESS is registered here. Now it tells them the instance is in use, which
-// the sign-in page already tells them. The two cases are asserted to answer
-// the SAME sentinel for that reason.
 func TestRegistrationClosesAfterTheFirstTraveller(t *testing.T) {
 	for _, second := range []string{
 		"matt@example.com",
@@ -406,18 +355,8 @@ func TestRegistrationClosesAfterTheFirstTraveller(t *testing.T) {
 	}
 }
 
-// AND THE REFUSAL COSTS NO ARGON2, which is why the rule is asked of the store
-// rather than left to the INSERT to answer.
-//
-// Hashing is 64 MiB and tens of milliseconds by design (DEC-08). A closed
-// instance that pays that on every attempt is an unauthenticated memory sink
-// behind a route on which nobody can ever succeed — DEC-48's per-address
-// ceiling bounds it, and a bound on work nobody should be doing at all is the
-// weaker of the two guards.
-//
-// IT COUNTS CALLS RATHER THAN TIMING THEM, which is the shape PD-12 asks for
-// everywhere in this package: a timing assertion on a machine running a test
-// suite is a flake with a comment over it.
+// The refusal costs no ARGON2, which is why the rule is asked of the
+// store rather than left to the insert to answer.
 func TestAClosedRegistrationRefusesBeforeItHashesAnything(t *testing.T) {
 	store := newFakeStore()
 	counting := &countingHasher{Hasher: Argon2id{Params: cheap.Params}}
@@ -489,8 +428,6 @@ func TestRegisterNeverReachesTheStoreWithAFieldItRefused(t *testing.T) {
 	}
 }
 
-// === SIGN IN ===
-
 func TestSignInAnswersATokenAndStoresOnlyItsHash(t *testing.T) {
 	store := newFakeStore()
 	s := newTestService(t, store)
@@ -557,10 +494,8 @@ func TestTheSessionExpiresATTLFromNow(t *testing.T) {
 	}
 }
 
-// The assertion is on the ERROR TYPE and not merely on "an error", because an
-// empty store answers an error for every address anyway: a leg that only
-// checked `err == nil` would pass against a SignIn that validates nothing and
-// would go on passing after somebody deleted the checks.
+// The assertion is on the error type and not merely on "an error", because an
+// empty store answers an error for every address anyway.
 func TestSignInRefusesTheFieldsItCannotUse(t *testing.T) {
 	s := newTestService(t, newFakeStore())
 	ctx := context.Background()
@@ -586,8 +521,6 @@ func TestSignInRefusesTheFieldsItCannotUse(t *testing.T) {
 		}
 	}
 }
-
-// === AUTHENTICATE ===
 
 func signedIn(t *testing.T) (*Service, *fakeStore, Issued) {
 	t.Helper()
@@ -616,17 +549,6 @@ func TestAuthenticateResolvesTheTraveller(t *testing.T) {
 	}
 }
 
-// DEC-100. THE TOUCH IS PER TouchInterval AND NOT PER REQUEST, and this leg
-// asserts BOTH directions because only the pair is falsifiable: an
-// implementation that never touches passes the first half, and one that
-// touches every time passes the second.
-//
-// THE FRESH-SESSION HALF IS THE ONE THAT MEASURES THE CHANGE. A sign-in writes
-// `last_used_at` — the column defaults to now() — so the very next request is
-// against a session seconds old, which is the state EVERY request after the
-// first is in for a phone that syncs. Before DEC-100 that state cost a
-// transaction, an advisory lock, an existence read, an UPDATE and a commit:
-// five of the nine round trips one 304 was measured to make.
 func TestTheSessionTouchIsPerIntervalAndNotPerRequest(t *testing.T) {
 	store := newFakeStore()
 	clock := at(t, testNow)
@@ -644,7 +566,6 @@ func TestTheSessionTouchIsPerIntervalAndNotPerRequest(t *testing.T) {
 		t.Fatalf("signing in touched %d sessions; the fixture is wrong", len(store.touched))
 	}
 
-	// A phone that syncs: many requests, all inside the interval.
 	clock = clock.Add(TouchInterval - time.Second)
 	for range 20 {
 		if _, err := s.Authenticate(ctx, issued.Token); err != nil {
@@ -658,7 +579,6 @@ func TestTheSessionTouchIsPerIntervalAndNotPerRequest(t *testing.T) {
 			"    total server work.", len(store.touched))
 	}
 
-	// And it is not "never": once the stored value is stale, one write.
 	clock = clock.Add(2 * time.Second)
 	for range 20 {
 		if _, err := s.Authenticate(ctx, issued.Token); err != nil {
@@ -682,16 +602,6 @@ func TestAuthenticateRefusesEveryShapeOfWrongToken(t *testing.T) {
 		t.Fatalf("NewToken: %v", err)
 	}
 
-	// THE "one character changed" CASE HAS TO CHANGE A CHARACTER, and spelling
-	// it as a fixed letter did not. `"Z" + issued.Token[1:]` IS the issued
-	// token whenever the token already begins with Z, and the leg then asserts
-	// that a VALID token is refused — which fails. base64url's alphabet is 64
-	// characters, so it fired on 1.620% of runs, measured over 64,000 tokens
-	// against the 1/64 = 1.5625% the alphabet predicts. It fired twice during
-	// R6's mutation runs, and `make check` is the only gate this project has.
-	//
-	// Derive the substitute from the character it replaces instead of naming
-	// one, so the case cannot degenerate no matter what the token starts with.
 	changedFirst := "Z"
 	if strings.HasPrefix(issued.Token, "Z") {
 		changedFirst = "Y"
@@ -745,11 +655,8 @@ func TestAuthenticateRefusesASessionThatWasRevoked(t *testing.T) {
 	}
 }
 
-// The store finds the row by an indexed equality on token_hash, which is not a
-// constant-time operation and cannot be. Spec L24 asks for the COMPARISON to
-// be constant-time all the same, so the service re-checks what came back
-// against what was presented — which is also the only thing standing between a
-// store that returns the wrong row and a session handed to the wrong person.
+// The store finds the row by an indexed equality on token_hash, which is not
+// a constant-time operation and cannot be.
 func TestAuthenticateRefusesARowWhoseHashDoesNotMatchWhatWasPresented(t *testing.T) {
 	s, store, issued := signedIn(t)
 

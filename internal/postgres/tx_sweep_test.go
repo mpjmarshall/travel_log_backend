@@ -1,23 +1,4 @@
-// The acceptance check for VS5, as a MECHANISM rather than a discipline.
-//
-// DEC-50 says every traveller-scoped write goes through one of the two helpers
-// and names the single exception. A rule like that is worth exactly as much as
-// the thing that notices when somebody opens a transaction somewhere else, so
-// this walks the module's ASTs for calls named `Begin` or `BeginTx` and asserts
-// the set of files making them is inside a stated allowlist.
-//
-// IT IS SYNTACTIC, AND THAT IS DELIBERATE. Proving the receiver is a `*sql.DB`
-// needs go/types, which needs golang.org/x/tools — a dependency this project
-// has not had the conversation for. Matching on the NAME is a superset: it also
-// catches `conn.BeginTx`, which is what migrate.go does, and it would catch a
-// hand-rolled `Begin` on anything else. A superset is the right error to make
-// here: it over-reports, and an over-report is a comment away from resolved
-// while an under-report is a silent hole.
-//
-// TEST FILES ARE EXCLUDED, for the reason internal/config's sweep excludes
-// them: a leg opening its own transaction to ask a second session whether a
-// lock is held is not application code, and this file's own siblings do exactly
-// that.
+// The acceptance check for, as a mechanism rather than a discipline.
 package postgres
 
 import (
@@ -32,50 +13,15 @@ import (
 )
 
 // transactionAllowlist is the spec, not a record of what happens to be true.
-// Every entry carries the reason it is on the list.
-//
-// The register entry is DEC-50's one exception and it is written down HERE,
-// explicitly, rather than left as the surprise a later worker discovers when
-// this test goes red on correct code: `POST /v1/auth/register` INSERTs the
-// traveller row that the per-traveller advisory lock is keyed on, so it can
-// take neither helper. It is the only write in the system outside both.
 var transactionAllowlist = map[string]string{
 	"internal/postgres/tx.go":      "WithTravellerTx and WithTravellerLock — the two helpers themselves",
 	"internal/postgres/read_tx.go": "WithReadSnapshot — the repeatable-read snapshot the reader runs in",
 	"internal/postgres/migrate.go": "the migration runner, which predates the helpers and is not traveller-scoped",
 
-	// R4. `make seed` INSERTS the traveller row inside this transaction, so
-	// there is no traveller to key an advisory lock on until it commits —
-	// which is the same reason register was predicted to need an exemption.
-	// Three further facts, and each is why neither helper fits rather than a
-	// preference: it writes TEN tables and the helpers wrap one write; it sets
-	// logbook_version to 1 in the travellers INSERT rather than bumping a
-	// counter that does not exist yet; and it REFUSES to run at all when any
-	// traveller row exists (DEC-97), so the concurrency the lock exists to
-	// order is a state this function cannot be in. It is a developer command
-	// and nothing in cmd/api imports it — cmd/api/routes_test.go asserts that
-	// separately.
 	"internal/seed/load.go": "the seed's ten-table load: it CREATES the traveller the " +
 		"advisory lock would be keyed on, writes ten tables in one transaction, and " +
 		"refuses to run when any traveller row exists (DEC-97)",
 }
-
-// DEC-50's ONE EXCEPTION IS NOT AN ALLOWLIST ENTRY, AND VS6 IS WHERE THAT WAS
-// SETTLED. VS5 wrote one for `internal/rest/auth_handlers.go`, predicting that
-// POST /v1/auth/register would open a transaction it could not hand to either
-// helper. Two things about that prediction turned out wrong, and the second
-// one is the interesting one:
-//
-//   - the package is `internal/httpapi`, not `internal/rest` (DEC-74), so the
-//     entry named a path nothing would ever occupy; and
-//   - register's write is ONE INSERT, which is already atomic, so it opens no
-//     transaction at all. An allowlist entry grants an exemption; an exemption
-//     nothing uses is a hole with a comment over it, and TestNoAllowlistEntryIsStale
-//     exists precisely to say so.
-//
-// So the entry is gone and TestRegisterTakesNeitherHelperAndOpensNoTransaction
-// below replaces it. That is a strictly stronger check: the old one could only
-// fail if somebody edited the map, and this one fails if the CODE changes.
 
 // transactionOpeners answers the module's non-test files that call Begin or
 // BeginTx, and the files it walked.
@@ -166,11 +112,7 @@ func TestNothingOutsideTheAllowlistOpensATransaction(t *testing.T) {
 	}
 }
 
-// A stale allowlist entry is the way this check rots: the file is renamed or
-// stops opening a transaction, the entry stays, and the exemption it grants is
-// now unattached to anything. Entries for files that do not exist YET are
-// tolerated — the register entry is one, by design — but a file that exists and
-// is exempt must be using its exemption.
+// A stale allowlist entry is the way this check rots.
 func TestNoAllowlistEntryIsStale(t *testing.T) {
 	root := moduleRootFrom(t)
 	opens := transactionOpeners(t)
@@ -189,25 +131,7 @@ func TestNoAllowlistEntryIsStale(t *testing.T) {
 	}
 }
 
-// The membership split of DEC-50, as a walk over the file that implements it.
-//
-// IT IS ONE METHOD SINCE DEC-100, NOT TWO. TouchSession left
-// WithTravellerLock: it writes one row keyed by session id, and what the
-// advisory lock protects is MULTI-STATEMENT work. See
-// TestTouchSessionTakesNeitherHelper below, which is the other half and asserts
-// the opposite about the same file.
-//
-// IT IS SYNTACTIC, like the sweep above and for the same reason: proving a
-// receiver's type needs go/types and therefore golang.org/x/tools, which this
-// project has not had the dependency conversation for. Matching on the NAME
-// over-reports, and an over-report is a comment away from resolved while an
-// under-report is a silent hole.
-//
-// WHAT IT ADDS OVER THE BEHAVIOURAL LEG. auth_store_test.go asserts that a
-// session write moves logbook_version by zero, which is the evidence. This
-// asserts the RULE — that the session writes go through WithTravellerLock and
-// never WithTravellerTx — so a future session write that happens not to be
-// counted by an existing leg still cannot take the bumping helper.
+// The membership split of, as a walk over the file that implements it.
 func TestTheSessionWritesTakeTheLockingHelperAndNotTheBumpingOne(t *testing.T) {
 	calls := callsByFunction(t, "internal/postgres/auth_store.go")
 
@@ -232,20 +156,7 @@ func TestTheSessionWritesTakeTheLockingHelperAndNotTheBumpingOne(t *testing.T) {
 	}
 }
 
-// DEC-100, AS A RULE ABOUT THE CODE RATHER THAN A MEASUREMENT OF ONE 304.
-//
-// The behavioural leg is in auth_store_test.go — it holds the traveller's
-// advisory lock in a second session and watches TouchSession complete anyway —
-// and it can only see what happens with the lock held. This asserts the rule,
-// so a future edit that "restores consistency" by wrapping the touch back up in
-// WithTravellerLock is red at the file rather than at a timing.
-//
-// AND IT NAMES WithTravellerTx SEPARATELY, because the two mistakes are
-// different sizes. Going back to WithTravellerLock costs four round trips per
-// authenticated request and serialises against the phone's own writes. Reaching
-// for WithTravellerTx instead bumps logbook_version on every request, which
-// invalidates the phone's whole cached log and means GET /v1/logbook never once
-// answers 304 in real use.
+// , AS A rule about the code rather than A measurement of one 304.
 func TestTouchSessionTakesNeitherHelper(t *testing.T) {
 	made := callsByFunction(t, "internal/postgres/auth_store.go")["TouchSession"]
 	if made == nil {
@@ -267,7 +178,7 @@ func TestTouchSessionTakesNeitherHelper(t *testing.T) {
 	}
 }
 
-// DEC-50's one exception, asserted about the code rather than about a map.
+// The one exception, asserted about the code rather than about a map.
 func TestRegisterTakesNeitherHelperAndOpensNoTransaction(t *testing.T) {
 	made := callsByFunction(t, "internal/postgres/auth_store.go")["CreateTraveller"]
 	if made == nil {

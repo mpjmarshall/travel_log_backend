@@ -32,10 +32,7 @@ func TestWriteJSONWritesTheValueTheStatusAndTheContentType(t *testing.T) {
 	}
 }
 
-// No trailing newline. json.Encoder appends one and json.Marshal does not, and
-// the choice is load-bearing rather than cosmetic: errors.go's two prebuilt
-// bodies are guarded by BYTE EQUALITY against this function's output, so a
-// newline here silently breaks the one response the AST sweep cannot see.
+// No trailing newline.
 func TestWriteJSONEmitsNoTrailingNewline(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -48,13 +45,7 @@ func TestWriteJSONEmitsNoTrailingNewline(t *testing.T) {
 }
 
 // The reason WriteJSON marshals to a buffer instead of streaming through an
-// Encoder. A value that fails half way through has, under a streaming encoder,
-// already sent an implicit 200 and some bytes — a truncated body under a
-// success status, which a client cannot tell from a short read.
-//
-// The fixture is a struct whose first field encodes fine and whose second
-// cannot: a streaming encoder writes `{"id":"kyoto",` before it discovers the
-// chan.
+// Encoder.
 func TestWriteJSONThatCannotEncodeAnswers500AndNotAPartialBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -94,10 +85,8 @@ func TestDecodeJSONReadsTheBody(t *testing.T) {
 	}
 }
 
-// DEC-13: every server addition is additive-and-optional, and that is a promise
-// about BOTH directions. DisallowUnknownFields is OFF on purpose — a client
-// built against a later API sends a key this build has never heard of, and
-// refusing it would make every additive change a breaking one.
+// : every server addition is additive-and-optional, and that is a promise
+// about both directions.
 func TestDecodeJSONTOLERATESAnUnknownField(t *testing.T) {
 	var got trip
 	err := decodeInto(t, `{"id":"kyoto","title":"Kyoto in May","sharing":{"pins":true}}`, &got)
@@ -140,9 +129,7 @@ func TestMaxBodyBytesIsOneMebibyte(t *testing.T) {
 	}
 }
 
-// The boundary, from both sides. A limit asserted only from the far side is
-// satisfied by a limit set anywhere below it — a 1-byte ceiling passes
-// "1 MiB + 1 is refused" and refuses every real request.
+// The boundary, from both sides.
 func TestTheBodyLimitIsEnforcedAtExactlyMaxBodyBytes(t *testing.T) {
 	pad := func(n int64) string {
 		const wrapper = `{"id":""}`
@@ -168,9 +155,7 @@ func TestTheBodyLimitIsEnforcedAtExactlyMaxBodyBytes(t *testing.T) {
 	}
 }
 
-// The limit is enforced by READING, not by trusting Content-Length: a client
-// that lies about its length, or sends none at all under chunked encoding, is
-// the case a length check misses entirely.
+// The limit is enforced by reading, not by trusting Content-Length.
 func TestTheLimitHoldsWhenTheBodyDeclaresNoLength(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v1/trips/kyoto",
@@ -187,9 +172,7 @@ func TestTheLimitHoldsWhenTheBodyDeclaresNoLength(t *testing.T) {
 	}
 }
 
-// Nothing from the decoder's own error text reaches the wire. Go's syntax
-// errors quote the offending input, so a body echoed into a message is a body
-// echoed to whoever sent it — and DEC-12 says the body is the code alone.
+// Nothing from the decoder's own error text reaches the wire.
 func TestNoDecoderProseReachesTheBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v1/trips/kyoto",

@@ -1,19 +1,5 @@
-// The three media routes, over the real mux, the real middleware chain and the
-// real auth, against media.Memory and a fake row store. Test-first.
-//
-// IT RUNS WITHOUT A DATABASE AND WITHOUT MinIO ON PURPOSE, and the split is
-// DEC-16's line drawn once more. What is here is what leaves the PROCESS: the
-// statuses, the codes, the field names, the header map's key set against the
-// URL's own signed-header list, and the two headers DEC-51 asks for. What only
-// a real bucket can say — that a signature is right, that MinIO answers
-// XAmzContentChecksumMismatch — is in internal/media's integration tier and is
-// not repeated. What only a real PostgreSQL can say — that the conflict branch
-// is bounded — is in internal/postgres and is not repeated either.
-//
-// media.Memory IS NOT A STUB THAT SAYS YES, which is what makes these legs
-// worth anything: it enforces the digest, the exact length, the content type,
-// the write-once and a bucket that has to exist, with the S3 codes the real
-// server answers.
+// The three media routes, over the real mux, the real middleware chain and
+// the real auth, against media.Memory and a fake row store.
 package httpapi
 
 import (
@@ -36,20 +22,11 @@ import (
 )
 
 // testMediaMaxBytes is small enough that a leg can go over it with a literal
-// and large enough that the fixture bytes fit. It is NOT the deployed number —
-// deploy/.env.example carries 26214400 — and nothing here asserts that one,
-// which is stated rather than left implicit.
+// Large enough that the fixture bytes fit.
 const testMediaMaxBytes = int64(1 << 20)
 
-// === the fake row store ===
-
-// fakeMedia is media_objects, and it honours the two rules the real statement
-// honours: the conflict branch is BOUNDED by `uploaded_at IS NULL`, and
-// `alreadyExists` is derived from uploaded_at and never from row presence.
-//
-// A FAKE THAT DID NOT WOULD MAKE EVERY LEG BELOW GREEN AGAINST THE CONTRACT
-// THE STORE EXISTS TO KEEP. That is the same reason fakeLogbook honours
-// DEC-89: a fake applying every field regardless proves the handler compiles.
+// fakeMedia is media_objects, and it honours's two rules the real statement
+// honours.
 type fakeMedia struct {
 	mu       sync.Mutex
 	rows     map[string]logbook.MediaObject
@@ -71,8 +48,6 @@ func (f *fakeMedia) BeginMedia(_ context.Context, _ string, b logbook.MediaBegin
 
 	existing, held := f.rows[*b.SHA256]
 	if held && existing.Committed() {
-		// THE BOUNDED CONFLICT BRANCH. Without it a client re-beginning an
-		// already-committed digest rewrites what those bytes ARE.
 		return existing, nil
 	}
 	row := logbook.MediaObject{
@@ -121,8 +96,6 @@ func (f *fakeMedia) MarkMediaUploaded(_ context.Context, _ string, id string) (l
 	return row, nil
 }
 
-// === helpers ===
-
 var fixtureBytes = []byte("a photograph, as far as this package is concerned\n")
 
 func digestOf(b []byte) string {
@@ -146,9 +119,7 @@ func decode(t *testing.T, got answer) map[string]any {
 	return out
 }
 
-// uploadBytes is what the client does with what begin handed it: PUT the bytes
-// at the address, through a twin that applies the same four refusals the
-// signature makes real MinIO apply.
+// uploadBytes is what the client does with what begin handed it.
 func (h *harness) uploadBytes(t *testing.T, travellerID, digest string, body []byte) {
 	t.Helper()
 	if err := h.objects.Put(
@@ -161,18 +132,8 @@ func (h *harness) uploadBytes(t *testing.T, travellerID, digest string, body []b
 
 // travellerID is the id the bucket key is built from, read back through the
 // only route that hands it out.
-//
-// IT GOES THROUGH THE ROUTE RATHER THAN INTO THE FAKE STORE, and the reason is
-// the bucket key: `media.Key.Traveller` is a PATH SEGMENT, so a leg that
-// invented an id would be uploading to a prefix no handler ever addresses and
-// every commit would 409 for a reason that has nothing to do with what is
-// being tested.
 func (h *harness) travellerID(t *testing.T, _ string) string {
 	t.Helper()
-	// The sign-in body carries only the token (it is the one place a plaintext
-	// token is ever written), so the id comes off the store the harness holds
-	// — which is the one place in this package that knows how a traveller is
-	// minted, and it is a fake either way.
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 	for _, tr := range h.store.travellers {
@@ -188,23 +149,8 @@ func (f *fakeMedia) beginCount() int {
 	return f.begins
 }
 
-// === the legs ===
-
-// AN ASSET IS REFERENCEABLE ONLY AFTER IT IS COMMITTED, AND THE POSITIVE HALF
-// IS WHAT MAKES THIS LEG WORTH ANYTHING.
-//
-// v6's own note: a validator that rejects everything passes "an uncommitted
-// asset is refused" perfectly. So both halves are in one leg, and the mutation
-// that proves it is "make it reject everything" — which reddens the POSITIVE
-// half.
-//
-// THE REFERENCE IS `PUT /v1/trips/{id}`'s `coverAsset`, AND THE ENFORCEMENT IS
-// THE SCHEMA'S RATHER THAN THIS PACKAGE'S (DEC-58): all four asset columns
-// carry a real foreign key to media_objects, so a reference to an unbegun
-// object is refused by the database. THAT MEANS THIS PARTICULAR LEG CANNOT
-// LIVE HERE — the handler tier has no foreign keys — and it is in
-// internal/postgres/schema_test.go, where it always was. What IS here is the
-// half this tier owns: the three routes' own answers.
+// an asset is referenceable only after it is committed, and the positive half
+// is what makes this leg worth anything.
 func TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -217,9 +163,6 @@ func TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset(t *testing.T) {
 	}
 	body := decode(t, begun)
 
-	// THE ADDRESS IS THE DIGEST. Answering a server-minted id would make the
-	// client's own de-duplication impossible and would make a retry a second
-	// upload.
 	if body["id"] != digest {
 		t.Errorf("id = %v, want the content hash %s — the address IS the digest", body["id"], digest)
 	}
@@ -233,9 +176,6 @@ func TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset(t *testing.T) {
 		t.Errorf("no expiresAt — the client has no way to know how long it has")
 	}
 
-	// COMMIT BEFORE THE UPLOAD IS A 409 AND NAMES `upload_incomplete`. The
-	// object EXISTS as a row and the request is well-formed; what is wrong is
-	// its state.
 	early := h.do(t, http.MethodPost, "/v1/media/"+digest+"/commit", "", token)
 	if early.status != http.StatusConflict {
 		t.Fatalf("commit before upload = %d %s, want 409", early.status, early.body)
@@ -259,7 +199,6 @@ func TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset(t *testing.T) {
 			"from it, so a null one makes every later begin report false")
 	}
 
-	// AND THE POSITIVE HALF OF THE MINT: a committed object is mintable.
 	minted := h.do(t, http.MethodPost, "/v1/media/mint", `{"ids":["`+digest+`"]}`, token)
 	if minted.status != http.StatusOK {
 		t.Fatalf("mint = %d %s, want 200", minted.status, minted.body)
@@ -270,15 +209,8 @@ func TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset(t *testing.T) {
 	}
 }
 
-// A SECOND BEGIN FOR A COMMITTED DIGEST ANSWERS alreadyExists AND MINTS NO
-// SECOND WRITE CAPABILITY (V4-SF5a).
-//
-// `alreadyExists` IS DERIVED FROM uploaded_at AND NEVER FROM ROW PRESENCE, and
-// the leg proves both directions: after the FIRST begin it is false even
-// though a row exists, and after the commit it is true. Derive it from row
-// existence and the first assertion reddens — which is the state where the
-// client skips an upload that never happened and the commit 409s with no way
-// forward.
+// A second begin for A committed digest answers alreadyExists and mints no
+// second write capability.
 func TestASecondBeginAnswersAlreadyExistsAndMintsNoSecondUploadURL(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -291,8 +223,6 @@ func TestASecondBeginAnswersAlreadyExistsAndMintsNoSecondUploadURL(t *testing.T)
 			"not what the field means", first["alreadyExists"])
 	}
 
-	// A BEGIN THAT NEVER UPLOADED IS STILL false. This is the assertion that
-	// separates "derived from uploaded_at" from "derived from row presence".
 	again := decode(t, h.do(t, http.MethodPost, "/v1/media", beginRequest(digest, len(fixtureBytes), "image/png"), token))
 	if again["alreadyExists"] != false {
 		t.Errorf("alreadyExists = %v after a begin that never uploaded, want false", again["alreadyExists"])
@@ -309,10 +239,6 @@ func TestASecondBeginAnswersAlreadyExistsAndMintsNoSecondUploadURL(t *testing.T)
 	if third["alreadyExists"] != true {
 		t.Fatalf("alreadyExists = %v on a committed digest, want true", third["alreadyExists"])
 	}
-	// NO SECOND WRITE CAPABILITY. Handing out a live PUT against a committed
-	// address is worse than a merely redundant one: what stops it landing is
-	// `If-None-Match: *`, which is a property of the SIGNATURE and not of this
-	// response, so an omitted URL is the only thing this response controls.
 	for _, key := range []string{"uploadUrl", "uploadHeaders", "expiresAt"} {
 		if _, present := third[key]; present {
 			t.Errorf("%s is present on an alreadyExists response: %v", key, third[key])
@@ -320,12 +246,7 @@ func TestASecondBeginAnswersAlreadyExistsAndMintsNoSecondUploadURL(t *testing.T)
 	}
 }
 
-// A SECOND COMMIT IS 200 AND NOT 409, AND THE ROW IS UNCHANGED (SAF-MIN-12).
-//
-// The bucket-versus-database seam is the only non-atomic one in the plan: the
-// bucket confirms, the database update fails, and the object exists with
-// uploaded_at NULL — bytes the user has uploaded and cannot attach. This route
-// is the retry, and it is only a retry if asking twice is allowed.
+// A second commit is 200 and not 409, and the row is unchanged.
 func TestCommittingTwiceIsASuccessAndChangesNothing(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -349,15 +270,7 @@ func TestCommittingTwiceIsASuccessAndChangesNothing(t *testing.T) {
 	}
 }
 
-// THE HEADER MAP'S KEY SET EQUALS THE URL'S X-Amz-SignedHeaders MINUS `host`
-// (DEC-88).
-//
-// IT IS EQUALITY IN BOTH DIRECTIONS AND NOT A SUBSET, because a map with an
-// EXTRA header is as broken as one with a missing header and only equality
-// catches both. Without this leg the map and the signature drift the first
-// time a header is added to one and not the other, and every upload 400s with
-// AccessDenied for ever — a failure no unit test can see, because both halves
-// look right in isolation.
+// The header map's key set equals the url's X-Amz-SignedHeaders minus `host`.
 func TestTheUploadHeadersAreExactlyTheHeadersTheSignatureCovers(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -399,9 +312,6 @@ func TestTheUploadHeadersAreExactlyTheHeadersTheSignatureCovers(t *testing.T) {
 			"presign calls has")
 	}
 
-	// AND THE VALUE THE CLIENT CANNOT DERIVE. The checksum header is the
-	// BASE64 digest while `id` is HEX, so a client handed only the URL has no
-	// way to produce it — which is the whole of DEC-88's second finding.
 	checksum, held := handed["x-amz-checksum-sha256"].(string)
 	if !held {
 		t.Fatal("no x-amz-checksum-sha256 in the map")
@@ -416,12 +326,7 @@ func TestTheUploadHeadersAreExactlyTheHeadersTheSignatureCovers(t *testing.T) {
 	}
 }
 
-// THE begin RESPONSE'S expiresAt AGREES WITH THE SIGNATURE'S OWN WINDOW.
-//
-// A handler computing it from a second copy of the lifetime would be two
-// variables holding one fact, and the failure is SILENT: the client is told a
-// window that is not the window the signature carries, and the upload dies
-// with SignatureDoesNotMatch some minutes later.
+// The begin response'S expiresAt agrees with the signature's own window.
 func TestExpiresAtIsTheWindowTheSignatureActuallyCarries(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -442,27 +347,13 @@ func TestExpiresAtIsTheWindowTheSignatureActuallyCarries(t *testing.T) {
 		t.Errorf("expiresAt is %s from now and the URL is signed for %s", got, lifetime)
 	}
 
-	// AND IT IS THE PRIVATE LIFETIME, not the public one. An upload capability
-	// belongs to the traveller who asked for it; nothing public ever writes.
 	if lifetime != h.objects.TTL[media.Private] {
 		t.Errorf("the upload URL is signed for %s and the PRIVATE lifetime is %s",
 			lifetime, h.objects.TTL[media.Private])
 	}
 }
 
-// EVERY PRESIGNED GET CARRIES `response-content-disposition=attachment`
-// (DEC-51).
-//
-// THE DEFENCE IS THE DISPOSITION PLUS THE ALLOWLIST, and the residual is named
-// rather than hidden: a MISLABELLED object is downloaded, never rendered. The
-// allowlist half is in internal/logbook and migration 0003; this is the other
-// half, at the one route that hands a read capability to a phone.
-//
-// `X-Content-Type-Options: nosniff` IS DELIBERATELY NOT ASSERTED and the reason
-// is carried in internal/media/minio.go: S3's response-header override set is
-// CLOSED and nosniff is not in it, so a leg asserting it would pass locally by
-// measuring MinIO's own default and would silently stop being true in
-// production.
+// Every presigned get carries `response-content-disposition=attachment`.
 func TestEveryMintedReadURLIsMarkedAsADownload(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -487,8 +378,6 @@ func TestEveryMintedReadURLIsMarkedAsADownload(t *testing.T) {
 		t.Fatalf("urls = %v, want two", urls)
 	}
 
-	// ONE URL PER ID, IN ORDER. The client pairs by index, so a reordering is
-	// every photograph in the grid showing somebody else's.
 	for i, raw := range urls {
 		parsed, err := url.Parse(raw.(string))
 		if err != nil {
@@ -505,14 +394,8 @@ func TestEveryMintedReadURLIsMarkedAsADownload(t *testing.T) {
 	}
 }
 
-// A MINT OF AN UNCOMMITTED ID IS REFUSED, AND AN UNKNOWN ONE IS REFUSED
-// DIFFERENTLY.
-//
-// TWO MISSES, TWO ANSWERS, AND THE CLIENT ACTS ON THEM DIFFERENTLY. An id this
-// traveller has never begun is `not_found` — a wrong reference, nothing to
-// wait for. An id begun and not committed is `upload_incomplete` — the answer
-// is to finish the upload and ask again. Collapsing them would tell a client
-// to retry a reference that can never resolve.
+// A mint of an uncommitted id is refused, and an unknown one is refused
+// differently.
 func TestMintingRefusesAnObjectThatIsNotThereYet(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -537,12 +420,8 @@ func TestMintingRefusesAnObjectThatIsNotThereYet(t *testing.T) {
 	}
 }
 
-// THE ALLOWLIST AND THE BOUND ARE 422s THAT NAME THE FIELD, AND THEY HAPPEN
-// BEFORE ANYTHING IS SIGNED.
-//
-// The second half is the one worth asserting: a 422 taken AFTER a mint is a
-// capability that exists, and MEDIA_MAX_BYTES is defined as the refusal to
-// mint. The leg counts begins, so a handler that signed first would redden.
+// The allowlist and the bound are 422s that name the field, and they happen
+// before anything is signed.
 func TestBeginRefusesAWrongTypeOrAnOversizeBeforeItMintsAnything(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -577,11 +456,7 @@ func TestBeginRefusesAWrongTypeOrAnOversizeBeforeItMintsAnything(t *testing.T) {
 	}
 }
 
-// A COMMIT FOR AN ID NOTHING HOLDS IS A 404, AND A MALFORMED PATH IS A 422.
-//
-// The path is untrusted — a stale route, a bad push, a deep link — and it
-// reaches a store with no validator between it and a query unless the
-// handler's first line puts one there.
+// A commit for an id nothing holds is a 404, and A malformed path is a 422.
 func TestCommittingAnIDNothingHoldsIsRefusedByName(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -601,16 +476,8 @@ func TestCommittingAnIDNothingHoldsIsRefusedByName(t *testing.T) {
 	}
 }
 
-// THE COMMIT VERIFIES THE STORED DIGEST AS WELL AS THE SIZE, AND THE EMPTY
-// CHECKSUM IS WHAT TURNS THE BAN INTO A RUNTIME GUARD (DEC-98's free half).
-//
-// `StatObject` with `Checksum: true` returns the digest the BUCKET stored, at
-// no extra call — and an object uploaded through either of the two BANNED
-// presign calls carries NO checksum at all. So a commit that requires a
-// non-empty matching value refuses such an object at the moment it would
-// otherwise become referenceable. Note the flag: without `Checksum: true` the
-// field comes back empty and this check passes nothing, which is why
-// internal/media's Stat sets it and says so.
+// The commit verifies the stored digest as well as the size, and the empty
+// checksum is what turns the ban into A runtime guard (the free half).
 func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -619,8 +486,6 @@ func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 	digest := digestOf(fixtureBytes)
 	h.do(t, http.MethodPost, "/v1/media", beginRequest(digest, len(fixtureBytes), "image/png"), token)
 
-	// What an upload through a `host`-only signature leaves behind: the right
-	// bytes at the right address, with no checksum recorded against them.
 	h.objects.PutWithoutChecksum(media.Key{Traveller: traveller, Object: digest},
 		media.Upload{SHA256: digest, ByteSize: int64(len(fixtureBytes)), ContentType: "image/png"},
 		fixtureBytes)
@@ -631,8 +496,6 @@ func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 			got.status, got.body)
 	}
 
-	// THE POSITIVE CONTROL, in the same function. Without it this leg is
-	// satisfied by a commit path that refuses everything.
 	other := append([]byte("control "), fixtureBytes...)
 	otherDigest := digestOf(other)
 	h.do(t, http.MethodPost, "/v1/media", beginRequest(otherDigest, len(other), "image/png"), token)
@@ -642,26 +505,15 @@ func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 	}
 }
 
-// THE COMMIT REFUSES AN OBJECT STORED AS SOMETHING OTHER THAN WHAT THE ROW
-// DECLARES (DEC-87's other half).
-//
-// DEC-87 signs Content-Type into the PUT, so on a correctly-signed upload this
-// disagreement cannot arise — which is exactly why it is worth a leg. The
-// check is what holds if DEC-87 is ever relaxed by somebody who has not read
-// the ruling, and a branch that only a future mistake can reach is a branch
-// nothing would notice being deleted.
-//
-// The twin can produce the state because `Put` stores the type it is HANDED
-// rather than the type the row declares, which is also what a bucket does.
+// The commit refuses an object stored as something other than what the row
+// declares (the other half).
 func TestACommitRefusesAnObjectStoredAsSomethingElse(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
 	traveller := h.travellerID(t, token)
 
 	digest := digestOf(fixtureBytes)
-	// The ROW says jpeg.
 	h.do(t, http.MethodPost, "/v1/media", beginRequest(digest, len(fixtureBytes), "image/jpeg"), token)
-	// The OBJECT is png.
 	if err := h.objects.Put(
 		media.Key{Traveller: traveller, Object: digest},
 		media.Upload{SHA256: digest, ByteSize: int64(len(fixtureBytes)), ContentType: "image/png"},
@@ -678,10 +530,7 @@ func TestACommitRefusesAnObjectStoredAsSomethingElse(t *testing.T) {
 	}
 }
 
-// AND THE SIZE, WHICH IS THE SAME SHAPE. The signature pins the exact declared
-// length, so this is another branch a correctly-signed upload cannot reach —
-// and the one that would matter if a row were ever rewritten under a committed
-// object, which is what the conflict branch's WHERE exists to stop.
+// A commit must refuse an object whose size differs from what was begun.
 func TestACommitRefusesAnObjectOfADifferentSize(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

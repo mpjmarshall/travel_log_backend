@@ -1,17 +1,4 @@
-// Package testdb is the test seam onto a real PostgreSQL: it hands a test a
-// pool scoped to a FRESH EMPTY SCHEMA, and skips — loudly enough to read —
-// when there is no database to reach.
-//
-// WHY A SCHEMA RATHER THAN A DATABASE. Every leg in internal/postgres creates
-// tables and then destroys them, so each needs its own namespace or two tests
-// cannot run beside each other. A schema is one statement to make and one to
-// drop; a database is a connection to another database to create it from and a
-// template lock to fight over. The scoping is done in the DSN
-// (`options=-c search_path=<schema>`) rather than with `SET search_path`,
-// because database/sql is a POOL: a SET applies to the one connection it
-// landed on and every other connection in the pool still points at public.
-// That is the same class of defect as the migration lock's, and it is worth
-// stating twice because it is invisible until the second connection is used.
+// Package testdb is the test seam onto a real PostgreSQL.
 package testdb
 
 import (
@@ -33,12 +20,7 @@ const urlVar = "TEST_DATABASE_URL"
 const skipVar = "TRAVELLOG_SKIP_DB"
 
 // optedOut reads the opt-out generously, because the alternative is a guard
-// that appears broken. Exactly "1" sends a developer who exported
-// TRAVELLOG_SKIP_DB=true straight back to the identical failure, telling them
-// to set the variable they have just set.
-//
-// Generous on the way OUT and strict on the way IN: an unset variable is still
-// a failure, because unset is equally "I have no Docker" and "I forgot".
+// that appears broken.
 func optedOut(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "y", "on":
@@ -47,25 +29,10 @@ func optedOut(v string) bool {
 	return false
 }
 
-// minServerVersionNum is PostgreSQL 15, and it is a HARD FLOOR (DEC-66).
-//
-// migrations/0001_init.up.sql uses the COLUMN-LIST form of ON DELETE SET NULL
-// — `ON DELETE SET NULL (place_id)` — which 15 introduced. On 14 and earlier
-// the file does not parse, and without this check the failure arrives as
-// `syntax error at or near "("` pointing at a line that looks fine.
-//
-// Worse than the syntax error is what happens if somebody "fixes" it by
-// dropping the column list: a composite FK's plain ON DELETE SET NULL nulls
-// EVERY column of the referencing key, traveller_id included, and traveller_id
-// is NOT NULL — so D2's keep branch and _repointed abort instead of clearing a
-// pin. Measured on 17.11, with PostgreSQL echoing its own generated statement:
-// `UPDATE ONLY "public"."photos" SET "traveller_id" = NULL, "place_id" = NULL`.
+// minServerVersionNum is PostgreSQL 15, and it is a hard floor.
 const minServerVersionNum = 150000
 
-// TB is the slice of *testing.T that testdb uses. It is an interface rather
-// than *testing.T so the skip path itself can be exercised: a test that only
-// asserted the skip STRING would leave "does it actually skip?" proven by
-// nothing.
+// TB is the slice of *testing.T that testdb uses.
 type TB interface {
 	Helper()
 	Skipf(format string, args ...any)
@@ -73,37 +40,13 @@ type TB interface {
 	Cleanup(func())
 }
 
-// Open answers a pool scoped to a fresh empty schema, and that schema's name —
-// which is what a Migrator's Schema field wants. The schema is dropped when
-// the test finishes.
-//
-// WITHOUT A DATABASE IT FAILS, UNLESS SOMEBODY HAS SAID IN WRITING THAT THEY
-// MEAN IT. It used to skip unconditionally so `make check` stayed green on a
-// machine with no Docker, and the cost of that was measured rather than
-// argued: the whole of internal/postgres skips — every cascade, snapshot,
-// advisory-lock and schema leg, which is where the hardest reasoning in this
-// repository lives — and the gate goes green anyway. A default green that says
-// nothing about the layer most likely to break is worse than a red one,
-// because it is believed.
-//
-// TRAVELLOG_SKIP_DB=1 is the opt-out, and it is deliberately a second variable
-// rather than a looser reading of the first. Unset TEST_DATABASE_URL is
-// ambiguous — it is equally "I have no Docker" and "I forgot" — and only one
-// of those should pass. This is the same ruling DEC-48 already made about a
-// nil limiter: a missing dependency must not read as a decision.
-//
-// It FAILS on a server older than 15, because that is a database that is
-// present and wrong rather than absent.
+// Open answers a pool scoped to a fresh empty schema, and that schema's name
+// — which is what a Migrator's Schema field wants.
 func Open(t TB) (*sql.DB, string) {
 	t.Helper()
 
 	dsn := os.Getenv(urlVar)
 	if strings.TrimSpace(dsn) == "" {
-		// ANY OF THE USUAL SPELLINGS, and not just "1". A developer who reads
-		// the failure and exports TRAVELLOG_SKIP_DB=true gets the identical
-		// failure back, telling them to set the variable they have just set —
-		// which reads as the guard being broken rather than as a value it did
-		// not recognise.
 		if optedOut(os.Getenv(skipVar)) {
 			t.Skipf("%s is unset and %s=1, so this tier is skipped ON PURPOSE.\n"+
 				"    Nothing below this line has been checked against a database.",
@@ -184,9 +127,7 @@ func checkServerVersion(num int) error {
 		urlVar, versionText(num))
 }
 
-// versionText turns 140012 into 14.12 and 90624 into 9.6.24. Postgres numbered
-// releases differently before 10, and the older form is the one somebody with
-// a stale local install is most likely to be running.
+// versionText turns 140012 into 14.12 and 90624 into 9.6.24.
 func versionText(num int) string {
 	if num >= 100000 {
 		return fmt.Sprintf("%d.%d", num/10000, num%10000)
@@ -194,8 +135,8 @@ func versionText(num int) string {
 	return fmt.Sprintf("%d.%d.%d", num/10000, (num/100)%100, num%100)
 }
 
-// scopedDSN adds `options=-c search_path=<schema>` to a URL-form DSN, so every
-// connection the pool opens lands in the test's own schema.
+// scopedDSN adds `options=-c search_path=<schema>` to a URL-form DSN, so
+// every connection the pool opens lands in the test's own schema.
 func scopedDSN(dsn, schema string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -213,16 +154,12 @@ func scopedDSN(dsn, schema string) (string, error) {
 }
 
 // quoteIdent is enough for the generated schema names above, which are
-// [a-z0-9_] by construction. It is not a general-purpose quoter and there is
-// no user input anywhere near it.
+// [a-z0-9_] by construction.
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// Second answers a SECOND, independent pool on the same schema. Two legs need
-// a genuinely separate session — one holds an advisory lock while the runner
-// tries to take it, and one demonstrates what a session-scoped lock does when
-// the pool hands the unlock to a different connection.
+// Second answers a second, independent pool on the same schema.
 func Second(t TB, schema string) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv(urlVar)

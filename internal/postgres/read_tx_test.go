@@ -1,9 +1,4 @@
-// The read snapshot (DEC-06, DEC-31, DEC-34).
-//
-// TEST-FIRST. The defect every leg here defends against is one thing: a body
-// handed to the phone under a version number that does not describe it. The
-// phone stores the two together and stops asking, so it is the one cache bug
-// that never self-corrects.
+// The read snapshot.
 package postgres
 
 import (
@@ -43,9 +38,8 @@ func TestWithReadSnapshotHandsTheCurrentVersionToTheBody(t *testing.T) {
 	}
 }
 
-// The version is read INSIDE the snapshot, so a write that commits after the
-// snapshot opened is invisible to BOTH halves of the answer. Read it outside
-// and the phone caches five trips under the number that describes six.
+// The version is read inside the snapshot, so a write that commits after the
+// snapshot opened is invisible to both halves of the answer.
 func TestTheSnapshotSeesNeitherHalfOfAWriteThatCommittedAfterItOpened(t *testing.T) {
 	db, schema := withTravellers(t)
 	other := testdb.Second(t, schema)
@@ -97,9 +91,7 @@ func TestTheSnapshotSeesNeitherHalfOfAWriteThatCommittedAfterItOpened(t *testing
 	}
 }
 
-// The read transaction is READ ONLY, which makes "the read path does not write"
-// a fact the database enforces rather than a convention a later handler can
-// break. It also stops the read taking the row locks a write would.
+// The read transaction is read only.
 func TestTheReadSnapshotRefusesToWrite(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -133,10 +125,7 @@ func TestWithReadSnapshotRefusesATravellerThatIsNotThere(t *testing.T) {
 	}
 }
 
-// A read must not take the advisory lock. Reads are the primary path (DEC-31),
-// and a reader that took the write lock would make every GET wait behind every
-// PUT for no benefit at all — the snapshot already gives the reader a stable
-// view.
+// A read must not take the advisory lock.
 func TestAReadTakesNoAdvisoryLockAndDoesNotBlockAWrite(t *testing.T) {
 	db, schema := withTravellers(t)
 	other := testdb.Second(t, schema)

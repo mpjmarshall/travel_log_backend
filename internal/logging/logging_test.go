@@ -1,8 +1,4 @@
-// TEST-FIRST (agent-graph-spec-V4 §6.7). Written and watched to fail before
-// internal/logging/logging.go existed; the red output is in CLAUDE.md.
-//
-// go_backend.md L25: "Use the standard `log/slog` package for structured JSON
-// logging." The redactor is what makes that safe to point at a credential.
+// test-first (agent-graph-spec-V4 §6.7).
 package logging_test
 
 import (
@@ -16,10 +12,7 @@ import (
 )
 
 // theSecret is a value distinctive enough that finding it anywhere in the raw
-// output is proof of a leak. The legs assert on the RAW BYTES as well as on the
-// decoded attribute, because a redactor that replaces the attribute while slog
-// still writes the original somewhere (a group header, a With clause) would
-// satisfy the decoded assertion alone.
+// output is proof of a leak.
 const theSecret = "s3kr1t-QZmVsaXg-do-not-log-me"
 
 func logged(t *testing.T, level slog.Level, emit func(*slog.Logger)) (raw string, fields map[string]any) {
@@ -37,8 +30,6 @@ func logged(t *testing.T, level slog.Level, emit func(*slog.Logger)) (raw string
 	}
 	return raw, fields
 }
-
-// --- it is JSON, and it is slog's ------------------------------------------
 
 func TestNewWritesOneJSONObjectPerRecord(t *testing.T) {
 	raw, fields := logged(t, slog.LevelInfo, func(l *slog.Logger) {
@@ -75,8 +66,6 @@ func TestNewHonoursTheLevel(t *testing.T) {
 	}
 }
 
-// --- the redactor -----------------------------------------------------------
-
 func TestRedactsTheThreeNamedKeys(t *testing.T) {
 	for _, key := range []string{"token", "passphrase", "authorization"} {
 		t.Run(key, func(t *testing.T) {
@@ -94,8 +83,7 @@ func TestRedactsTheThreeNamedKeys(t *testing.T) {
 	}
 }
 
-// A header is "Authorization" and a struct field marshals as "Token". Matching
-// the exact lowercase spelling only would leak on the ordinary case.
+// A header is "Authorization" and a struct field marshals as "Token".
 func TestRedactionIsCaseInsensitive(t *testing.T) {
 	for _, key := range []string{"Authorization", "Token", "PASSPHRASE", "AuthoriZation"} {
 		raw, fields := logged(t, slog.LevelInfo, func(l *slog.Logger) {
@@ -110,10 +98,8 @@ func TestRedactionIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// The match is on a SUBSTRING of the key, not on equality, and this is the leg
-// that says so. `access_token`, `session_token` and `refresh_token` are the
-// spellings a careless call site actually produces, and a redactor that only
-// knows `token` is a redactor that fires on the one name nobody types.
+// The match is on a substring of the key, not on equality, and this is the
+// leg that says so.
 func TestRedactsKeysThatCONTAINAName(t *testing.T) {
 	for _, key := range []string{"access_token", "sessionToken", "authorization_header", "user_passphrase"} {
 		raw, fields := logged(t, slog.LevelInfo, func(l *slog.Logger) {
@@ -128,10 +114,7 @@ func TestRedactsKeysThatCONTAINAName(t *testing.T) {
 	}
 }
 
-// The boundary, asserted rather than assumed: redaction is decided by the KEY
-// and never by the value, so an ordinary field carrying secret-looking text is
-// left alone. Without this leg a redactor could pass every test above by
-// replacing everything, which logs nothing and looks safe.
+// The boundary, asserted rather than assumed.
 func TestLeavesOrdinaryKeysAlone(t *testing.T) {
 	_, fields := logged(t, slog.LevelInfo, func(l *slog.Logger) {
 		l.Info("request",
@@ -152,8 +135,7 @@ func TestLeavesOrdinaryKeysAlone(t *testing.T) {
 	}
 }
 
-// slog's own keys must survive. A redactor matching too broadly can eat "msg"
-// or "level" and produce records nothing can read.
+// slog's own keys must survive.
 func TestLeavesSlogsOwnKeysAlone(t *testing.T) {
 	_, fields := logged(t, slog.LevelWarn, func(l *slog.Logger) {
 		l.Warn("the database ping failed")
@@ -169,14 +151,6 @@ func TestLeavesSlogsOwnKeysAlone(t *testing.T) {
 		t.Error("time was redacted")
 	}
 }
-
-// --- the three ways an attribute can arrive ---------------------------------
-//
-// slog does not funnel every attribute through one path. A group is formatted
-// with its own prefix, and With PRE-FORMATS its attributes at the moment it is
-// called rather than when the record is written. A redactor installed for the
-// simple case can miss either, and the missed one is where a token actually
-// travels: request-scoped loggers are built with With.
 
 func TestRedactsInsideAGroup(t *testing.T) {
 	raw, fields := logged(t, slog.LevelInfo, func(l *slog.Logger) {
@@ -208,9 +182,7 @@ func TestRedactsAnAttributeAddedByWith(t *testing.T) {
 	}
 }
 
-// The value need not be a string. slog.Any on a struct, a map or an error
-// marshals whatever it is given, so the redactor must replace the WHOLE value
-// rather than rewrite a string.
+// The value need not be a string.
 func TestRedactsRegardlessOfTheValueType(t *testing.T) {
 	type credential struct {
 		Raw   string `json:"raw"`
