@@ -30,6 +30,7 @@ type fakeStore struct {
 	sessions   map[string]auth.Session
 	owners     map[string]auth.Traveller
 	codes      map[string]*auth.SignInCode
+	invites    map[string]bool
 	next       int
 	failWith   error
 	clock      func() time.Time
@@ -392,11 +393,19 @@ func (a answer) decode(t *testing.T) map[string]any {
 	return out
 }
 
-const registered = `{"email":"matt@example.com","passphrase":"a long enough passphrase"}`
+const testInvite = "TESTINVITE"
+
+const registered = `{"email":"matt@example.com","passphrase":"a long enough passphrase","invite":"` + testInvite + `"}`
 
 // credentialsFor is `registered` for any address, so a leg needing a second
 // traveller does not need a second constant.
 func credentialsFor(email string) string {
+	return fmt.Sprintf(`{"email":%q,"passphrase":"a long enough passphrase","invite":%q}`, email, testInvite)
+}
+
+// withoutAnInvite is credentialsFor with the guard left off, for the legs that
+// are about the guard.
+func withoutAnInvite(email string) string {
 	return fmt.Sprintf(`{"email":%q,"passphrase":"a long enough passphrase"}`, email)
 }
 
@@ -474,48 +483,66 @@ func TestRegisterAnswers201WithTheTravellerAndNoTokenAnywhere(t *testing.T) {
 	}
 }
 
-// , on the wire: any second registration is 409, and's three are byte
-// identical.
-func TestAnySecondRegistrationIs409AndTheThreeAreIndistinguishable(t *testing.T) {
+// A second registration is refused by the invite now, not by the count, and
+// the three answers stay byte identical.
+func TestASecondRegistrationNeedsAnInviteOfItsOwn(t *testing.T) {
 	answers := map[string]answer{}
 	for _, second := range []string{"a@b.com", "A@B.com", "a-total-stranger@example.com"} {
 		h := newHarness(t, options{})
 		if got := h.post(t, "/v1/auth/register",
-			`{"email":"A@B.com","passphrase":"a long enough passphrase"}`); got.status != http.StatusCreated {
+			`{"email":"A@B.com","passphrase":"a long enough passphrase","invite":"`+testInvite+`"}`); got.status != http.StatusCreated {
 			t.Fatalf("the first register = %d %s", got.status, got.body)
 		}
 		got := h.post(t, "/v1/auth/register",
 			fmt.Sprintf(`{"email":%q,"passphrase":"a different long one"}`, second))
-		if got.status != http.StatusConflict {
-			t.Errorf("registering %q second = %d, want 409 — ruling 3 is single-user, "+
-				"and a stranger who registers on a deployed instance gets an "+
-				"authenticated account", second, got.status)
-		}
-		if string(got.body) != `{"code":"conflict"}` {
-			t.Errorf("registering %q second: body = %q, want %q", second, got.body, `{"code":"conflict"}`)
+		if got.status != http.StatusUnprocessableEntity {
+			t.Errorf("registering %q with no invite = %d, want 422 — the route is "+
+				"open to anybody without one", second, got.status)
 		}
 		answers[second] = got
 	}
 
 	same := answers["a@b.com"]
 	for address, got := range answers {
-		if !bytes.Equal(got.body, same.body) || got.status != same.status {
-			t.Errorf("registering %q answered %d %q, and the same-address case answered %d %q.\n"+
-				"    A difference here is an enumeration oracle: it tells a caller whether\n"+
-				"    a particular address is the one this instance belongs to.",
-				address, got.status, got.body, same.status, same.body)
+		if string(got.body) != string(same.body) {
+			t.Errorf("%q answered %q and a@b.com answered %q, so the reply says "+
+				"which addresses are taken", address, got.body, same.body)
 		}
 	}
 }
 
-// The field checks still come first on A closed instance.
+// / A second traveller with a fresh invite is admitted, which is the whole
+// / point of replacing the one-traveller rule.
+func TestASecondTravellerWithAFreshInviteIsAdmitted(t *testing.T) {
+	h := newHarness(t, options{})
+	if got := h.post(t, "/v1/auth/register", credentialsFor("first@example.com")); got.status != http.StatusCreated {
+		t.Fatalf("first = %d %s", got.status, got.body)
+	}
+	if got := h.post(t, "/v1/auth/register", credentialsFor("second@example.com")); got.status != http.StatusCreated {
+		t.Fatalf("a second traveller with an invite = %d %s", got.status, got.body)
+	}
+}
+
+// / The same address twice is still a conflict, and that is a different
+// / refusal from a missing invite.
+func TestTheSameAddressTwiceIsStillAConflict(t *testing.T) {
+	h := newHarness(t, options{})
+	if got := h.post(t, "/v1/auth/register", credentialsFor("matt@example.com")); got.status != http.StatusCreated {
+		t.Fatalf("first = %d %s", got.status, got.body)
+	}
+	got := h.post(t, "/v1/auth/register", credentialsFor("MATT@example.com"))
+	if got.status != http.StatusConflict {
+		t.Fatalf("the same address in another casing = %d, want 409: %s", got.status, got.body)
+	}
+}
+
 func TestAClosedRegistrationStillAnswers422ToABodyItCannotUse(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("the first register = %d %s", got.status, got.body)
 	}
 	got := h.post(t, "/v1/auth/register",
-		`{"email":"not-an-address","passphrase":"a long enough passphrase"}`)
+		`{"email":"not-an-address","passphrase":"a long enough passphrase","invite":"`+testInvite+`"}`)
 	if got.status != http.StatusUnprocessableEntity {
 		t.Errorf("a malformed address on a closed instance = %d %s, want 422", got.status, got.body)
 	}
@@ -529,7 +556,7 @@ func TestAClosedRegistrationStillAnswers422ToABodyItCannotUse(t *testing.T) {
 func TestRegisterThenSignInGoesThroughTheRealChain(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register",
-		`{"email":"A@B.com","passphrase":"a long enough passphrase"}`); got.status != http.StatusCreated {
+		`{"email":"A@B.com","passphrase":"a long enough passphrase","invite":"`+testInvite+`"}`); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
 	got := h.post(t, "/v1/auth/session",
@@ -892,8 +919,32 @@ func (f *fakeStore) BurnCode(_ context.Context, travellerID string) error {
 
 func (h *harness) registerTraveller(t *testing.T, email, passphrase string) {
 	t.Helper()
-	body := `{"email":"` + email + `","passphrase":"` + passphrase + `"}`
+	body := `{"email":"` + email + `","passphrase":"` + passphrase + `","invite":"` + testInvite + `"}`
 	if got := h.post(t, "/v1/auth/register", body); got.status != http.StatusCreated {
 		t.Fatalf("registering %s: %d %s", email, got.status, got.body)
 	}
+}
+
+func (f *fakeStore) MintInvite(_ context.Context, hash []byte, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.invites == nil {
+		f.invites = map[string]bool{}
+	}
+	f.invites[string(hash)] = false
+	return nil
+}
+
+func (f *fakeStore) ClaimInvite(_ context.Context, hash []byte, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if string(hash) == string(auth.HashInvite(testInvite)) {
+		return nil
+	}
+	spent, held := f.invites[string(hash)]
+	if !held || spent {
+		return auth.ErrInviteSpent
+	}
+	f.invites[string(hash)] = true
+	return nil
 }

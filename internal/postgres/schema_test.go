@@ -818,6 +818,8 @@ func TestTheDeleteActionsAreWhatTheSheetsSay(t *testing.T) {
 		"share_links_trip_fk":        deleteCascade,
 
 		"sign_in_codes_traveller_fk": deleteCascade,
+
+		"invite_codes_used_by_fk": deleteSetNull,
 	}
 
 	db := migrated(t)
@@ -937,7 +939,7 @@ func TestEveryConstraintWasNamedDeliberately(t *testing.T) {
 }
 
 // Sorted in Go, not by the server.
-func TestTheMigrationCreatesExactlyTheTwelveTablesAndTheLedger(t *testing.T) {
+func TestTheMigrationCreatesExactlyTheThirteenTablesAndTheLedger(t *testing.T) {
 	db := migrated(t)
 	rows, err := db.Query(`SELECT table_name FROM information_schema.tables
 		WHERE table_schema = current_schema() AND table_type='BASE TABLE'`)
@@ -955,9 +957,9 @@ func TestTheMigrationCreatesExactlyTheTwelveTablesAndTheLedger(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"cities", "media_objects", "photos", "places", "schema_migrations",
-		"sessions", "share_links", "sign_in_codes", "travellers",
-		"trip_cities", "trips", "visits", "walks",
+		"cities", "invite_codes", "media_objects", "photos", "places",
+		"schema_migrations", "sessions", "share_links", "sign_in_codes",
+		"travellers", "trip_cities", "trips", "visits", "walks",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("tables = %v\nwant     %v", got, want)

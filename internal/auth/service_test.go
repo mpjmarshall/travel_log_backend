@@ -13,6 +13,7 @@ import (
 // fakeStore is the Store interface with a map behind it.
 type fakeStore struct {
 	codes      map[string]*SignInCode
+	invites    map[string]bool
 	travellers map[string]storedTraveller // keyed by lower(email)
 	sessions   map[string]storedSession   // keyed by string(tokenHash)
 	nextID     int
@@ -330,57 +331,43 @@ func TestRegisterStoresTheAddressAsTypedAndDoesNotLowercaseIt(t *testing.T) {
 	}
 }
 
-func TestRegistrationClosesAfterTheFirstTraveller(t *testing.T) {
-	for _, second := range []string{
-		"matt@example.com",
-		"MATT@EXAMPLE.COM",
-		"a-total-stranger@example.com",
-	} {
-		t.Run(second, func(t *testing.T) {
-			store := newFakeStore()
-			s := newTestService(t, store)
-			ctx := context.Background()
+func TestRegisterWithInviteRefusesWithoutOne(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(t, store)
+	ctx := context.Background()
 
-			if _, err := s.Register(ctx, "matt@example.com", "a long enough passphrase"); err != nil {
-				t.Fatalf("first Register: %v", err)
-			}
-			_, err := s.Register(ctx, second, "a different long passphrase")
-			if !errors.Is(err, ErrRegistrationClosed) {
-				t.Errorf("registering %q second answered %v, want ErrRegistrationClosed.\n"+
-					"    Ruling 3 is single-user. A stranger who registers on a deployed\n"+
-					"    instance gets an authenticated account carrying a 600/min budget\n"+
-					"    and, from R6, a `?photos=delete`.", second, err)
-			}
-		})
+	_, err := s.RegisterWithInvite(ctx, "matt@example.com", "a long enough passphrase", "")
+	var invalid InvalidFieldError
+	if !errors.As(err, &invalid) || invalid.Field != "invite" {
+		t.Fatalf("answered %v, want a 422 naming invite", err)
 	}
 }
 
-// The refusal costs no ARGON2, which is why the rule is asked of the
-// store rather than left to the insert to answer.
-func TestAClosedRegistrationRefusesBeforeItHashesAnything(t *testing.T) {
+func TestRegisterWithInviteRefusesASpentOne(t *testing.T) {
 	store := newFakeStore()
-	counting := &countingHasher{Hasher: Argon2id{Params: cheap.Params}}
-	s := newServiceAtClock(t, store, func() time.Time { return at(t, testNow) })
-	s.Hasher = counting
+	s := newTestService(t, store)
 	ctx := context.Background()
-
-	if _, err := s.Register(ctx, "matt@example.com", "a long enough passphrase"); err != nil {
-		t.Fatalf("first Register: %v", err)
-	}
-	if counting.hashes != 1 {
-		t.Fatalf("the first Register hashed %d times, want 1 — the fixture is wrong", counting.hashes)
+	if err := store.MintInvite(ctx, HashInvite("ONCE"), ""); err != nil {
+		t.Fatal(err)
 	}
 
-	for range 5 {
-		if _, err := s.Register(ctx, "stranger@example.com", "a long enough passphrase"); !errors.Is(err, ErrRegistrationClosed) {
-			t.Fatalf("Register on a closed instance = %v", err)
-		}
+	if _, err := s.RegisterWithInvite(ctx, "first@example.com", "a long enough passphrase", "ONCE"); err != nil {
+		t.Fatalf("the first use: %v", err)
 	}
-	if counting.hashes != 1 {
-		t.Errorf("five refused registrations hashed %d more times, want 0.\n"+
-			"    Argon2 is 64 MiB a call. A refusal taken after the hash is an\n"+
-			"    unauthenticated memory sink behind a route nobody can succeed on.",
-			counting.hashes-1)
+	if _, err := s.RegisterWithInvite(ctx, "second@example.com", "a long enough passphrase", "ONCE"); !errors.Is(err, ErrInviteSpent) {
+		t.Fatalf("the second use answered %v, want ErrInviteSpent", err)
+	}
+}
+
+func TestTheAddressIsCheckedBeforeTheInvite(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(t, store)
+
+	_, err := s.RegisterWithInvite(context.Background(), "not an address", "a long enough passphrase", "")
+	var invalid InvalidFieldError
+	if !errors.As(err, &invalid) || invalid.Field != "email" {
+		t.Fatalf("answered %v, want a 422 naming email: a caller with two bad "+
+			"fields must be sent to fix the address, not the invite", err)
 	}
 }
 
@@ -707,4 +694,21 @@ func TestAStoreFailureIsNotReportedAsBadCredentials(t *testing.T) {
 	if err == nil {
 		t.Errorf("a store failure was swallowed")
 	}
+}
+
+func (f *fakeStore) MintInvite(_ context.Context, hash []byte, _ string) error {
+	if f.invites == nil {
+		f.invites = map[string]bool{}
+	}
+	f.invites[string(hash)] = false
+	return nil
+}
+
+func (f *fakeStore) ClaimInvite(_ context.Context, hash []byte, _ string) error {
+	spent, held := f.invites[string(hash)]
+	if !held || spent {
+		return ErrInviteSpent
+	}
+	f.invites[string(hash)] = true
+	return nil
 }
