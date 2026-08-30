@@ -116,3 +116,19 @@ func TestTheStylesheetTranscribesEveryColourToken(t *testing.T) {
 		}
 	}
 }
+
+// The panel is dark, and a browser's own link colours are near-black-on-black
+// against it. Nothing else in this repository can see a colour.
+func TestTheStylesheetColoursLinksItself(t *testing.T) {
+	rec := httptest.NewRecorder()
+	admin.StaticHandler().ServeHTTP(rec,
+		httptest.NewRequest(http.MethodGet, "/admin/static/admin.css", nil))
+
+	css := rec.Body.String()
+	for _, rule := range []string{"a {", "a:visited"} {
+		if !strings.Contains(css, rule) {
+			t.Errorf("the stylesheet has no %q rule, so links render in the browser's\n"+
+				"    default blue and purple on a near-black background", rule)
+		}
+	}
+}
