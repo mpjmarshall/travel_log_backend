@@ -31,6 +31,22 @@ func (d Deps) record(action, target string, err error) {
 	d.Log.Info("admin: action", slog.String("action", action), slog.String("target", target))
 }
 
+// refuse re-draws the traveller's page with a line on it. http.Error answers
+// plain text that htmx discards, so the control looks broken instead.
+func (d Deps) refuse(w http.ResponseWriter, r *http.Request, id string, status int, why string) {
+	data := page(r, "Traveller")
+	data.Error = why
+	if detail, err := d.Store.Traveller(r.Context(), id); err == nil {
+		data.Traveller = &detail
+		data.Storage = humanBytes(detail.BucketBytes)
+		data.Title = detail.Email
+		if sessions, err := d.Store.Sessions(r.Context(), id); err == nil {
+			data.Sessions = sessionRows(sessions)
+		}
+	}
+	d.Render.Page(w, status, "traveller", data)
+}
+
 func renameTraveller(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -38,7 +54,7 @@ func renameTraveller(d Deps) http.HandlerFunc {
 
 		if _, err := d.Writer.Rename(r.Context(), id, name); err != nil {
 			d.record("rename", id, err)
-			http.Error(w, "that name was not accepted", http.StatusBadRequest)
+			d.refuse(w, r, id, http.StatusBadRequest, "That name was not accepted.")
 			return
 		}
 		d.record("rename", id, nil)
@@ -130,15 +146,16 @@ func deleteTraveller(d Deps) http.HandlerFunc {
 		typed := strings.TrimSpace(r.PostFormValue("email"))
 		if typed != detail.Email {
 			d.record("delete refused", detail.Email, nil)
-			http.Error(w, "that is not their address, so nothing was deleted",
-				http.StatusBadRequest)
+			d.refuse(w, r, id, http.StatusBadRequest,
+				"That is not their address, so nothing was deleted.")
 			return
 		}
 
 		objects, err := d.Writer.DeleteTraveller(r.Context(), id)
 		if err != nil {
 			d.record("delete", detail.Email, err)
-			http.Error(w, "the traveller could not be deleted", http.StatusInternalServerError)
+			d.refuse(w, r, id, http.StatusInternalServerError,
+				"The traveller could not be deleted, and nothing was removed.")
 			return
 		}
 		d.record("delete", detail.Email, nil)

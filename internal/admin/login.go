@@ -156,6 +156,7 @@ type PageData struct {
 	SignedIn bool
 	Failed   bool
 	Locked   bool
+	Error    string
 
 	Cards      []Card
 	Sessions   []SessionRow
