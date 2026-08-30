@@ -10,6 +10,7 @@ import (
 	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
+	"travellog/internal/mail"
 	"travellog/internal/media"
 )
 
@@ -17,7 +18,9 @@ import (
 type Deps struct {
 	Auth    *auth.Service
 	Logbook logbook.Store
-	Log     *slog.Logger
+
+	Mail mail.Sender
+	Log  *slog.Logger
 
 	Share logbook.ShareStore
 
@@ -71,6 +74,7 @@ func (d Deps) photos() logbook.Service {
 type credentials struct {
 	Email      string `json:"email"`
 	Passphrase string `json:"passphrase"`
+	Code       string `json:"code"`
 }
 
 // travellerBody is register's 201.
@@ -104,6 +108,10 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.Logbook == nil {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
+	}
+	if deps.Mail == nil {
+		panic("httpapi: the code route needs a mailer; a nil one is not 'no mail', " +
+			"it is a sign-in nobody can complete and a 202 that says it worked")
 	}
 	if deps.Log == nil {
 		panic("httpapi: the routes need a logger; a nil one is not 'no logging', " +
@@ -216,7 +224,14 @@ func signIn(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		issued, err := deps.Auth.SignIn(r.Context(), body.Email, body.Passphrase)
+
+		var issued auth.Issued
+		var err error
+		if body.Code != "" {
+			issued, err = deps.Auth.SignInWithCode(r.Context(), body.Email, body.Code)
+		} else {
+			issued, err = deps.Auth.SignIn(r.Context(), body.Email, body.Passphrase)
+		}
 		if err != nil {
 			writeAuthFailure(w, r, deps.Log, err)
 			return
@@ -342,4 +357,28 @@ func logFailure(r *http.Request, log *slog.Logger, err error) {
 		slog.String("requestId", httpx.RequestIDFrom(r.Context())),
 		slog.String("err", err.Error()),
 	)
+}
+
+// requestCode is `POST /v1/auth/code`. It answers 202 whatever it did, or the
+// status would be the account oracle the service is shaped to avoid.
+func requestCode(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email string `json:"email"`
+		}
+		if err := httpx.DecodeJSON(w, r, &body); err != nil {
+			httpx.WriteErrorFor(w, r, err)
+			return
+		}
+
+		code, tr, send, err := deps.Auth.RequestCode(r.Context(), body.Email)
+		if err != nil {
+			writeAuthFailure(w, r, deps.Log, err)
+			return
+		}
+		if send {
+			_ = deps.Mail.Send(r.Context(), tr.Email, mail.SignInCode(code, auth.CodeTTL))
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}
 }

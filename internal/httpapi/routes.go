@@ -41,6 +41,7 @@ type Route struct {
 func Routes(deps Deps) []Route {
 	return []Route{
 		{http.MethodPost, "/v1/auth/register", register(deps), false, LimitCredential, false},
+		{http.MethodPost, "/v1/auth/code", requestCode(deps), false, LimitCredential, false},
 		{http.MethodPost, "/v1/auth/session", signIn(deps), false, LimitCredential, false},
 		{http.MethodGet, "/v1/logbook", readLogbook(deps), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/trips/{id}", putTrip(deps), true, LimitTraveller, false},

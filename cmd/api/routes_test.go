@@ -21,6 +21,7 @@ import (
 
 func wiredConfig() config.Config {
 	return config.Config{
+		Development:              true,
 		AuthRateLimitPerMin:      60,
 		TravellerRateLimitPerMin: 600,
 		PublicRateLimitPerMin:    120,
@@ -32,6 +33,7 @@ func wiredConfig() config.Config {
 // The three ceilings come from their own three variables, not from each other.
 func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	cfg := config.Config{
+		Development:              true,
 		AuthRateLimitPerMin:      3,
 		TravellerRateLimitPerMin: 7,
 		PublicRateLimitPerMin:    11,
@@ -340,10 +342,10 @@ func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
 		t.Errorf("%s resolves to no pattern", healthzPath)
 	}
 
-	const inTheAPITable = 22
+	const inTheAPITable = 23
 	if got := len(httpapi.Routes(httpapi.Deps{})); got != inTheAPITable {
 		t.Errorf("httpapi.Routes() holds %d rows, want %d — with /healthz "+
-			"that is the 23 the plan's route table names. Re-derive rather than "+
+			"that is the 24 the route table names. Re-derive rather than "+
 			"remember:\n"+
 			"    grep -cE '^\\t\\t\\{http\\.Method' internal/httpapi/routes.go",
 			got, inTheAPITable)

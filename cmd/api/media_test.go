@@ -14,6 +14,7 @@ import (
 
 func bucketConfig() config.Config {
 	return config.Config{
+		Development:         true,
 		S3InternalEndpoint:  "http://minio:9000",
 		S3PublicBaseURL:     "https://media.example.test",
 		S3Region:            "eu-west-2",

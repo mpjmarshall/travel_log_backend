@@ -39,6 +39,8 @@ type Config struct {
 	S3PresignTTLPublic  time.Duration
 
 	MediaMaxBytes int64
+
+	Development bool
 }
 
 // MinRequestTimeout and MaxRequestTimeout bound REQUEST_TIMEOUT, and both
@@ -67,6 +69,7 @@ func Load() (Config, error) {
 		DatabaseURL:              l.required("DATABASE_URL"),
 		Port:                     l.port("PORT"),
 		LogLevel:                 l.level("LOG_LEVEL"),
+		Development:              os.Getenv("DEVELOPMENT") == "1",
 		DBMaxOpenConns:           l.atLeast("DB_MAX_OPEN_CONNS", 1),
 		DBMaxIdleConns:           l.atLeast("DB_MAX_IDLE_CONNS", 0),
 		AuthRateLimitPerMin:      l.atLeast("AUTH_RATE_LIMIT_PER_MIN", 1),

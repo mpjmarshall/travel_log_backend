@@ -20,6 +20,7 @@ import (
 
 	"travellog/internal/auth"
 	"travellog/internal/httpx"
+	"travellog/internal/mail"
 	"travellog/internal/media"
 )
 
@@ -28,6 +29,7 @@ type fakeStore struct {
 	travellers map[string]stored
 	sessions   map[string]auth.Session
 	owners     map[string]auth.Traveller
+	codes      map[string]*auth.SignInCode
 	next       int
 	failWith   error
 	clock      func() time.Time
@@ -232,6 +234,7 @@ type options struct {
 	publicPerMin    int
 	maxConcurrent   int
 	hasher          auth.Hasher
+	mailer          mail.Sender
 }
 
 func newHarness(t *testing.T, opt options) *harness {
@@ -283,8 +286,13 @@ func newHarness(t *testing.T, opt options) *harness {
 	rows := newFakeMedia()
 	shared := &fakePublic{books: books}
 	counted := &countingObjects{Store: objects}
+	if opt.mailer == nil {
+		opt.mailer = mail.SenderFunc(func(context.Context, string, mail.Message) error { return nil })
+	}
+
 	deps := Deps{
 		Auth:           service,
+		Mail:           opt.mailer,
 		Logbook:        books,
 		Share:          &fakeShare{books: books},
 		Cities:         geography,
@@ -842,16 +850,50 @@ func TestMountRefusesToRunWithoutARateLimiter(t *testing.T) {
 }
 
 // The code methods, so this file's fake still satisfies auth.Store.
-func (f *fakeStore) IssueCode(context.Context, string, []byte, time.Time) error {
+func (f *fakeStore) IssueCode(_ context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.codes == nil {
+		f.codes = map[string]*auth.SignInCode{}
+	}
+	f.codes[travellerID] = &auth.SignInCode{
+		Hash: hash, IssuedAt: f.now(), ExpiresAt: expiresAt,
+	}
 	return nil
 }
 
-func (f *fakeStore) CodeFor(context.Context, string) (auth.SignInCode, error) {
-	return auth.SignInCode{}, auth.ErrNoCode
+func (f *fakeStore) CodeFor(_ context.Context, travellerID string) (auth.SignInCode, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, held := f.codes[travellerID]
+	if !held {
+		return auth.SignInCode{}, auth.ErrNoCode
+	}
+	return *c, nil
 }
 
-func (f *fakeStore) CountAttempt(context.Context, string) (int, error) {
-	return 0, auth.ErrNoCode
+func (f *fakeStore) CountAttempt(_ context.Context, travellerID string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, held := f.codes[travellerID]
+	if !held {
+		return 0, auth.ErrNoCode
+	}
+	c.Attempts++
+	return c.Attempts, nil
 }
 
-func (f *fakeStore) BurnCode(context.Context, string) error { return nil }
+func (f *fakeStore) BurnCode(_ context.Context, travellerID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.codes, travellerID)
+	return nil
+}
+
+func (h *harness) registerTraveller(t *testing.T, email, passphrase string) {
+	t.Helper()
+	body := `{"email":"` + email + `","passphrase":"` + passphrase + `"}`
+	if got := h.post(t, "/v1/auth/register", body); got.status != http.StatusCreated {
+		t.Fatalf("registering %s: %d %s", email, got.status, got.body)
+	}
+}
