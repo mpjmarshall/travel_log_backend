@@ -38,6 +38,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-travellog}:${POSTGRES_PASSWORD:-travellog}@postgres:5432/${POSTGRES_DB:-travellog}?sslmode=disable
       PORT: "8080"
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEVELOPMENT: ${DEVELOPMENT:-0}
       DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-8}
       DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-4}
       AUTH_RATE_LIMIT_PER_MIN: ${AUTH_RATE_LIMIT_PER_MIN:-10}
