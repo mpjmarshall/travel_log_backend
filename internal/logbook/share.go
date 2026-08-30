@@ -1,5 +1,4 @@
-// The share link: what a write to it may contain, and the one place a share
-// token becomes a digest.
+// The share link: what a write to it may contain, and where a token is hashed.
 package logbook
 
 import (
@@ -8,12 +7,10 @@ import (
 	"regexp"
 )
 
-// MinShareTokenBytes is the floor on a client-minted token, and it is an
-// ENTROPY argument rather than a formatting one.
+// MinShareTokenBytes is the entropy floor on a client-minted token.
 const MinShareTokenBytes = 12
 
-// MaxShareTokenBytes is a DoS bound and this build's own policy, in the sense
-// MaxNameBytes is.
+// MaxShareTokenBytes is a denial-of-service bound, not a format rule.
 const MaxShareTokenBytes = 64
 
 // shareTokenPattern is the compiled regexp for a client-minted token.
@@ -26,16 +23,15 @@ func HashShareToken(token string) []byte {
 	return sum[:]
 }
 
-// ShareWrite is the body of `PUT /v1/trips/{id}/share`: H1's three switches,
-// Every field is a pointer because absent means leave alone.
+// ShareWrite is the body of PUT /v1/trips/{id}/share. Every field is a pointer
+// because absent means leave alone.
 type ShareWrite struct {
 	SharePhotos      *bool `json:"sharePhotos"`
 	ShareNotes       *bool `json:"shareNotes"`
 	ShareCoordinates *bool `json:"shareCoordinates"`
 }
 
-// ShareMint is the body of `POST /v1/trips/{id}/share`: the token the CLIENT
-// minted.
+// ShareMint is the body of POST /v1/trips/{id}/share: a client-minted token.
 type ShareMint struct {
 	Token *string `json:"token"`
 }

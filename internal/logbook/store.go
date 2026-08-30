@@ -1,4 +1,4 @@
-// The storage contract the domain declares and internal/postgres satisfies (.
+// The storage contract: declared by the domain, satisfied by internal/postgres.
 package logbook
 
 import (
@@ -13,15 +13,13 @@ var ErrNoTraveller = errors.New("logbook: no such traveller")
 // ErrNoTrip is a write answering about a trip nothing holds.
 var ErrNoTrip = errors.New("logbook: no such trip")
 
-// ErrNoPlace is a place write answering about a row nothing holds — the same
-// re-read-after-upsert case ErrNoTrip exists for.
+// ErrNoPlace is a place write answering about a row nothing holds.
 var ErrNoPlace = errors.New("logbook: no such place")
 
 // ErrNoPhoto is a route naming a photograph this log does not hold.
 var ErrNoPhoto = errors.New("logbook: no such photograph")
 
-// ErrNoWalk is the same for a walk, and it is reachable through one route's
-// own re-read only.
+// ErrNoWalk is the same for a walk, reachable only through a route's re-read.
 var ErrNoWalk = errors.New("logbook: no such walk")
 
 // Snapshot is what one read saw.
@@ -39,30 +37,26 @@ type Store interface {
 	SetTravellerName(ctx context.Context, travellerID, name string) (Traveller, int64, error)
 }
 
-// CityWritten is what `PUT /v1/cities/{id}` answers, and it carries both
-// shapes because the route has both.
+// CityWritten is what PUT /v1/cities/{id} answers, in either of its two shapes.
 type CityWritten struct {
 	City     City
 	Document *Document
 	Version  int64
 }
 
-// CityStore is T5's 'Add a city', declared here and satisfied by
-// internal/postgres.
+// CityStore is T5's 'Add a city'.
 type CityStore interface {
 	PutCity(ctx context.Context, travellerID string, w CityWrite) (CityWritten, error)
 }
 
-// PlaceStore is C1's pin and D2's removal, declared here and satisfied by
-// internal/postgres.
+// PlaceStore is C1's pin and D2's removal.
 type PlaceStore interface {
 	PutPlace(ctx context.Context, travellerID string, w PlaceWrite) (Place, int64, error)
 
 	RemovePlace(ctx context.Context, travellerID, placeID string, deletePhotos bool) (Snapshot, error)
 }
 
-// PhotoStore is R7's four photograph routes, declared here and satisfied by
-// internal/postgres.
+// PhotoStore is the four photograph routes.
 type PhotoStore interface {
 	PutPhoto(ctx context.Context, travellerID string, w PhotoWrite) (Photo, int64, error)
 
@@ -73,14 +67,12 @@ type PhotoStore interface {
 	RefilePhoto(ctx context.Context, travellerID, photoID string, w RefileWrite) (PhotoRefiled, error)
 }
 
-// WalkStore is N1's two walk writes, and it is one METHOD because they are
-// one route.
+// WalkStore is N1's two walk writes, one method because they are one route.
 type WalkStore interface {
 	PutWalk(ctx context.Context, travellerID string, w WalkWrite) (Walk, int64, error)
 }
 
-// ShareStore is H1's three writes, declared here and satisfied by
-// internal/postgres.
+// ShareStore is H1's three writes.
 type ShareStore interface {
 	SetShareOptions(ctx context.Context, travellerID, tripID string, w ShareWrite) (Trip, int64, error)
 
@@ -92,8 +84,7 @@ type ShareStore interface {
 // ErrNoShare is `GET /l/{token}` asking about a token nothing holds.
 var ErrNoShare = errors.New("logbook: no such share link")
 
-// ShareLink is what a token resolves to, and it carries the revocation rather
-// than hiding it — see ErrNoShare.
+// ShareLink is what a token resolves to, revocation included.
 type ShareLink struct {
 	TravellerID string
 	TripID      string
@@ -101,16 +92,14 @@ type ShareLink struct {
 	Revoked bool
 }
 
-// PublicStore is the read behind `GET /l/{token}`, declared here and
-// satisfied by internal/postgres.
+// PublicStore is the read behind GET /l/{token}.
 type PublicStore interface {
 	ShareLink(ctx context.Context, tokenHash []byte) (ShareLink, error)
 
 	PublicLog(ctx context.Context, travellerID, tripID string) (PublicSource, error)
 }
 
-// ErrNoMediaObject is a media route asking about a digest this traveller has
-// never begun.
+// ErrNoMediaObject is a digest this traveller has never begun.
 var ErrNoMediaObject = errors.New("logbook: no such media object")
 
 // MediaObject is one row of media_objects, as the domain sees it.
@@ -125,8 +114,7 @@ type MediaObject struct {
 // Committed is `uploaded_at is not null`, spelled once.
 func (m MediaObject) Committed() bool { return m.UploadedAt != nil }
 
-// MediaStore is the media half of the storage contract (: the domain declares
-// it, internal/postgres satisfies it).
+// MediaStore is the media half of the storage contract.
 type MediaStore interface {
 	BeginMedia(ctx context.Context, travellerID string, b MediaBegin) (MediaObject, error)
 

@@ -51,6 +51,7 @@ run:
 check:
 	go build ./...
 	go vet ./...
+	python3 scripts/check-comments.py
 	@out="$$(gofmt -l . 2>&1)"; st=$$?; \
 	if [ $$st -ne 0 ]; then \
 		echo "gofmt itself failed (exit $$st) — this is a file it cannot PARSE,"; \
