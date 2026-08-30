@@ -74,6 +74,10 @@ nav {
   align-items: center;
 }
 
+a { color: var(--text-primary); text-decoration-color: var(--border-control); }
+a:hover { text-decoration-color: var(--text-primary); }
+a:visited { color: var(--text-primary); }
+
 nav a { color: var(--text-secondary); text-decoration: none; }
 nav a:hover, nav a[aria-current] { color: var(--text-primary); }
 nav .spacer { flex: 1; }
@@ -132,6 +136,7 @@ button, .button {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 button.quiet {
