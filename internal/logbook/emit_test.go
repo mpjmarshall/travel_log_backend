@@ -18,8 +18,7 @@ import (
 
 const clientFixture = "testdata/client_sample_log.json"
 
-// clientLogbook is the `logbook` object out of the client the envelope, as raw
-// JSON.
+// clientLogbook is the logbook object out of the client's envelope, as raw JSON.
 func clientLogbook(t *testing.T) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(clientFixture)
@@ -62,7 +61,7 @@ func emitted(t *testing.T, doc logbook.Document) []byte {
 // document does not have, named once and read by's three legs below.
 var serverAddedKeys = []string{"logbook.trips[].shared"}
 
-// the round trip.
+// The round trip.
 func TestTheClientsOwnLogRoundTripsThroughTheseTypes(t *testing.T) {
 	out := emitted(t, clientDocument(t))
 
@@ -115,7 +114,7 @@ func TestEveryDateBearingFieldIsByteIdenticalToWhatTheClientSent(t *testing.T) {
 	}
 }
 
-// the sixth date-bearing field has no fixture, and that is a measurement
+// The sixth date-bearing field has no fixture, and that is a measurement
 // Than an omission.
 func TestASynthesisedInstantCarriesMillisecondsAndZ(t *testing.T) {
 	tokyo := time.FixedZone("JST", 9*60*60)
@@ -239,7 +238,7 @@ func TestTheEnvelopeCarriesTheFormatVersionItWasGiven(t *testing.T) {
 	}
 }
 
-// The parameter exists so a SECOND version is possible; today there is one
+// The parameter exists so a second version is possible; today there is one
 // value.
 func TestEmitRefusesAFormatVersionItCannotWrite(t *testing.T) {
 	for _, v := range []int{0, 1, 3, -1} {
@@ -291,7 +290,7 @@ func TestTheKeySetAtEveryLevelEqualsTheGolden(t *testing.T) {
 	}
 }
 
-// the one that makes the golden evidence rather than A RECORDING.
+// The one that makes the golden evidence rather than A recording.
 func TestTheGoldenKeySetIsTheClientFixturesKeySet(t *testing.T) {
 	raw, err := os.ReadFile("testdata/logbook_keys.golden")
 	if err != nil {
@@ -518,7 +517,7 @@ func firstDifferences(t *testing.T, got, want map[string]any, limit int) []strin
 	return out
 }
 
-// the size premise, measured through this build rather than carried.
+// The size premise, measured through this build rather than carried.
 func TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch(t *testing.T) {
 	clientFile, err := os.ReadFile(clientFixture)
 	if err != nil {
@@ -545,7 +544,7 @@ func TestTheEmittedSizeIsLargerThanTheClientsFileAndSaysBySoMuch(t *testing.T) {
 	}
 }
 
-// withContentAddresses is the fixture as it will be AFTER: every asset
+// withContentAddresses is the fixture as it will be after: every asset
 // locator a 64-character hex object id.
 func withContentAddresses(doc logbook.Document) logbook.Document {
 	id := func(n int) string {

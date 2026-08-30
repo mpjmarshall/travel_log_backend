@@ -68,7 +68,7 @@ func TestReBeginningACommittedObjectCannotRestateWhatItIs(t *testing.T) {
 	}
 }
 
-// the separate select is not A style choice, and this is the measurement that
+// The separate select is not A style choice, and this is the measurement that
 // says so.
 func TestTheSuppressedConflictBranchEmitsNoRowAtAll(t *testing.T) {
 	db := seeded(t)
@@ -219,7 +219,7 @@ func TestMediaObjectsIsScopedToTheTravellerAndReportsAnUnknownOne(t *testing.T) 
 	}
 }
 
-// the leg content addressing exists for: two photographs, one object, and
+// The leg content addressing exists for: two photographs, one object, and
 // either can be deleted.
 func TestTwoPhotographsShareOneObjectAndEitherCanGo(t *testing.T) {
 	db := seeded(t)

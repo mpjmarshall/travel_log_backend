@@ -1,4 +1,4 @@
-// What the runtime image DOES, measured by running something inside it.
+// What the runtime image does, measured by running something inside it.
 package image_test
 
 import (
@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// probeSource is compiled twice: once as written, and once with TZIMPORT
+// probeSource is compiled twice: once as written, and once with tzimport
 // replaced by the blank import.
 const probeSource = `package main
 
@@ -176,7 +176,7 @@ func runProbe(t *testing.T, embedTzdata bool, args ...string) probeReport {
 	return report
 }
 
-// TestTheContainerProcessRunsAsTheNumericUser is the RUNNING half of the USER
+// TestTheContainerProcessRunsAsTheNumericUser is the running half of the user
 // claim.
 func TestTheContainerProcessRunsAsTheNumericUser(t *testing.T) {
 	requireDocker(t)
@@ -212,7 +212,7 @@ func TestTheShippedBinaryIsReadableByTheUserItRunsAs(t *testing.T) {
 }
 
 // TestScratchWithoutEmbeddedTzdataCannotResolveAZone is the measurement
-// -BACKFILL could not make.
+// -backfill could not make.
 func TestScratchWithoutEmbeddedTzdataCannotResolveAZone(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, false)
@@ -240,7 +240,7 @@ func TestEmbeddedTzdataResolvesInsideScratch(t *testing.T) {
 	}
 }
 
-// TestTheCABundleGivesTheContainerARealRootStore is the FUNCTIONAL half of
+// TestTheCABundleGivesTheContainerARealRootStore is the functional half of
 // the CA claim.
 func TestTheCABundleGivesTheContainerARealRootStore(t *testing.T) {
 	requireDocker(t)

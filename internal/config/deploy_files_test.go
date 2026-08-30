@@ -50,7 +50,7 @@ func TestComposeSetsEveryVariableTheConfigPackageReads(t *testing.T) {
 	}
 }
 
-// interpolated is every ${VAR} and ${VAR:-default} in the compose file.
+// interpolated is every ${var} and ${var:-default} in the compose file.
 var interpolated = regexp.MustCompile(`\$\{([A-Z0-9_]+)`)
 
 func TestEveryComposeOverrideIsDocumentedInTheEnvTemplate(t *testing.T) {

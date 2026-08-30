@@ -83,7 +83,7 @@ func TestADismissedOnlyBodyLeavesTheTrackExactlyWhereItWas(t *testing.T) {
 	}
 }
 
-// So does N1's 'NAME it', which sends `{name}` and nothing else.
+// So does N1's 'name it', which sends `{name}` and nothing else.
 func TestANameOnlyBodyLeavesTheTrackAndTheDismissedFlagAlone(t *testing.T) {
 	store, db := walkStore(t)
 	before := walkPoints(t, db, "w-may")

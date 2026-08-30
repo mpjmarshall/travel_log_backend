@@ -116,7 +116,7 @@ func TestETagMatchesUsesWeakComparison(t *testing.T) {
 	}
 }
 
-// An empty current tag must never match, INCLUDING against `*`.
+// An empty current tag must never match, including against `*`.
 func TestNothingMatchesAnEmptyCurrentTag(t *testing.T) {
 	for _, ifNoneMatch := range []string{`*`, `W/"2-7"`, ``} {
 		if httpx.ETagMatches(ifNoneMatch, "") {

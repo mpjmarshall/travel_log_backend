@@ -76,7 +76,7 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-// freshBucket is a bucket per RUN, per test function.
+// freshBucket is a bucket per run, per test function.
 func freshBucket(t *testing.T) *media.MinIO {
 	t.Helper()
 
@@ -97,7 +97,7 @@ func freshBucket(t *testing.T) *media.MinIO {
 	return store
 }
 
-// s3Error is the XML body every S3-compatible server answers a refusal with.
+// s3Error is the xml body every S3-compatible server answers a refusal with.
 type s3Error struct {
 	XMLName xml.Name `xml:"Error"`
 	Code    string   `xml:"Code"`
@@ -152,7 +152,7 @@ func do(t *testing.T, url string, headers map[string]string, body []byte, chunke
 	return parsed.Code, resp.StatusCode
 }
 
-// the upload must be refused by the bucket, not by us.
+// The upload must be refused by the bucket, not by us.
 func TestABodyThatDoesNotMatchThePresignedDigestIsRefusedByTheBucket(t *testing.T) {
 	store := freshBucket(t)
 
@@ -233,7 +233,7 @@ func TestAnUploadThatOmitsTheDigestIsRefused(t *testing.T) {
 	}
 }
 
-// asked for content-length signed into the PUT "so the BUCKET enforces it
+// asked for content-length signed into the PUT "so the bucket enforces it
 // Than the API hoping".
 func TestABodyLongerThanTheSignedLengthIsRefusedByTheBucket(t *testing.T) {
 	store := freshBucket(t)
@@ -293,7 +293,7 @@ func TestABodyLongerThanTheSignedLengthIsRefusedByTheBucket(t *testing.T) {
 	}
 }
 
-// the map and the signature cannot drift.
+// The map and the signature cannot drift.
 func TestTheHeaderMapIsExactlyTheSignedHeadersMinusHost(t *testing.T) {
 	store := freshBucket(t)
 
@@ -402,7 +402,7 @@ func TestAContentAddressIsWriteOnce(t *testing.T) {
 	}
 }
 
-// the type is inside the signature, so the allowlist reaches the OBJECT and
+// The type is inside the signature, so the allowlist reaches the object and
 // not only the database row.
 func TestTheContentTypeIsSignedAndTheBucketKeepsIt(t *testing.T) {
 	store := freshBucket(t)
@@ -519,7 +519,7 @@ func TestEachAudienceGetsItsOwnLifetime(t *testing.T) {
 	}
 }
 
-// the upload url's own window is the private one, and ExpiresIn is what the
+// The upload url's own window is the private one, and ExpiresIn is what the
 // begin response reads it with.
 func TestTheUploadURLCarriesThePrivateWindowAndExpiresInReadsIt(t *testing.T) {
 	store := freshBucket(t)
@@ -616,7 +616,7 @@ func TestEnsureBucketMakesTheSameUploadWorkAndIsANoOpTwice(t *testing.T) {
 	}
 }
 
-// one traveller's key cannot address another's object.
+// One traveller's key cannot address another's object.
 func TestOneTravellersUrlCannotBeRepointedAtAnothers(t *testing.T) {
 	store := freshBucket(t)
 
@@ -653,7 +653,7 @@ func TestOneTravellersUrlCannotBeRepointedAtAnothers(t *testing.T) {
 	}
 }
 
-// the skip says what to do.
+// The skip says what to do.
 func TestTheSkipNamesTheVariableAndTheTarget(t *testing.T) {
 	t.Setenv(endpointVar, "")
 	if err := os.Unsetenv(endpointVar); err != nil {

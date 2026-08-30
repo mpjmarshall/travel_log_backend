@@ -45,8 +45,8 @@ func TestStopThenNewLinkSucceedsAndTheRevocationRecordSurvives(t *testing.T) {
 	}
 }
 
-// 'new link' ON A trip that is already shared, which is the sequence the
-// revoke inside the mint exists for — and the one the obvious leg misses.
+// A new link on an already-shared trip must revoke the old one, which the
+// obvious leg misses.
 func TestNewLinkOnATripThatIsAlreadySharedKillsTheOldOne(t *testing.T) {
 	db := seeded(t)
 	store := ShareStore{DB: db}
@@ -105,7 +105,7 @@ func TestASecondLiveLinkForOneTripIsRefusedByTheIndex(t *testing.T) {
 	}
 }
 
-// the stop resets's three flags by name, and the coordinate one is the
+// The stop resets the three flags by name, and the coordinate one is the
 // privacy half.
 func TestStoppingSharingResetsTheThreeFlagsToTheClientsDefaults(t *testing.T) {
 	db := seeded(t)
@@ -144,7 +144,7 @@ func TestStoppingSharingResetsTheThreeFlagsToTheClientsDefaults(t *testing.T) {
 	}
 }
 
-// the plaintext never reaches the table.
+// The plaintext never reaches the table.
 func TestAMintedTokenIsNowhereInTheClear(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -224,7 +224,7 @@ func TestAShareOptionsWriteNamingNothingChangesNoColumn(t *testing.T) {
 	}
 }
 
-// all three are setters and an unknown trip is logbook.ErrNoTrip, which the
+// All three are setters and an unknown trip is logbook.ErrNoTrip, which the
 // handler turns into a 404.
 func TestTheShareWritesRefuseATripThatIsNotInTheLog(t *testing.T) {
 	db := seeded(t)
@@ -253,7 +253,7 @@ func TestTheShareWritesRefuseATripThatIsNotInTheLog(t *testing.T) {
 	}
 }
 
-// A share write moves logbook_version, WHICH is the list rather than A
+// A share write moves logbook_version, which is the list rather than A
 // judgement call.
 func TestEveryShareWriteMovesTheVersion(t *testing.T) {
 	db := seeded(t)

@@ -93,7 +93,7 @@ func TestEachRefusalNamesTheFieldTheClientCanShow(t *testing.T) {
 	}
 }
 
-// The DUPLICATE leg above is not fastidiousness, and this says why in a leg.
+// The duplicate leg above is not fastidiousness, and this says why in a leg.
 func TestATripEndingOnTheDayItStartsIsAccepted(t *testing.T) {
 	trip := validTrip()
 	trip.End = trip.Start
@@ -112,7 +112,7 @@ func TestAnEndWithNoStartIsAccepted(t *testing.T) {
 	}
 }
 
-// the four sharing fields have nowhere to land, and that is the strongest
+// The four sharing fields have nowhere to land, and that is the strongest
 // form SF6 can take.
 func TestTheWriteTypeCannotCarryTheSharingFields(t *testing.T) {
 	const body = `{"id":"kyoto","name":"Kyoto","cityIds":["kyoto"],
@@ -164,7 +164,7 @@ func TestTheAllowlistTakesTwoTypesAndRefusesTheRest(t *testing.T) {
 	}
 }
 
-// the bound is a refusal to mint and it names the field.
+// The bound is a refusal to mint and it names the field.
 func TestValidateMediaBeginRefusesTheFirstWrongFieldByName(t *testing.T) {
 	const max = int64(26214400)
 	digest := strings.Repeat("a", 64)

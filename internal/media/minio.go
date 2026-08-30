@@ -188,8 +188,8 @@ func (m *MinIO) Stat(ctx context.Context, key Key) (Attributes, error) {
 	}, nil
 }
 
-// hexOfBase64 turns the bucket the base64 checksum back into the hex the rest
-// of this system speaks.
+// hexOfBase64 turns the bucket's base64 checksum back into the hex the rest of
+// this system speaks.
 func hexOfBase64(b64 string) string {
 	if b64 == "" {
 		return ""

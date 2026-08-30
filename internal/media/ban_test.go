@@ -1,4 +1,4 @@
-// the ban, inside `make check` rather than inside A DOCUMENT.
+// The ban, inside `make check` rather than inside A document.
 package media_test
 
 import (

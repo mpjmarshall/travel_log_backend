@@ -1,4 +1,4 @@
-// The acceptance check for, as a MECHANISM rather than a discipline.
+// The acceptance check for, as a mechanism rather than a discipline.
 package postgres
 
 import (

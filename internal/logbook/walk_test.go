@@ -15,7 +15,7 @@ import (
 
 func walkID(id string) *string { return &id }
 
-// track builds n points at FULL float64 PRECISION, and that choice is the
+// track builds n points at full float64 precision, and that choice is the
 // single thing every byte count below depends on.
 func track(n int) []logbook.LatLng {
 	random := rand.New(rand.NewSource(7))
@@ -39,7 +39,7 @@ func roundedTrack(n int) []logbook.LatLng {
 	return points
 }
 
-// the cap is 500 and the pair is the leg.
+// The cap is 500 and the pair is the leg.
 func TestValidateWalkRefuses501PointsByNameAndAccepts500(t *testing.T) {
 	if logbook.MaxWalkPoints != 500 {
 		t.Fatalf("MaxWalkPoints = %d. DEC-106 confirmed 500 and stopped it being "+
@@ -94,7 +94,7 @@ func TestTheCapIsFarInsideTheBodyCeilingAndSixHoursIsNot(t *testing.T) {
 	}
 }
 
-// The byte count of A TRACK is a claim about coordinate precision, which
+// The byte count of A track is a claim about coordinate precision, which
 // is why the input above is unrounded.
 func TestTheByteCountOfATrackIsAClaimAboutCoordinatePrecision(t *testing.T) {
 	const sixHoursAt1Hz = 21600
@@ -160,7 +160,7 @@ func TestValidateWalkRefusesAnEmptyTrackAndNotAShortOne(t *testing.T) {
 }
 
 // An absent `points` key is not an empty one, which is the whole of
-// saf-MAJ-6 at the validator.
+// saf-maj-6 at the validator.
 func TestADismissedOnlyBodyPassesValidationWithNoTrackInIt(t *testing.T) {
 	var body logbook.WalkWrite
 	if err := json.Unmarshal([]byte(`{"dismissed":true}`), &body); err != nil {

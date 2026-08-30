@@ -14,8 +14,8 @@ import (
 // ShareStore is logbook.ShareStore over *sql.DB.
 type ShareStore struct{ DB *sql.DB }
 
-// setShareOptionsSQL is the pointer contract in one statement, the same shape
-// `upsertTripSQL` uses and for the same reason.
+// setShareOptionsSQL is the pointer contract in one statement: absent fields
+// are left alone.
 const setShareOptionsSQL = `UPDATE trips SET
 		share_photos      = CASE WHEN $3::boolean THEN $4::boolean ELSE share_photos      END,
 		share_notes       = CASE WHEN $5::boolean THEN $6::boolean ELSE share_notes       END,
@@ -26,7 +26,7 @@ const setShareOptionsSQL = `UPDATE trips SET
 const revokeLiveLinkSQL = `UPDATE share_links SET revoked_at = now()
 	WHERE traveller_id = $1::uuid AND trip_id = $2 AND revoked_at IS NULL`
 
-// insertShareLinkSQL writes the DIGEST.
+// insertShareLinkSQL writes the digest.
 const insertShareLinkSQL = `INSERT INTO share_links (traveller_id, trip_id, token_hash)
 	VALUES ($1::uuid, $2, $3)`
 
@@ -73,7 +73,7 @@ func (s ShareStore) NewShareLink(ctx context.Context, travellerID, tripID, token
 	return trip, version, nil
 }
 
-// StopSharing revokes the link and resets's three flags.
+// StopSharing revokes the link and resets the three sharing flags.
 func (s ShareStore) StopSharing(ctx context.Context, travellerID, tripID string) (logbook.Trip, int64, error) {
 	return s.write(ctx, travellerID, tripID, func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, revokeLiveLinkSQL, travellerID, tripID); err != nil {

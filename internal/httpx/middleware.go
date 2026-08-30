@@ -19,7 +19,7 @@ type Middleware func(http.Handler) http.Handler
 // RequestIDHeader is both what is read back in tests and what a client sees.
 const RequestIDHeader = "X-Request-Id"
 
-// Chain applies mw[0] OUTERMOST.
+// Chain applies mw[0] outermost.
 func Chain(h http.Handler, mw ...Middleware) http.Handler {
 	for i := len(mw) - 1; i >= 0; i-- {
 		h = mw[i](h)

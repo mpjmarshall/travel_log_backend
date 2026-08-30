@@ -47,7 +47,7 @@ func publicShare(deps Deps) http.HandlerFunc {
 }
 
 // writePublicFailure is the one mapping for the public read, and it is
-// deliberately SHORTER than its siblings.
+// deliberately shorter than its siblings.
 func writePublicFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, logbook.ErrNoTrip), errors.Is(err, logbook.ErrNoTraveller):
@@ -61,8 +61,8 @@ func writePublicFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger
 	}
 }
 
-// logPublicFailure is the one line per 500, and it goes through
-// httpx.LoggedPath for the reason every other site here does.
+// logPublicFailure writes one line per 500, through httpx.LoggedPath so the
+// share token never reaches the log.
 func logPublicFailure(r *http.Request, log *slog.Logger, err error) {
 	if log == nil {
 		log = slog.Default()

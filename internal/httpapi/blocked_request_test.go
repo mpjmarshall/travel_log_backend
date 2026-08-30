@@ -28,7 +28,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// the measured shape this leg refuses to accept.
+// The measured shape this leg refuses to accept.
 func TestARequestBlockedOnALockGetsABoundedAnswerAndNotSilence(t *testing.T) {
 	db, schema := testdb.Open(t)
 	ctx := context.Background()

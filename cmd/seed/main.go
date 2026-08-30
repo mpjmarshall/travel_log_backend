@@ -214,7 +214,7 @@ func mappingOf(assets []asset) map[string]string {
 	return out
 }
 
-// objectsOf is the media_objects half, with `uploaded_at` SET — which is what
+// objectsOf is the media_objects half, with `uploaded_at` set — which is what
 // makes a seeded object indistinguishable from an uploaded one.
 func objectsOf(travellerID string, assets []asset, at time.Time) []seed.MediaObject {
 	out := make([]seed.MediaObject, 0, len(assets))
@@ -327,7 +327,7 @@ func printReport(o options, travellerID, passphrase string, report seed.Report) 
 		"  Registration is CLOSED behind this account (DEC-86).\n")
 }
 
-// redactDSN keeps everything that identifies WHICH database and drops the one
+// redactDSN keeps everything that identifies which database and drops the one
 // thing that identifies nothing.
 func redactDSN(dsn string) string {
 	u, err := url.Parse(dsn)

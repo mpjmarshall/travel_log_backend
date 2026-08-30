@@ -21,7 +21,7 @@ func upload(body string, contentType string) (media.Key, media.Upload, []byte) {
 		[]byte(body)
 }
 
-// the two-variable mistake is a state this api can express, and this is where
+// The two-variable mistake is a state this api can express, and this is where
 // it reddens.
 func TestPresignPutRefusesADigestThatDisagreesWithTheKey(t *testing.T) {
 	store := media.NewMemory()
@@ -129,7 +129,7 @@ func TestEachAudienceGetsItsOwnLifetimeInTheTwin(t *testing.T) {
 	}
 }
 
-// the twin refuses what minio refuses, or a handler leg proves nothing.
+// The twin refuses what minio refuses, or a handler leg proves nothing.
 func TestTheTwinEnforcesTheFourRefusals(t *testing.T) {
 	key, up, body := upload("the bytes the client promised", "image/png")
 
@@ -203,7 +203,7 @@ func TestStatAnswersTheSentinelForAKeyThatIsNotThere(t *testing.T) {
 	}
 }
 
-// the twin's read URLs carry the disposition, because the real one's do.
+// The twin's read URLs carry the disposition, because the real one's do.
 func TestTheTwinsReadURLsAreMarkedAsDownloadsForBothAudiences(t *testing.T) {
 	m := media.NewMemory()
 	key := media.Key{Traveller: traveller, Object: digestOf("a photograph")}
@@ -225,7 +225,7 @@ func TestTheTwinsReadURLsAreMarkedAsDownloadsForBothAudiences(t *testing.T) {
 }
 
 // ExpiresIn reads the window back off the url, which is what gives the begin
-// response's `expiresAt` one SOURCE.
+// response's `expiresAt` one source.
 func TestExpiresInReadsTheWindowTheURLCarries(t *testing.T) {
 	m := media.NewMemory()
 	key := media.Key{Traveller: traveller, Object: digestOf("a photograph")}

@@ -132,7 +132,7 @@ type walkBeforeWrite struct {
 	lats, lngs     []float64
 }
 
-// requireWritableWalk refuses a CREATE missing a not NULL field and names it.
+// requireWritableWalk refuses a create missing a not NULL field and names it.
 func requireWritableWalk(ctx context.Context, tx *sql.Tx, travellerID, id string, w logbook.WalkWrite) (walkBeforeWrite, error) {
 	var before walkBeforeWrite
 	err := tx.QueryRowContext(ctx, readWalkForWriteSQL, travellerID, id).

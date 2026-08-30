@@ -27,7 +27,7 @@ func RequestIDFrom(ctx context.Context) string {
 	return id
 }
 
-// requestFacts is's two things the access line learns AFTER it has already
+// requestFacts is's two things the access line learns after it has already
 // been entered.
 type requestFacts struct {
 	mu          sync.Mutex
@@ -63,7 +63,7 @@ func RecordTraveller(ctx context.Context, id string) {
 	facts.travellerID = id
 }
 
-// RecordRoute names the route PATTERN that matched, beside the raw path.
+// RecordRoute names the route pattern that matched, beside the raw path.
 func RecordRoute(ctx context.Context, pattern string) {
 	facts := factsFrom(ctx)
 	if facts == nil || pattern == "" {

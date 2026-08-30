@@ -29,7 +29,7 @@ func deletedAutumnCrossing(t *testing.T) (before, after map[string]int, db *sql.
 	return before, after, db
 }
 
-// sheet line 1 — "N photos and their notes", DELETED.
+// sheet line 1 — "N photos and their notes", deleted.
 func TestD3DeletesTheTripsPhotographsAndTheirNotes(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -40,7 +40,7 @@ func TestD3DeletesTheTripsPhotographsAndTheirNotes(t *testing.T) {
 	}
 }
 
-// sheet line 2 — "N recorded walks", DELETED.
+// sheet line 2 — "N recorded walks", deleted.
 func TestD3DeletesTheTripsWalksAndLeavesTheOtherTripsAlone(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -51,7 +51,7 @@ func TestD3DeletesTheTripsWalksAndLeavesTheOtherTripsAlone(t *testing.T) {
 	}
 }
 
-// sheet line 3 — "N pins in Busan, Kyoto and Seoul", KEPT.
+// sheet line 3 — "N pins in Busan, Kyoto and Seoul", kept.
 func TestD3KeepsEveryPinAndTakesOnlyTheTripsOwnVisits(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -101,7 +101,7 @@ func TestD3KeepsThePinWhoseOnlyVisitsWereOnTheDeletedTrip(t *testing.T) {
 	}
 }
 
-// sheet line 4 — "The shared link stops working", DEAD.
+// sheet line 4 — "The shared link stops working", dead.
 func TestD3TakesTheSharedLinkAndItsWholeHistoryWithTheTrip(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -112,7 +112,7 @@ func TestD3TakesTheSharedLinkAndItsWholeHistoryWithTheTrip(t *testing.T) {
 	}
 }
 
-// the rows the sheet does not itemise, because it does not have to.
+// D3 takes the itinerary and never a city.
 func TestD3TakesTheItineraryAndNeverACity(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -134,7 +134,7 @@ func TestD3TakesTheItineraryAndNeverACity(t *testing.T) {
 	}
 }
 
-// the SERVER-SIDE `_repointed`, and its second assertion is the whole point.
+// The server-side `_repointed`, and its second assertion is the whole point.
 func TestAfterTheCascadeNoPhotographNamesAVisitThatIsGone(t *testing.T) {
 	before, after, db := deletedAutumnCrossing(t)
 	ctx := context.Background()

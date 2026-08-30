@@ -1,4 +1,4 @@
-// BACKFILL.
+// backfill.
 package main
 
 import (

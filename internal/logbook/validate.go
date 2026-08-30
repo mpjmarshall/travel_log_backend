@@ -14,7 +14,7 @@ const (
 )
 
 // idPattern is the rule, verified against all 43 ids in the client's own log:
-// permissive, because the ids are the CLIENT's and must round-trip.
+// permissive, because the ids are the client's and must round-trip.
 var idPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 // assetPattern is the content address: lowercase hex, sixty-four characters.
@@ -162,7 +162,7 @@ func ValidateMediaBegin(b MediaBegin, maxBytes int64) error {
 	return nil
 }
 
-// MediaMint is the body of `POST /v1/media/mint`: a LIST of ids, so a
+// MediaMint is the body of `POST /v1/media/mint`: a list of ids, so a
 // twelve-photograph grid is one round trip rather than twelve.
 type MediaMint struct {
 	IDs *[]string `json:"ids"`

@@ -10,7 +10,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// PATCH /v1/me answers the traveller and A TAG.
+// PATCH /v1/me answers the traveller and A tag.
 func TestNamingTheTravellerAnswersTheTravellerAndMovesTheTag(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -153,7 +153,7 @@ func TestTheDefaultScopeLeavesTheOtherDeviceSignedIn(t *testing.T) {
 	}
 }
 
-// A scope nobody recognises is a 422 naming the field, not A FALLBACK.
+// A scope nobody recognises is a 422 naming the field, not A fallback.
 func TestAnUnknownRevocationScopeIsRefusedRatherThanDefaulted(t *testing.T) {
 	h := newHarness(t, options{})
 	phone := bearer(t, h)
@@ -173,7 +173,7 @@ func TestAnUnknownRevocationScopeIsRefusedRatherThanDefaulted(t *testing.T) {
 	}
 }
 
-// the revocation moves no logbook_version, and that is the list rather than an
+// The revocation moves no logbook_version, and that is the list rather than an
 // accident.
 func TestRevokingASessionDoesNotInvalidateTheCachedLog(t *testing.T) {
 	h := newHarness(t, options{})

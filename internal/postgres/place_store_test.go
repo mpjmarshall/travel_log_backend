@@ -110,7 +110,7 @@ func TestReSendingAnUnchangedVisitsArrayDoesNotUnfileItsPhotographs(t *testing.T
 	}
 }
 
-// ABSENT `visits` leaves them alone, and that is what makes createPlace
+// absent `visits` leaves them alone, and that is what makes createPlace
 // correct by construction.
 func TestAPlaceWriteWithNoVisitsKeyLeavesEveryVisitAndEveryFilingAlone(t *testing.T) {
 	store, db := placeStore(t)
@@ -173,8 +173,8 @@ func TestCreatingAPlaceWithNoVisitsIsAWishlistPlace(t *testing.T) {
 	}
 }
 
-// the reorder, and it is's first time the non-deferrable unique on visit
-// ordinals is exercised by A ROUTE.
+// The reorder, and the first time the non-deferrable unique on visit
+// ordinals is exercised by A route.
 func TestReorderingTheVisitsArrayRewritesTheOrdinalsAndKeepsTheFiling(t *testing.T) {
 	store, db := placeStore(t)
 	ctx := context.Background()
@@ -210,7 +210,7 @@ func TestReorderingTheVisitsArrayRewritesTheOrdinalsAndKeepsTheFiling(t *testing
 	}
 }
 
-// the offset is derived and the plan's `+ 1000` is a constant, and this is
+// The offset is derived and the plan's `+ 1000` is a constant, and this is
 // the leg that separates them.
 func TestAVisitsArrayLongerThanAThousandStillReorders(t *testing.T) {
 	store, db := placeStore(t)

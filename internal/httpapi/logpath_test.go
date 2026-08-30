@@ -25,7 +25,7 @@ const theCapability = "CAPABILITY7XY"
 
 const capabilityPath = "/l/" + theCapability
 
-// redacted is written out as a LITERAL rather than read off
+// redacted is written out as a literal rather than read off
 // httpx.RedactedSharePath.
 const redacted = "/l/[redacted]"
 
@@ -73,7 +73,7 @@ func provokePanic(t *testing.T, log *slog.Logger) {
 }
 
 // provokeRateLimit spends the one token this limiter has and then asks again,
-// Is the WARN line — the one written while somebody is enumerating.
+// Is the warn line — the one written while somebody is enumerating.
 func provokeRateLimit(t *testing.T, log *slog.Logger) {
 	t.Helper()
 	limited := httpx.RateLimit(httpx.NewLimiter(1, nil), log)(okHandler())
@@ -81,7 +81,7 @@ func provokeRateLimit(t *testing.T, log *slog.Logger) {
 	serve(limited)
 }
 
-// provokeUnkeyable is the OTHER line in RateLimitBy, and it is a separate leg
+// provokeUnkeyable is the other line in RateLimitBy, and it is a separate leg
 // It is a separate call to the logger.
 func provokeUnkeyable(t *testing.T, log *slog.Logger) {
 	t.Helper()
@@ -106,7 +106,7 @@ func okHandler() http.Handler {
 	})
 }
 
-// the five legs above are about five sites that exist; this one is about the
+// The five legs above are about five sites that exist; this one is about the
 // sixth.
 func TestEveryLogSiteThatNamesAPathAsksLoggedPathForIt(t *testing.T) {
 	root := moduleRootFromHTTPAPI(t)

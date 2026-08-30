@@ -81,7 +81,7 @@ func versionsIn(t *testing.T, fsys fs.FS) []string {
 	return out
 }
 
-// A file edited after it was applied fails LOUDLY: neither silently re-run
+// A file edited after it was applied fails loudly: neither silently re-run
 // nor silently ignored.
 func TestAFileEditedAfterItWasAppliedFailsLoudly(t *testing.T) {
 	db, schema := testdb.Open(t)
@@ -109,7 +109,7 @@ func TestAFileEditedAfterItWasAppliedFailsLoudly(t *testing.T) {
 	}
 }
 
-// A file that fails half way leaves NOTHING behind, ledger row included.
+// A file that fails half way leaves nothing behind, ledger row included.
 func TestAFailingFileLeavesNoHalfAppliedSchema(t *testing.T) {
 	db, schema := testdb.Open(t)
 	m := Migrator{Schema: schema, Logger: quietLogger()}
@@ -131,7 +131,7 @@ func TestAFailingFileLeavesNoHalfAppliedSchema(t *testing.T) {
 	}
 }
 
-// the escape hatch, proven from both sides.
+// The escape hatch, proven from both sides.
 func TestTheNoTransactionDirectiveIsWhatMakesConcurrentlyPossible(t *testing.T) {
 	const body = "CREATE TABLE IF NOT EXISTS one (x int);\n" +
 		"CREATE INDEX CONCURRENTLY IF NOT EXISTS one_x_idx ON one (x);\n"
@@ -206,7 +206,7 @@ func TestASecondRunWaitsWhileTheLockIsHeldElsewhere(t *testing.T) {
 	}
 }
 
-// the PINNED-connection leg.
+// The pinned-connection leg.
 func TestTheLockIsActuallyReleasedWhenTheRunFinishes(t *testing.T) {
 	db, schema := testdb.Open(t)
 	if _, err := (Migrator{Schema: schema, Logger: quietLogger()}).
@@ -226,7 +226,7 @@ func TestTheLockIsActuallyReleasedWhenTheRunFinishes(t *testing.T) {
 	other.Exec(`SELECT pg_advisory_unlock($1)`, migrateLockKey)
 }
 
-// CHARACTERISATION, not a guard on our own code.
+// characterisation, not a guard on our own code.
 func TestASessionLockTakenOverThePoolCanBeUnlockedOnTheWrongConnection(t *testing.T) {
 	_, schema := testdb.Open(t)
 	pool := testdb.Second(t, schema)
@@ -415,7 +415,7 @@ type subject struct {
 }
 
 // noTransactionSubjects is every `-- migrate:no-transaction` file this
-// repository holds, DERIVED rather than listed, from both places one can be.
+// repository holds, derived rather than listed, from both places one can be.
 func noTransactionSubjects(t *testing.T) []subject {
 	t.Helper()
 
@@ -439,7 +439,7 @@ func noTransactionSubjects(t *testing.T) []subject {
 	return out
 }
 
-// the guard orders, and its own precondition.
+// The guard orders, and its own precondition.
 func TestNoTransactionMigrationsAreReRunnable(t *testing.T) {
 	subjects := noTransactionSubjects(t)
 	if len(subjects) == 0 {
@@ -520,7 +520,7 @@ func TestANoTransactionFileMustDeclareItIsReRunnable(t *testing.T) {
 	}
 }
 
-// the failure message carries the statement text and not only its ordinal
+// The failure message carries the statement text and not only its ordinal
 // ((d)), so log line one is enough.
 func TestAFailingNoTransactionFileNamesTheStatementTextItDiedOn(t *testing.T) {
 	db, schema := testdb.Open(t)

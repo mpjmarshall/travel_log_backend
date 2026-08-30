@@ -51,14 +51,14 @@ func EmitTrip(t Trip) Trip {
 }
 
 // EmitPlace is the same normalisation for `PUT /v1/places/{id}`, and it is
-// the SECOND time this rule has had to be written down.
+// the second time this rule has had to be written down.
 func EmitPlace(p Place) Place {
 	p.Visits = orEmpty(p.Visits)
 	return p
 }
 
 // EmitWalk is the same normalisation for `PUT /v1/walks/{id}`, and it is the
-// THIRD time this rule has had to be written down.
+// third time this rule has had to be written down.
 func EmitWalk(w Walk) Walk {
 	w.Points = orEmpty(w.Points)
 	return w

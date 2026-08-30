@@ -94,7 +94,7 @@ var pgxImporters = map[string]string{
 	"cmd/seed/main.go":                   "the developer command: registers the driver for its own pool, and calls nothing in it",
 }
 
-// TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes the CLAIM A grep
+// TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes the claim A grep
 // cannot make.
 func TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver(t *testing.T) {
 	got := pgxImports(t)

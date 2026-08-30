@@ -111,7 +111,7 @@ type photoBeforeWrite struct {
 	isCreate              bool
 }
 
-// requireWritablePhoto refuses a CREATE missing a not NULL field and names
+// requireWritablePhoto refuses a create missing a not NULL field and names
 // it.
 func requireWritablePhoto(ctx context.Context, tx *sql.Tx, travellerID, id string, w logbook.PhotoWrite) (photoBeforeWrite, error) {
 	var before photoBeforeWrite
@@ -234,7 +234,7 @@ const deletePhotoSQL = `DELETE FROM photos WHERE traveller_id = $1::uuid AND id 
 var errNoSuchPhoto = errors.New("postgres: that photograph was not in this log")
 
 // DeletePhoto is D1, and it is the only destructive route in this plan that
-// cascades NOWHERE.
+// cascades nowhere.
 func (s PhotoStore) DeletePhoto(ctx context.Context, travellerID, photoID string) (int64, error) {
 	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, deletePhotoSQL, travellerID, photoID)
@@ -355,7 +355,7 @@ const renumberVisitsByTimeSQL = `UPDATE visits v SET ordinal = ranked.position
 const refilePhotoSQL = `UPDATE photos SET place_id = $3, visit_id = $4
 	WHERE traveller_id = $1::uuid AND id = $2`
 
-// RefilePhoto is M2.2's 'Change', and it VALIDATES the occasion the client
+// RefilePhoto is M2.2's 'Change', and it validates the occasion the client
 // chose rather than choosing one.
 func (s PhotoStore) RefilePhoto(ctx context.Context, travellerID, photoID string, w logbook.RefileWrite) (logbook.PhotoRefiled, error) {
 	var out logbook.PhotoRefiled
@@ -419,7 +419,7 @@ type refiling struct {
 	at                       *logbook.Instant
 }
 
-// requireOrMintOccasion answers whether it MINTED one, which is what decides
+// requireOrMintOccasion answers whether it minted one, which is what decides
 // the response shape.
 func requireOrMintOccasion(ctx context.Context, tx *sql.Tx, travellerID string, r refiling) (bool, error) {
 	var heldPlace, heldTrip string
@@ -463,7 +463,7 @@ func requireOrMintOccasion(ctx context.Context, tx *sql.Tx, travellerID string, 
 }
 
 // renumberVisits parks every ordinal above the incoming count and then writes
-// 0..n-1 in `at` DESC.
+// 0..n-1 in `at` desc.
 func renumberVisits(ctx context.Context, tx *sql.Tx, travellerID, placeID string) error {
 	var occasions int
 	if err := tx.QueryRowContext(ctx, occasionsAtPlaceSQL, travellerID, placeID).Scan(&occasions); err != nil {

@@ -80,7 +80,7 @@ func TestThePhotoDispositionRefusesEverythingButTheTwoSpellings(t *testing.T) {
 	}
 }
 
-// the absent case and the misspelled case are byte-IDENTICAL, deliberately.
+// The absent case and the misspelled case are byte-identical, deliberately.
 func TestAMissingPhotosParameterAndAMisspeltOneSayTheSameThing(t *testing.T) {
 	_, absent := logbook.ParsePhotoDisposition("")
 	_, misspelt := logbook.ParsePhotoDisposition("keepp")
@@ -89,7 +89,7 @@ func TestAMissingPhotosParameterAndAMisspeltOneSayTheSameThing(t *testing.T) {
 	}
 }
 
-// the zero value is not reachable from outside the package.
+// The zero value is not reachable from outside the package.
 func TestTheServiceRefusesADispositionNobodyChose(t *testing.T) {
 	var reached int
 	svc := logbook.Service{Places: countingPlaces{reached: &reached}}

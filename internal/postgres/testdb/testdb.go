@@ -159,7 +159,7 @@ func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// Second answers a SECOND, independent pool on the same schema.
+// Second answers a second, independent pool on the same schema.
 func Second(t TB, schema string) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv(urlVar)

@@ -210,7 +210,7 @@ func TestBeginMintsAnUploadCapabilityAndCommitTurnsItIntoAnAsset(t *testing.T) {
 }
 
 // A second begin for A committed digest answers alreadyExists and mints no
-// second write capability (V4-SF5a).
+// second write capability.
 func TestASecondBeginAnswersAlreadyExistsAndMintsNoSecondUploadURL(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -270,7 +270,7 @@ func TestCommittingTwiceIsASuccessAndChangesNothing(t *testing.T) {
 	}
 }
 
-// the header map's key set equals the url's X-Amz-SignedHeaders MINUS `host`.
+// The header map's key set equals the url's X-Amz-SignedHeaders minus `host`.
 func TestTheUploadHeadersAreExactlyTheHeadersTheSignatureCovers(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -326,7 +326,7 @@ func TestTheUploadHeadersAreExactlyTheHeadersTheSignatureCovers(t *testing.T) {
 	}
 }
 
-// the begin RESPONSE'S expiresAt agrees with the signature's own window.
+// The begin response'S expiresAt agrees with the signature's own window.
 func TestExpiresAtIsTheWindowTheSignatureActuallyCarries(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -353,7 +353,7 @@ func TestExpiresAtIsTheWindowTheSignatureActuallyCarries(t *testing.T) {
 	}
 }
 
-// every presigned get carries `response-content-disposition=attachment`.
+// Every presigned get carries `response-content-disposition=attachment`.
 func TestEveryMintedReadURLIsMarkedAsADownload(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -420,7 +420,7 @@ func TestMintingRefusesAnObjectThatIsNotThereYet(t *testing.T) {
 	}
 }
 
-// the allowlist and the bound are 422s that name the field, and they happen
+// The allowlist and the bound are 422s that name the field, and they happen
 // before anything is signed.
 func TestBeginRefusesAWrongTypeOrAnOversizeBeforeItMintsAnything(t *testing.T) {
 	h := newHarness(t, options{})
@@ -476,7 +476,7 @@ func TestCommittingAnIDNothingHoldsIsRefusedByName(t *testing.T) {
 	}
 }
 
-// the commit verifies the stored digest as well as the size, and the empty
+// The commit verifies the stored digest as well as the size, and the empty
 // checksum is what turns the ban into A runtime guard (the free half).
 func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 	h := newHarness(t, options{})
@@ -505,7 +505,7 @@ func TestACommitRefusesAnObjectThatCarriesNoStoredChecksum(t *testing.T) {
 	}
 }
 
-// the commit refuses an object stored as something other than what the row
+// The commit refuses an object stored as something other than what the row
 // declares (the other half).
 func TestACommitRefusesAnObjectStoredAsSomethingElse(t *testing.T) {
 	h := newHarness(t, options{})
@@ -530,7 +530,7 @@ func TestACommitRefusesAnObjectStoredAsSomethingElse(t *testing.T) {
 	}
 }
 
-// The size, which is the same shape.
+// A commit must refuse an object whose size differs from what was begun.
 func TestACommitRefusesAnObjectOfADifferentSize(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

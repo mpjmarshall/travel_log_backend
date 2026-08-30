@@ -53,7 +53,7 @@ func gunzip(t *testing.T, r io.Reader) []byte {
 	return out
 }
 
-// the one the performance lens measured.
+// The body is compressed when asked for, and the response says so.
 func TestTheBodyIsCompressedWhenAskedAndSaysSo(t *testing.T) {
 	h := httpx.Compress()(jsonBody(400))
 
@@ -96,7 +96,7 @@ func TestVaryNamesAcceptEncodingOnBothAnswers(t *testing.T) {
 	}
 }
 
-// the etag is a fact about the log and not about the encoding.
+// The etag is a fact about the log and not about the encoding.
 func TestTheETagIsUnchangedByTheEncoding(t *testing.T) {
 	h := httpx.Compress()(jsonBody(400))
 
@@ -155,7 +155,7 @@ func TestA304IsNotGivenABody(t *testing.T) {
 	}
 }
 
-// CONTENT-length must not survive the compression.
+// content-length must not survive the compression.
 func TestAHandlerSetContentLengthIsDroppedWhenCompressing(t *testing.T) {
 	body := strings.Repeat(`{"id":"kyoto"},`, 400)
 	h := httpx.Compress()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

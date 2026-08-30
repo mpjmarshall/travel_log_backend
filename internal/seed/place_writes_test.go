@@ -194,7 +194,7 @@ func TestAnEmptyVisitsArrayIsRefusedWhereItWouldDestroyAndIsANoOpWhereItWouldNot
 	}
 }
 
-// REORDERING all 28 KEEPS all 30 FILINGS, and it is's first time the
+// Reordering all 28 keeps all 30 filings, and it is the first time the
 // non-deferrable UNIQUE on visit ordinals is exercised at this width.
 func TestReversingAllTwentyEightOccasionsKeepsEveryFiling(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
@@ -233,7 +233,7 @@ func TestReversingAllTwentyEightOccasionsKeepsEveryFiling(t *testing.T) {
 	}
 }
 
-// the delete branch, row by row.
+// The delete branch, row by row.
 func TestD2DeletesTheThirtyPhotographsAndTheNotesWrittenOnThem(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 
@@ -275,7 +275,7 @@ func TestD2DeletesTheThirtyPhotographsAndTheNotesWrittenOnThem(t *testing.T) {
 	}
 }
 
-// the keep branch, row by row, and the caption is the row that separates the
+// The keep branch, row by row, and the caption is the row that separates the
 // two branches.
 func TestD2KeepsTheThirtyPhotographsWithTheirDateCityAndCaption(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
@@ -353,7 +353,7 @@ func TestD2KeepsTheThirtyPhotographsWithTheirDateCityAndCaption(t *testing.T) {
 	}
 }
 
-// the walks are not touched on either branch, and that is `walks` having no
+// The walks are not touched on either branch, and that is `walks` having no
 // `place_id` at all rather than anything Go does.
 func TestD2LeavesTheWalksAloneOnBothBranches(t *testing.T) {
 	for _, deletePhotos := range []bool{true, false} {

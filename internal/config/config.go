@@ -55,7 +55,7 @@ const (
 	MaxPresignTTL = 7 * 24 * time.Hour
 )
 
-// MinMediaMaxBytes is a MEASUREMENT and not a round number.
+// MinMediaMaxBytes is a measurement and not a round number.
 const MinMediaMaxBytes = 1 << 20
 
 // Load reads the environment and returns either a whole Config or a single

@@ -1,5 +1,5 @@
-// the three row rules, against a real PostgreSQL where a row either exists or
-// does not (docs/PUBLIC-ENVELOPE.md §5).
+// The three row rules, against a real PostgreSQL where a row either exists or
+// does not (docs/public-envelope.md §5).
 package postgres
 
 import (
@@ -64,7 +64,7 @@ func sharedFixture(t *testing.T) *logbook.PublicSource {
 	return &src
 }
 
-// the failing test this step was written against.
+// The failing test this step was written against.
 func TestThePublicEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	src := sharedFixture(t)
 
@@ -91,7 +91,7 @@ func TestThePublicEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	}
 }
 
-// the nested case, which the leg above passes while it leaks.
+// The nested case, which the leg above passes while it leaks.
 func TestAPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	src := sharedFixture(t)
 
@@ -150,7 +150,7 @@ func TestThePublicEnvelopeCarriesOneTripsPhotographsAndNoDiscardedTrack(t *testi
 	}
 }
 
-// the cities are the trip's own, in `trip_cities.ordinal` ORDER.
+// The cities are the trip's own, in `trip_cities.ordinal` order.
 func TestThePublicEnvelopeCarriesTheTripsCitiesInTravelOrder(t *testing.T) {
 	src := sharedFixture(t)
 

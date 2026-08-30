@@ -45,7 +45,7 @@ func withTravellers(t *testing.T) (*sql.DB, string) {
 	return db, schema
 }
 
-// lockIsFree asks a SEPARATE session whether the per-traveller lock can be
+// lockIsFree asks a separate session whether the per-traveller lock can be
 // taken, deriving the key from the formula independently of tx.go.
 func lockIsFree(t *testing.T, other *sql.DB, travellerID string) bool {
 	t.Helper()
@@ -229,8 +229,8 @@ func TestWithTravellerLockRollsBackWhenTheBodyFails(t *testing.T) {
 	}
 }
 
-// the leg the slice exists for, at the store's own level: the two helpers put
-// the same two writes on opposite sides of the version.
+// At the store's own level: a session write moves no version and a trip write
+// does.
 func TestASessionWriteDoesNotMoveTheVersionAndATripWriteDoes(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -405,7 +405,7 @@ func TestConcurrentWritersEachGetTheirOwnVersion(t *testing.T) {
 	}
 }
 
-// the WRITER-ordering leg.
+// The writer-ordering leg.
 func TestAReaderNeverSeesATripTheVersionDoesNotCount(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()
@@ -470,7 +470,7 @@ func TestAReaderNeverSeesATripTheVersionDoesNotCount(t *testing.T) {
 	}
 }
 
-// found at, and it is a blocker rather than A TIDY-UP.
+// found at, and it is a blocker rather than A tidy-UP.
 func TestAFailedWriteChecksItsConnectionBackIn(t *testing.T) {
 	db, schema := withTravellers(t)
 	ctx := context.Background()

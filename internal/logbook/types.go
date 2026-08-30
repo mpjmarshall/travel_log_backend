@@ -23,7 +23,7 @@ type Traveller struct {
 	Name string `json:"name"`
 }
 
-// Trip carries the four sharing fields OUT and the write does not take them
+// Trip carries the four sharing fields out and the write does not take them
 // back IN.
 type Trip struct {
 	ID               string   `json:"id"`
@@ -48,7 +48,7 @@ type City struct {
 	CoverAsset *string `json:"coverAsset"`
 }
 
-// Country is's two flattened columns wearing the client the nested shape.
+// Country is two flattened columns wearing the client's nested shape.
 type Country struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
@@ -108,7 +108,7 @@ type Walk struct {
 // zeroes are the whole reason this type exists.
 const instantLayout = "2006-01-02T15:04:05.000"
 
-// Instant is a time.Time that renders the way the client the encoder does.
+// Instant is a time.Time that renders the way the client's encoder does.
 type Instant time.Time
 
 func (i Instant) MarshalJSON() ([]byte, error) {

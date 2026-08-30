@@ -81,7 +81,7 @@ func filedWholeLog(t *testing.T, db *sql.DB) int {
 	return rows(t, db, `SELECT count(*) FROM photos WHERE place_id IS NOT NULL`)
 }
 
-// halfFiledWholeLog is the state the client the model has never expressed.
+// halfFiledWholeLog counts a state the client's model has never expressed.
 func halfFiledWholeLog(t *testing.T, db *sql.DB) int {
 	t.Helper()
 	return rows(t, db,
@@ -97,7 +97,7 @@ func danglingWholeLog(t *testing.T, db *sql.DB) int {
 		WHERE p.visit_id IS NOT NULL AND v.id IS NULL`)
 }
 
-// the server validates the occasion the client chose and does not choose one.
+// The server validates the occasion the client chose and does not choose one.
 func TestRefilingHonoursTheOccasionTheClientNamedAndNotAnotherOnTheSameDay(t *testing.T) {
 	db, store, occasions := loadedWithNishikiChecked(t)
 	ctx := context.Background()
@@ -190,7 +190,7 @@ func TestRefilingAnUnfiledPhotographRaisesTheCountByExactlyOne(t *testing.T) {
 	}
 }
 
-// A CAPTION-only write leaves the filing alone, and all three standing guards
+// A caption-only write leaves the filing alone, and all three standing guards
 // are blind to the alternative.
 func TestACaptionOnlyWriteLeavesAllNinetyFiveFilingsWhereTheyWere(t *testing.T) {
 	db, store, _ := loadedWithNishikiChecked(t)
@@ -242,7 +242,7 @@ func TestACaptionOnlyWriteLeavesAllNinetyFiveFilingsWhereTheyWere(t *testing.T) 
 	}
 }
 
-// DELETING A filed photograph lowers the count by exactly one and takes
+// deleting A filed photograph lowers the count by exactly one and takes
 // nothing else.
 func TestDeletingAFiledPhotographTakesOneRowAndOneFiling(t *testing.T) {
 	db, store, _ := loadedWithNishikiChecked(t)
@@ -308,7 +308,7 @@ func TestASnoozeAtFixtureScaleMovesThreeRowsAndOneVersion(t *testing.T) {
 }
 
 // A `{dismissed:true}` body leaves the track intact, point for point, and so
-// does A `{name}` BODY.
+// does A `{name}` body.
 func TestNeitherWalkControlTouchesTheTrackAndNoStoredWalkHasAnEmptyOne(t *testing.T) {
 	db, _, _ := loadedWithNishikiChecked(t)
 	store := postgres.WalkStore{DB: db}

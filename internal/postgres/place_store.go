@@ -16,7 +16,7 @@ import (
 // PlaceStore satisfies logbook.PlaceStore over the same pool.
 type PlaceStore struct{ DB *sql.DB }
 
-// maxVisitsPerStatement bounds one multi-row INSERT, and the number is
+// maxVisitsPerStatement bounds one multi-row insert, and the number is
 // arithmetic rather than taste.
 const maxVisitsPerStatement = 5000
 
@@ -39,7 +39,7 @@ const readPlaceForWriteSQL = `SELECT city_id, name, lat, lng FROM places
 const readOnePlaceSQL = `SELECT id, city_id, name, lat, lng, plan, cover_asset
 	FROM places WHERE traveller_id = $1::uuid AND id = $2`
 
-// readOnePlacesVisitsSQL is `order by ordinal, id` for the reason.
+// readOnePlacesVisitsSQL orders by ordinal then id, so a re-read is stable.
 const readOnePlacesVisitsSQL = `SELECT id, place_id, trip_id, at, note FROM visits
 	WHERE traveller_id = $1::uuid AND place_id = $2 ORDER BY ordinal, id`
 
@@ -51,7 +51,7 @@ const visitsHeldElsewhereSQL = `SELECT id, place_id FROM visits
 	WHERE traveller_id = $1::uuid AND id = ANY($2) AND place_id <> $3`
 
 // occasionsAtPlaceSQL is what makes the empty array's refusal a statement
-// about DESTRUCTION rather than about shape.
+// about destruction rather than about shape.
 const occasionsAtPlaceSQL = `SELECT count(*) FROM visits
 	WHERE traveller_id = $1::uuid AND place_id = $2`
 
@@ -190,7 +190,7 @@ func writeVisits(ctx context.Context, tx *sql.Tx, travellerID, placeID string, v
 	return nil
 }
 
-// upsertVisits writes one batch as a single multi-row INSERT.
+// upsertVisits writes one batch as a single multi-row insert.
 func upsertVisits(ctx context.Context, tx *sql.Tx, travellerID, placeID string, visits []logbook.Visit, firstOrdinal int) error {
 	args := make([]any, 0, 2+5*len(visits))
 	args = append(args, travellerID, placeID)
@@ -315,7 +315,7 @@ type placeBeforeWrite struct {
 	at           logbook.LatLng
 }
 
-// requireWritablePlace refuses a CREATE missing a not NULL field and names
+// requireWritablePlace refuses a create missing a not NULL field and names
 // it.
 func requireWritablePlace(ctx context.Context, tx *sql.Tx, travellerID, id string, w logbook.PlaceWrite) (placeBeforeWrite, error) {
 	var before placeBeforeWrite
@@ -374,7 +374,7 @@ func readOnePlace(ctx context.Context, tx *sql.Tx, travellerID, placeID string) 
 }
 
 // deletePlacesPhotosSQL and deletePlaceSQL are two lines whose order silently
-// inverts D2'S PROMISE, and that order is the whole of the delete branch.
+// inverts D2'S promise, and that order is the whole of the delete branch.
 const deletePlacesPhotosSQL = `DELETE FROM photos WHERE traveller_id = $1::uuid AND place_id = $2`
 
 // deletePlaceSQL is the rest of D2, and everything else the sheet promises is

@@ -114,7 +114,7 @@ func (f *fakeStore) TouchSession(context.Context, string, string, time.Time) err
 	return f.failWith
 }
 
-// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at is
+// RevokeSession and RevokeEverySession mirror `update … where revoked_at is
 // NULL`.
 func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
 	f.mu.Lock()
@@ -386,14 +386,14 @@ func (a answer) decode(t *testing.T) map[string]any {
 
 const registered = `{"email":"matt@example.com","passphrase":"a long enough passphrase"}`
 
-// credentialsFor is `registered` for any address, so a leg needing a SECOND
+// credentialsFor is `registered` for any address, so a leg needing a second
 // traveller does not need a second constant.
 func credentialsFor(email string) string {
 	return fmt.Sprintf(`{"email":%q,"passphrase":"a long enough passphrase"}`, email)
 }
 
 // The slice's own verified_by: a wrong passphrase and an unknown address
-// must produce an IDENTICAL body and status.
+// must produce an identical body and status.
 func TestAWrongPassphraseAndAnUnknownAddressAreByteIdentical(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
@@ -466,8 +466,8 @@ func TestRegisterAnswers201WithTheTravellerAndNoTokenAnywhere(t *testing.T) {
 	}
 }
 
-// , on the wire: ANY second registration is 409, and's three are BYTE
-// IDENTICAL.
+// , on the wire: any second registration is 409, and's three are byte
+// identical.
 func TestAnySecondRegistrationIs409AndTheThreeAreIndistinguishable(t *testing.T) {
 	answers := map[string]answer{}
 	for _, second := range []string{"a@b.com", "A@B.com", "a-total-stranger@example.com"} {
@@ -672,7 +672,7 @@ func TestBothAuthRoutesAreRateLimited(t *testing.T) {
 }
 
 // The own named leg, asserted on the response and not on a timer: the N+1th
-// CONCURRENT login is REFUSED, not made to wait.
+// concurrent login is refused, not made to wait.
 func TestTheNPlusOnethConcurrentLoginIsRefusedWith429(t *testing.T) {
 	const n = 2
 	inner := &parkingHasher{
@@ -749,7 +749,7 @@ type atomicBool struct {
 func (a *atomicBool) Store(v bool) { a.mu.Lock(); a.v = v; a.mu.Unlock() }
 func (a *atomicBool) Load() bool   { a.mu.Lock(); defer a.mu.Unlock(); return a.v }
 
-// the two credential paths take the verbs the table gives them and nothing
+// The two credential paths take the verbs the table gives them and nothing
 // else.
 func TestTheCredentialRoutesTakeTheVerbsTheTableGivesThem(t *testing.T) {
 	h := newHarness(t, options{})
@@ -830,7 +830,7 @@ func TestAStoreFailureUnderTheMiddlewareIs500AndNot401(t *testing.T) {
 	}
 }
 
-// is a ruling, and a ruling like this regresses silently.
+// Is a ruling, and a ruling like this regresses silently.
 func TestMountRefusesToRunWithoutARateLimiter(t *testing.T) {
 	defer func() {
 		if recover() == nil {

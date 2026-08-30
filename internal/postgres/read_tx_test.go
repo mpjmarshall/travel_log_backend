@@ -38,7 +38,7 @@ func TestWithReadSnapshotHandsTheCurrentVersionToTheBody(t *testing.T) {
 	}
 }
 
-// The version is read INSIDE the snapshot, so a write that commits after the
+// The version is read inside the snapshot, so a write that commits after the
 // snapshot opened is invisible to both halves of the answer.
 func TestTheSnapshotSeesNeitherHalfOfAWriteThatCommittedAfterItOpened(t *testing.T) {
 	db, schema := withTravellers(t)
@@ -91,7 +91,7 @@ func TestTheSnapshotSeesNeitherHalfOfAWriteThatCommittedAfterItOpened(t *testing
 	}
 }
 
-// The read transaction is READ only.
+// The read transaction is read only.
 func TestTheReadSnapshotRefusesToWrite(t *testing.T) {
 	db := withTraveller(t)
 	ctx := context.Background()

@@ -148,7 +148,7 @@ func TestTravellerByEmailAnswersNoTravellerForAnAddressNobodyHolds(t *testing.T)
 	}
 }
 
-// asks for this to be asserted with EXPLAIN rather than by reading, and the
+// asks for this to be asserted with explain rather than by reading, and the
 // negative half is the point.
 func TestTheLookupUsesTheLowerEmailIndexAndAPlainEqualityDoesNot(t *testing.T) {
 	store, db, _ := authStore(t)
@@ -244,7 +244,7 @@ func TestCreateSessionStoresTheHashAndTheExpiryAndAnswersAnId(t *testing.T) {
 	}
 }
 
-// the leg the slice exists for (and the slice's own definition of done).
+// A session write must move logbook_version by zero.
 func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 	store, db, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -273,7 +273,7 @@ func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 }
 
 // , measured rather than read: a session touch does not wait for the
-// traveller's write lock, and a session CREATE still does.
+// traveller's write lock, and a session create still does.
 func TestCreateSessionWaitsForTheTravellerLockAndTouchSessionDoesNot(t *testing.T) {
 	store, db, schema := authStore(t)
 	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
@@ -512,7 +512,7 @@ func TestCreateSessionRefusesATravellerThatIsNotThere(t *testing.T) {
 	}
 }
 
-// The INPUT.
+// The input.
 func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
 	store, _, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -578,7 +578,7 @@ func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
 	}
 }
 
-// REVOKING A session is an update that moves A live row and nothing else.
+// revoking A session is an update that moves A live row and nothing else.
 func TestRevokeSessionMovesTheLiveRowAndOnlyOnce(t *testing.T) {
 	store, db, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -627,7 +627,7 @@ func TestRevokeSessionMovesTheLiveRowAndOnlyOnce(t *testing.T) {
 	}
 }
 
-// "sign out everywhere" is a claim about A NUMBER, which is why the store
+// "sign out everywhere" is a claim about A number, which is why the store
 // answers a count and not a bool.
 func TestRevokeEverySessionCountsWhatItMovedAndStopsAtTheTraveller(t *testing.T) {
 	store, db, tr := withTravellerRow(t)

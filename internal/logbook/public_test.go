@@ -10,7 +10,7 @@ import (
 )
 
 // aSharedTrip is one of everything the envelope can carry, with every
-// flag-sensitive field POPULATED.
+// flag-sensitive field populated.
 func aSharedTrip() logbook.PublicSource {
 	at := logbook.At(time.Date(2027, 10, 2, 9, 30, 0, 0, time.UTC))
 	note := "the torii went on for ever"
@@ -188,7 +188,7 @@ func TestShareCoordinatesOffStripsFourThingsAndKeepsTheCityCentre(t *testing.T) 
 	}
 }
 
-// the six keys, and `traveller` is not one of them.
+// The six keys, and `traveller` is not one of them.
 func TestThePublicEnvelopeHasSixTopLevelKeysAndNoTraveller(t *testing.T) {
 	env, err := logbook.EmitPublic(aSharedTrip(), (&countingMint{}).mint)
 	if err != nil {

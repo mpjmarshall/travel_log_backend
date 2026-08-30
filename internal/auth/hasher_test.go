@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// cheap is Argon2id at parameters chosen to be fast, and DELIBERATELY unlike
+// cheap is Argon2id at parameters chosen to be fast, and deliberately unlike
 // the defaults in all four fields.
 var cheap = Argon2id{Params: Params{Memory: 8 << 10, Time: 2, Threads: 1, KeyLen: 16, SaltLen: 8}}
 
@@ -115,7 +115,7 @@ func TestVerifyAcceptsTheRightPassphraseAndRefusesEveryOther(t *testing.T) {
 	}
 }
 
-// the LEG's encoding exists for.
+// The leg's encoding exists for.
 func TestVerifyReadsTheParametersOutOfTheEncodingRatherThanUsingItsOwn(t *testing.T) {
 	written := Argon2id{Params: Params{Memory: 16 << 10, Time: 3, Threads: 2, KeyLen: 24, SaltLen: 12}}
 	encoded, err := written.Hash("shared secret")

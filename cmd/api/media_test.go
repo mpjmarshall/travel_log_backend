@@ -49,7 +49,7 @@ func TestTheTwoBucketAddressesGoToTheirOwnHalves(t *testing.T) {
 	}
 }
 
-// the two lifetimes, at the wiring site.
+// The two lifetimes, at the wiring site.
 func TestTheTwoLifetimesAreNotSwappedOnTheWayIn(t *testing.T) {
 	got := mediaConfig(bucketConfig())
 

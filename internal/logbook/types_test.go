@@ -11,7 +11,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// the server keeps refusing A zoneless date, and the client is the one that
+// The server keeps refusing A zoneless date, and the client is the one that
 // changes.
 func TestAZonelessDateIsRefusedAndNotReinterpreted(t *testing.T) {
 	var w logbook.TripWrite
@@ -89,7 +89,7 @@ func TestAnOffsetIsAcceptedAndComesBackInUTC(t *testing.T) {
 	}
 }
 
-// `expiresAt` is OUTSIDE's six fields and must not be "FIXED" into an
+// `expiresAt` is outside's six fields and must not be "fixed" into an
 // Instant.
 func TestTheSessionExpiryIsNotAnInstantAndKeepsGoesOwnRendering(t *testing.T) {
 	type issued struct {

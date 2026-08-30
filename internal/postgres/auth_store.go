@@ -37,7 +37,7 @@ const sessionByTokenHashSQL = `SELECT s.id, s.traveller_id, s.token_hash,
 	FROM sessions s JOIN travellers t ON t.id = s.traveller_id
 	WHERE s.token_hash = $1`
 
-// travellerExistsAtAllSQL is the question, and it is `SELECT 1 … LIMIT 1`
+// travellerExistsAtAllSQL is the question, and it is `select 1 … limit 1`
 // Than a count.
 const travellerExistsAtAllSQL = `SELECT 1 FROM travellers LIMIT 1`
 
@@ -98,7 +98,7 @@ func (s AuthStore) CreateSession(ctx context.Context, travellerID string, tokenH
 	return id, nil
 }
 
-// SessionByTokenHash is a READ and opens no transaction: one row, one
+// SessionByTokenHash is a read and opens no transaction: one row, one
 // statement, and nothing above it is deciding anything else.
 func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (auth.Session, auth.Traveller, error) {
 	var session auth.Session

@@ -301,7 +301,7 @@ func TestAFailedRequestIsLoggedAtError(t *testing.T) {
 	}
 }
 
-// http.TimeoutHandler writes its own body, which is the one response's AST
+// http.TimeoutHandler writes its own body, which is the one response's ast
 // sweep structurally cannot see.
 func TestATimedOutRequestGetsTheJSONEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
@@ -439,7 +439,7 @@ func TestThroughTheWholeChainATimeoutIsLoggedAndAnswered(t *testing.T) {
 	}
 }
 
-// MEASURED over 21.35 hours of the live stack, 15,960 access lines.
+// measured over 21.35 hours of the live stack, 15,960 access lines.
 func TestTheAccessLineCarriesMicrosecondsAndTheyAreNotZero(t *testing.T) {
 	log, buf := testLogger()
 	rec := httptest.NewRecorder()
@@ -504,7 +504,7 @@ func TestTheAccessLineNamesTheTravellerWhenThereIsOne(t *testing.T) {
 	}
 }
 
-// the matched pattern beside the raw path.
+// The matched pattern beside the raw path.
 func TestTheAccessLineCarriesTheMatchedPatternBesideTheRawPath(t *testing.T) {
 	log, buf := testLogger()
 

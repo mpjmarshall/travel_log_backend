@@ -13,7 +13,7 @@ import (
 )
 
 // Code is one word of the error vocabulary. The type aids readability; the
-// AST sweep in sweep_test.go is what keeps the vocabulary closed.
+// ast sweep in sweep_test.go is what keeps the vocabulary closed.
 type Code string
 
 const (
@@ -184,7 +184,7 @@ type errorPayload struct {
 }
 
 // WriteError writes the code at its status. An unrecognised word is replaced
-// with internal, catching a Code(someString) the AST sweep cannot see.
+// with internal, catching a Code(someString) the ast sweep cannot see.
 func WriteError(w http.ResponseWriter, r *http.Request, c Code) {
 	if !c.known() {
 		slog.ErrorContext(r.Context(), "httpx: a code outside the vocabulary reached the wire",

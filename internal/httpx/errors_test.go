@@ -15,7 +15,7 @@ import (
 	"travellog/internal/httpx"
 )
 
-// decCodes is the vocabulary, written out here as the DECISION's list —
+// decCodes is the vocabulary, written out here as the decision's list —
 // deliberately a second copy.
 var decCodes = []string{
 	"conflict",
@@ -157,7 +157,7 @@ func TestFieldIsOmittedRatherThanEmptyOnEveryOtherCode(t *testing.T) {
 }
 
 // A Code reached by conversion — httpx.Code("banana") — is the one-word
-// bypass the AST sweep is built to catch at review time.
+// bypass the ast sweep is built to catch at review time.
 func TestAnUnknownCodeIsWrittenAsInternalRatherThanEchoed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/logbook", nil)
@@ -221,7 +221,7 @@ func TestWriteErrorForGoesThroughTheSameMapping(t *testing.T) {
 	}
 }
 
-// A 500 TELLS A client the server has A BUG — do not retry, the request is
+// A 500 tells A client the server has A bug — do not retry, the request is
 // poison — when the truth is "the dependency is down, try again shortly".
 func TestADependencyThatIsDownIsATimeoutAndNotAnInternalError(t *testing.T) {
 	for _, tc := range []struct {
@@ -248,7 +248,7 @@ func TestADependencyThatIsDownIsATimeoutAndNotAnInternalError(t *testing.T) {
 }
 
 // The control, without which the above is satisfied by A classifier that
-// calls everything A TIMEOUT.
+// calls everything A timeout.
 func TestAnOrdinaryFailureIsStillInternal(t *testing.T) {
 	for _, err := range []error{
 		errors.New("a handler dereferenced nothing"),
@@ -260,7 +260,7 @@ func TestAnOrdinaryFailureIsStillInternal(t *testing.T) {
 	}
 }
 
-// RETRY-AFTER is a function of the status and not of the caller, which is the
+// retry-after is a function of the status and not of the caller, which is the
 // whole of why it is set where it is.
 func TestEvery503CarriesRetryAfter(t *testing.T) {
 	h := httpx.RetryAfter()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +307,7 @@ type pgLike struct{ state string }
 func (e pgLike) Error() string    { return "ERROR: something (SQLSTATE " + e.state + ")" }
 func (e pgLike) SQLState() string { return e.state }
 
-// the second half of the classification, and it is the half 'S own list does
+// The second half of the classification, and the half a SQLSTATE list does
 // not name.
 func TestAServerThatGaveUpOnTheStatementIsAlsoATimeout(t *testing.T) {
 	for _, tc := range []struct{ state, what string }{

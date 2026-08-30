@@ -1,4 +1,4 @@
-// the whole-log round trip through postgresql, and it is the strongest leg
+// The whole-log round trip through postgresql, and it is the strongest leg
 // this project can write.
 package seed_test
 
@@ -59,7 +59,7 @@ func aTraveller(id string) seed.Traveller {
 	}
 }
 
-// freshDatabase is a migrated, EMPTY schema — no traveller, which is the
+// freshDatabase is a migrated, empty schema — no traveller, which is the
 // state `make seed` is the only thing allowed to run against.
 func freshDatabase(t *testing.T) *sql.DB {
 	t.Helper()
@@ -121,7 +121,7 @@ func loaded(t *testing.T) (*sql.DB, logbook.Document, logbook.Document) {
 	return db, want, envelope.Logbook
 }
 
-// the round trip.
+// The round trip.
 func TestTheClientsOwnLogSurvivesPostgreSQL(t *testing.T) {
 	_, want, got := loaded(t)
 
@@ -135,7 +135,7 @@ func TestTheClientsOwnLogSurvivesPostgreSQL(t *testing.T) {
 	}
 }
 
-// every TOP-level list comes back ordered by its own id, and that is the
+// Every top-level list comes back ordered by its own id, and that is the
 // ETag's precondition rather than a display choice.
 func TestEveryTopLevelListComesBackOrderedByID(t *testing.T) {
 	_, _, got := loaded(t)
@@ -181,7 +181,7 @@ func TestATripsCitiesComeBackInTravelOrder(t *testing.T) {
 	}
 }
 
-// the visit order is the fixture's own, and the plan's version of this leg
+// The visit order is the fixture's own, and the plan's version of this leg
 // cannot pass against the client's own log.
 func TestVisitsComeBackInTheOrderTheClientWroteThem(t *testing.T) {
 	_, want, got := loaded(t)
@@ -222,7 +222,7 @@ func TestVisitsComeBackInTheOrderTheClientWroteThem(t *testing.T) {
 	}
 }
 
-// The rule, asserted over what came back OUT of PostgreSQL.
+// The rule, asserted over what came back out of PostgreSQL.
 func TestThePlaceAndVisitPairAgreesAfterAStorageRoundTrip(t *testing.T) {
 	_, _, got := loaded(t)
 
@@ -245,7 +245,7 @@ func TestThePlaceAndVisitPairAgreesAfterAStorageRoundTrip(t *testing.T) {
 	}
 }
 
-// two reads with no write between them are byte-IDENTICAL, which is the
+// Two reads with no write between them are byte-identical, which is the
 // ETag's whole promise and which the slice could only test against one trip.
 func TestTwoReadsOfASeededLogAreByteIdentical(t *testing.T) {
 	db, _, _ := loaded(t)
@@ -274,7 +274,7 @@ func TestTwoReadsOfASeededLogAreByteIdentical(t *testing.T) {
 	t.Logf("the seeded log emits %d bytes through this build", len(first))
 }
 
-// A seeded traveller's first read carries A VALID ETag.
+// A seeded traveller's first read carries A valid ETag.
 func TestASeededTravellerReadsAtVersionOne(t *testing.T) {
 	db, _, _ := loaded(t)
 
@@ -288,7 +288,7 @@ func TestASeededTravellerReadsAtVersionOne(t *testing.T) {
 	}
 }
 
-// the refusal, and it is the same predicate puts on register: ANY traveller
+// The refusal, and it is the same predicate puts on register: any traveller
 // row, not "a non-empty log".
 func TestLoadRefusesWhenAnyTravellerRowExists(t *testing.T) {
 	db := freshDatabase(t)
@@ -334,7 +334,7 @@ func TestLoadRefusesWhenAnyTravellerRowExists(t *testing.T) {
 	}
 }
 
-// FromDocument REFUSES A document whose assets nothing has uploaded, and
+// FromDocument refuses A document whose assets nothing has uploaded, and
 // names the digest.
 func TestFromDocumentRefusesAnAssetWithNoObject(t *testing.T) {
 	doc, err := logbook.RewriteAssets(clientDocument(t), fixtureMapping())
@@ -352,7 +352,7 @@ func TestFromDocumentRefusesAnAssetWithNoObject(t *testing.T) {
 	}
 }
 
-// the ten tables, and the count is re-derived from the dataset rather than
+// The ten tables, and the count is re-derived from the dataset rather than
 // written twice.
 func TestTheLoadWritesTenTablesAndNotSessions(t *testing.T) {
 	db, _, _ := loaded(t)
@@ -398,7 +398,7 @@ func rowCounts(t *testing.T, db *sql.DB) map[string]int {
 }
 
 // documentDifferences renders's first n places where two documents
-// disagree, by PATH.
+// disagree, by path.
 func alignByID(doc logbook.Document) logbook.Document {
 	out := doc
 	out.Trips = sortedCopy(doc.Trips, func(v logbook.Trip) string { return v.ID })

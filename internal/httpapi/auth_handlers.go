@@ -50,20 +50,19 @@ func (d Deps) Clock() func() time.Time {
 	return d.Now
 }
 
-// mediaService is the Service, built from's two ports rather than stored as
+// mediaService is the Service, built from its two ports rather than stored as
 // a third field.
 func (d Deps) mediaService() logbook.Service {
 	return logbook.Service{Media: d.Media, Objects: d.Objects}
 }
 
 // places is the same Service built from the port D2's removal needs, and it
-// is a SECOND accessor rather than one that fills every field.
+// is a second accessor rather than one that fills every field.
 func (d Deps) places() logbook.Service {
 	return logbook.Service{Places: d.Places}
 }
 
-// photos is the same Service built from the port M2.2's re-file needs, and it
-// is the THIRD such accessor for the reason's second exists.
+// photos builds the Service from the port M2.2's re-file needs.
 func (d Deps) photos() logbook.Service {
 	return logbook.Service{Photos: d.Photos}
 }
@@ -174,7 +173,7 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	}
 }
 
-// recordRoute puts the route's PATTERN on the access line beside the raw
+// recordRoute puts the route's pattern on the access line beside the raw
 // path.
 func recordRoute(route Route, next http.Handler) http.Handler {
 	pattern := route.Method + " " + route.Pattern
@@ -266,7 +265,7 @@ func revokeSession(deps Deps) http.HandlerFunc {
 	}
 }
 
-// revokeScope reads `?scope=`, and REFUSES A value it does not know rather
+// revokeScope reads `?scope=`, and refuses A value it does not know rather
 // than falling back to the smaller act.
 func revokeScope(r *http.Request) (everywhere, ok bool) {
 	switch r.URL.Query().Get("scope") {

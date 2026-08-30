@@ -1,5 +1,5 @@
-// The wiring: that's two auth routes are on the mux the server serves, and
-// that the chain around it does what it is there for.
+// The wiring: the auth routes are on the mux the server actually serves, and
+// the middleware chain around them does its job.
 package main
 
 import (
@@ -29,7 +29,7 @@ func wiredConfig() config.Config {
 	}
 }
 
-// the three ceilings come from's three variables, and not from each other.
+// The three ceilings come from their own three variables, not from each other.
 func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	cfg := config.Config{
 		AuthRateLimitPerMin:      3,
@@ -192,7 +192,7 @@ func TestTheMountedRegisterRouteIsTheRealHandler(t *testing.T) {
 	var _ auth.Traveller
 }
 
-// The route table is closed, so an unknown path is the FIRST thing a mistyped
+// The route table is closed, so an unknown path is the first thing a mistyped
 // client meets — and until it met net/http's own plain text.
 func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 	log := quiet()
@@ -211,8 +211,8 @@ func TestAnUnknownPathThroughTheServerChainCarriesTheEnvelope(t *testing.T) {
 	}
 }
 
-// The four routes leaves on the server, asserted here for the reason's two
-// auth ones are.
+// The four logbook routes are on the server's mux, asserted here for the same
+// reason the auth ones are: only this package sees the assembled server.
 func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
 	mux := wiredMux(t, quiet())
 
@@ -231,7 +231,7 @@ func TestTheLogbookRoutesAreOnTheServersMux(t *testing.T) {
 	}
 }
 
-// the compressor is in the chain and in the right place.
+// The compressor is in the chain and in the right place.
 func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
 	log := quiet()
 	mux := wiredMux(t, log)
@@ -278,7 +278,7 @@ func TestTheServedHandlerCompressesAndSaysSo(t *testing.T) {
 // passes cfg.RequestTimeout.
 const testRequestTimeout = 30 * time.Second
 
-// the PER-request bound is wired, and the leg asserts the answer rather than
+// The per-request bound is wired, and the leg asserts the answer rather than
 // the call site.
 func TestASlowHandlerIsBoundedAndTheAnswerCarriesRetryAfter(t *testing.T) {
 	log := quiet()
@@ -313,7 +313,7 @@ func TestASlowHandlerIsBoundedAndTheAnswerCarriesRetryAfter(t *testing.T) {
 	}
 }
 
-// the two bounds live in two files and the relationship is invisible from
+// The two bounds live in two files and the relationship is invisible from
 // either.
 func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 	if config.MaxRequestTimeout != writeTimeout {
@@ -324,7 +324,7 @@ func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 	}
 }
 
-// the shipped surface is twenty-three routes and the twenty-THIRD is
+// The shipped surface is twenty-three routes and the twenty-third is
 // `/healthz`.
 func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
 	mux := wiredMux(t, quiet())

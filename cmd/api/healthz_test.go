@@ -1,4 +1,4 @@
-// TEST-FIRST (agent-graph-spec-V4 §6.7).
+// test-first (agent-graph-spec-V4 §6.7).
 package main
 
 import (
@@ -15,7 +15,7 @@ import (
 	"travellog/internal/logging"
 )
 
-// quiet is the logger every leg that is not ABOUT logging passes in.
+// quiet is the logger every leg that is not about logging passes in.
 func quiet() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
@@ -46,7 +46,7 @@ func healthz(t *testing.T, db *stubPinger) *httptest.ResponseRecorder {
 	return rec
 }
 
-// the leg the step is for.
+// A failing ping must answer 503, not 200.
 func TestHealthzAnswers503WhenTheDatabasePingFails(t *testing.T) {
 	rec := healthz(t, &stubPinger{err: errDatabaseDown})
 

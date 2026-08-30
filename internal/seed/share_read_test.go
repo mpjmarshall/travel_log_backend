@@ -1,4 +1,4 @@
-// the public envelope at fixture scale, against the client's own log.
+// The public envelope at fixture scale, against the client's own log.
 package seed_test
 
 import (
@@ -51,7 +51,7 @@ func publishedBySeed(t *testing.T) (*sql.DB, logbook.PublicSource) {
 	return db, src
 }
 
-// the plan's first named failing test, at the scale it was written against.
+// The plan's first named failing test, at the scale it was written against.
 func TestTheSeededEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	db, src := publishedBySeed(t)
 
@@ -89,8 +89,7 @@ func TestTheSeededEnvelopeCarriesOnlyTheSharedTripsOwnPlaces(t *testing.T) {
 	}
 }
 
-// the plan's second named failing test: the nested rows's first one cannot
-// see.
+// The nested rows, which the leg above passes while it leaks.
 func TestASeededPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	db, src := publishedBySeed(t)
 
@@ -131,7 +130,7 @@ func TestASeededPublishedPlaceCarriesOnlyTheSharedTripsVisits(t *testing.T) {
 	}
 }
 
-// the row rules for photographs, walks and cities, at fixture scale.
+// The row rules for photographs, walks and cities, at fixture scale.
 func TestTheSeededEnvelopeCarriesOneTripsPhotographsWalksAndCities(t *testing.T) {
 	db, src := publishedBySeed(t)
 

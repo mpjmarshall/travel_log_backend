@@ -3,7 +3,7 @@ package logbook
 
 import "testing"
 
-// the expression is asserted as A STRING, in one falsifiable place, because
+// The expression is asserted as A string, in one falsifiable place, because
 // the two bounds are interpolated into it.
 func TestTheShareTokenExpressionIsWhatTheBoundsSay(t *testing.T) {
 	const want = `^[a-z0-9]{12,64}$`
@@ -13,7 +13,7 @@ func TestTheShareTokenExpressionIsWhatTheBoundsSay(t *testing.T) {
 	}
 }
 
-// the hyphen case is the one worth saying out loud.
+// The hyphen case is the one worth saying out loud.
 func TestTheShareTokenPatternIsNotTheIdPattern(t *testing.T) {
 	const both = "kyotomay9f2a"
 	if !idPattern.MatchString(both) || !shareTokenPattern.MatchString(both) {

@@ -31,7 +31,7 @@ type fakeLogbook struct {
 	links []fakeLink
 }
 
-// fakeLink is one row of share_links, holding the DIGEST exactly as the
+// fakeLink is one row of share_links, holding the digest exactly as the
 // column does.
 type fakeLink struct {
 	hash        string
@@ -94,8 +94,8 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 	return next, f.version, nil
 }
 
-// applyTripWrite is the fake's half of: only the fields the body carried are
-// written over the trip as it stands.
+// applyTripWrite writes only the fields the body carried over the trip as it
+// stands, which is the fake's half of the pointer contract.
 func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
 	if w.Name != nil {
 		t.Name = *w.Name
@@ -183,8 +183,8 @@ func (f *fakeLogbook) SetTravellerName(_ context.Context, _ string, name string)
 	return *f.doc.Traveller, f.version, nil
 }
 
-// fakeShare is logbook.ShareStore, and it honours the pointer contract and the
-// reset for the reason fakeLogbook honours the trip one.
+// fakeShare is a logbook.ShareStore honouring the pointer contract and the
+// reset, as fakeLogbook does for trips.
 type fakeShare struct {
 	mu    sync.Mutex
 	books *fakeLogbook
@@ -232,7 +232,7 @@ func (f *fakeShare) StopSharing(_ context.Context, _, tripID string) (logbook.Tr
 	})
 }
 
-// revokeLive is `UPDATE share_links SET revoked_at = now WHERE … revoked_at
+// revokeLive is `update share_links set revoked_at = now where … revoked_at
 // is NULL`, and it keeps the row.
 func (f *fakeLogbook) revokeLive(tripID string) {
 	for i := range f.links {
@@ -243,7 +243,7 @@ func (f *fakeLogbook) revokeLive(tripID string) {
 }
 
 // change is the shape all three share, including the 404: a share write is a
-// SETTER, and a set asks for a value the log then has to hold.
+// setter, and a set asks for a value the log then has to hold.
 func (f *fakeShare) change(tripID string, apply func(*logbook.Trip)) (logbook.Trip, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -405,7 +405,7 @@ func TestAMatchingIfNoneMatchAnswers304WithAnEmptyBody(t *testing.T) {
 	}
 }
 
-// the leg the slice names: the 304 must not assemble the document.
+// A 304 must not assemble the document.
 func TestA304NeverAssemblesTheDocument(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -437,8 +437,8 @@ func TestAStaleIfNoneMatchAnswers200(t *testing.T) {
 	}
 }
 
-// (a), and it is the defect's first half of the tag exists for: a deploy
-// that changes the emitted document moves no data.
+// A deploy that changes the emitted document moves no data, so a tag minted by
+// another emitter must not revalidate.
 func TestATagFromAnotherEmitterDoesNotRevalidate(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -603,7 +603,7 @@ func TestAPutAnswers200WithTheTripAndTheNewTag(t *testing.T) {
 	}
 }
 
-// found by running it, not by A TEST.
+// found by running it, not by A test.
 func TestATripWrittenWithNoCitiesComesBackWithAnEmptyList(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -618,8 +618,8 @@ func TestATripWrittenWithNoCitiesComesBackWithAnEmptyList(t *testing.T) {
 	}
 }
 
-// the acceptance check: a PUT body carrying shareCoordinates leaves the
-// stored flag UNCHANGED.
+// The acceptance check: a PUT body carrying shareCoordinates leaves the
+// stored flag unchanged.
 func TestAPutCarryingShareCoordinatesLeavesTheFlagAlone(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -653,7 +653,7 @@ func TestAPutCarryingShareCoordinatesLeavesTheFlagAlone(t *testing.T) {
 	}
 }
 
-// the splice leg (V4-B1).
+// The splice leg.
 func TestTheSplicedDocumentEqualsTheOneTheServerEmits(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -827,7 +827,7 @@ func decodeEnvelope(t *testing.T, raw []byte) logbook.Envelope {
 	return out
 }
 
-// at the wire, and the body is the one the client sends.
+// At the wire, and the body is the one the client sends.
 func TestATwoKeyRenameArrivesAtTheStoreAsAbsenceAndNotAsEmptiness(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -881,7 +881,7 @@ func TestAnEmptyCityListIsHeardWhileAnAbsentOneIsNot(t *testing.T) {
 	}
 }
 
-// MEASURED by the operations lens with Postgres killed: every route answered
+// measured by the operations lens with Postgres killed: every route answered
 // `500 {"code":"internal"}` with no Retry-After.
 func TestAnUnreachableDatabaseIs503WithRetryAfterAndNot500(t *testing.T) {
 	for _, tc := range []struct {
@@ -935,7 +935,7 @@ func TestAGenuineFaultIsStill500WithNoRetryAfter(t *testing.T) {
 	}
 }
 
-// every 500 emits exactly one error line carrying the requestId and the
+// Every 500 emits exactly one error line carrying the requestId and the
 // underlying error, and the leg counts lines rather than grepping for one.
 func TestEvery500EmitsExactlyOneErrorLine(t *testing.T) {
 	h := newHarness(t, options{})

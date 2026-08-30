@@ -339,7 +339,7 @@ func TestAPhotoAnswerCarriesNoListKeyAndThereforeNeedsNoEmitter(t *testing.T) {
 	}
 }
 
-// D1 ANSWERS 204 with an ETag and no body, and an unknown id answers 204 TOO.
+// D1 answers 204 with an ETag and no body, and an unknown id answers 204 too.
 func TestDeletingAPhotographAnswers204WithAnETagAndAnUnknownIdDoesToo(t *testing.T) {
 	h, moments, token := withMoments(t)
 
@@ -368,7 +368,7 @@ func TestDeletingAPhotographAnswers204WithAnETagAndAnUnknownIdDoesToo(t *testing
 	}
 }
 
-// N1's 'LATER' answers the rows it wrote, and an empty match answers `[]`
+// N1's 'later' answers the rows it wrote, and an empty match answers `[]`
 // Than `null`.
 func TestASnoozeAnswersTheRowsItWroteAndAnEmptyMatchAnswersAnEmptyList(t *testing.T) {
 	h, _, token := withMoments(t)
@@ -462,7 +462,7 @@ func TestARefileAnswersAPhotographOrTheWholeEnvelopeDependingOnWhatMoved(t *test
 	}
 }
 
-// a re-file that names no occasion is a 422 NAMING `visitId`.
+// a re-file that names no occasion is a 422 naming `visitId`.
 func TestARefileThatNamesNoOccasionIsA422NamingVisitId(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -477,7 +477,7 @@ func TestARefileThatNamesNoOccasionIsA422NamingVisitId(t *testing.T) {
 	}
 }
 
-// A photograph this log does not hold is a 404 ON A RE-FILE and A 204 ON A
+// A photograph this log does not hold is a 404 ON A RE-file and A 204 ON A
 // DELETE.
 func TestAnUnknownPhotographIs404OnARefileAnd204OnADelete(t *testing.T) {
 	h, _, token := withMoments(t)

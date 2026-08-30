@@ -33,7 +33,7 @@ const publicCitiesSQL = `SELECT c.id, c.name, c.country_code, c.country_name,
 	WHERE tc.traveller_id = $1::uuid AND tc.trip_id = $2
 	ORDER BY tc.ordinal`
 
-// publicPlacesSQL is RULE 1: the distinct places having a visit on the shared
+// publicPlacesSQL is rule 1: the distinct places having a visit on the shared
 // trip.
 const publicPlacesSQL = `SELECT p.id, p.city_id, p.name, p.lat, p.lng
 	FROM places p
@@ -44,21 +44,21 @@ const publicPlacesSQL = `SELECT p.id, p.city_id, p.name, p.lat, p.lng
 	                AND v.trip_id = $2)
 	ORDER BY p.id`
 
-// publicVisitsSQL is RULE 2, and it is the one is about: only the published
+// publicVisitsSQL is rule 2, and it is the one is about: only the published
 // place's visits whose `trip_id` is the shared trip.
 const publicVisitsSQL = `SELECT place_id, at, note
 	FROM visits
 	WHERE traveller_id = $1::uuid AND trip_id = $2
 	ORDER BY place_id, ordinal, id`
 
-// publicPhotosSQL is RULE 3.
+// publicPhotosSQL is rule 3.
 const publicPhotosSQL = `SELECT id, city_id, place_id, taken_at, asset, caption,
 		lat, lng, accuracy_metres
 	FROM photos
 	WHERE traveller_id = $1::uuid AND trip_id = $2
 	ORDER BY id`
 
-// publicWalksSQL is RULE 3 for walks, plus the one thing that is not a trip
+// publicWalksSQL is rule 3 for walks, plus the one thing that is not a trip
 // id: `not dismissed`.
 const publicWalksSQL = `SELECT id, city_id, recorded_on, distance_km
 	FROM walks

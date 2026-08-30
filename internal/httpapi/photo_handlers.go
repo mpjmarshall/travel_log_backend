@@ -75,7 +75,7 @@ func deletePhoto(deps Deps) http.HandlerFunc {
 }
 
 // snoozePhotos is `POST /v1/photos/snooze`: N1's 'Later', and's second
-// route in this API that takes a COLLECTION.
+// route in this API that takes a collection.
 func snoozePhotos(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traveller, held := auth.TravellerFrom(r.Context())

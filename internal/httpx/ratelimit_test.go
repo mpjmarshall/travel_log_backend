@@ -172,7 +172,7 @@ func TestTheMiddlewareRefusesWithTheEnvelopeAndDoesNotRunTheHandler(t *testing.T
 	}
 }
 
-// : REJECT rather than queue.
+// : reject rather than queue.
 func TestARefusalIsImmediateRatherThanAWait(t *testing.T) {
 	log, _ := testLogger()
 	c := newClock()

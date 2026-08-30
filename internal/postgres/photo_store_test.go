@@ -26,7 +26,7 @@ func filedCount(t *testing.T, db *sql.DB) int {
 	return count(t, db, `SELECT count(*) FROM photos WHERE place_id IS NOT NULL`)
 }
 
-// halfFiled is the state the client the model has never expressed: a photograph
+// halfFiled counts a state the client's model has never expressed: a photograph
 // naming a place with no occasion.
 func halfFiled(t *testing.T, db *sql.DB) int {
 	t.Helper()
@@ -45,7 +45,7 @@ func photoFiling(t *testing.T, db *sql.DB, id string) (place, visit string) {
 	return p.String, v.String
 }
 
-// A CAPTION-only put does not unfile the photograph.
+// A caption-only put does not unfile the photograph.
 func TestACaptionOnlyWriteLeavesThePinAndTheOccasionExactlyWhereTheyWere(t *testing.T) {
 	store, db := photoStore(t)
 	beforePlace, beforeVisit := photoFiling(t, db, "p-may")
@@ -301,7 +301,7 @@ func twoOccasionsOnOneTrip(t *testing.T, db *sql.DB) (older, newer string) {
 	return "v-wish-morning", "v-wish-evening"
 }
 
-// the server validates the occasion the client chose and does not choose one.
+// The server validates the occasion the client chose and does not choose one.
 func TestRefilingHonoursTheOccasionTheClientNamedAndNotAnotherOnTheSameDay(t *testing.T) {
 	store, db := photoStore(t)
 	older, newer := twoOccasionsOnOneTrip(t, db)
@@ -445,7 +445,7 @@ func TestARefileThatOpensAnOccasionRenumbersThePlaceAndAnswersTheWholeLog(t *tes
 }
 
 // Opening an occasion needs `visitAt`, because an occasion happens at A
-// MOMENT.
+// moment.
 func TestOpeningAnOccasionWithoutAMomentIsRefusedNamingVisitAt(t *testing.T) {
 	store, db := photoStore(t)
 	before := filedCount(t, db)
@@ -503,7 +503,7 @@ func TestARefileRaisesTheCountOnceAndNeverTidiesTheOldOccasionAway(t *testing.T)
 	}
 }
 
-// A photograph this log does not hold is a 404 and not A CREATE.
+// A photograph this log does not hold is a 404 and not A create.
 func TestRefilingAPhotographThatIsNotThereIsANotFoundAndNotACreate(t *testing.T) {
 	store, db := photoStore(t)
 	older, _ := twoOccasionsOnOneTrip(t, db)

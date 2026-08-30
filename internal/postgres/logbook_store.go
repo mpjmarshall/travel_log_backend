@@ -1,4 +1,4 @@
-// The storage half of logbook.Store, and the TEN queries one read is made of.
+// The storage half of logbook.Store, and the ten queries one read is made of.
 package postgres
 
 import (
@@ -323,7 +323,7 @@ const upsertTripSQL = `INSERT INTO trips
 		summary     = CASE WHEN $11::boolean THEN EXCLUDED.summary     ELSE trips.summary     END,
 		cover_asset = CASE WHEN $12::boolean THEN EXCLUDED.cover_asset ELSE trips.cover_asset END`
 
-// readTripForWriteSQL is the row as it stands BEFORE the upsert, and it
+// readTripForWriteSQL is the row as it stands before the upsert, and it
 // answers two questions the pointer contract asks that nothing else can.
 const readTripForWriteSQL = `SELECT name, started_on, ended_on FROM trips
 	WHERE traveller_id = $1::uuid AND id = $2`
@@ -444,7 +444,7 @@ func nullTimeOf(i *logbook.Instant) sql.NullTime {
 	return sql.NullTime{Time: i.Time(), Valid: true}
 }
 
-// replaceTripCities is DELETE-THEN-INSERT, which is the mandated strategy and
+// replaceTripCities is DELETE-then-insert, which is the mandated strategy and
 // a measurement rather than a style.
 func replaceTripCities(ctx context.Context, tx *sql.Tx, travellerID, tripID string, cityIDs []string) error {
 	if _, err := tx.ExecContext(ctx, deleteTripCitiesSQL, travellerID, tripID); err != nil {

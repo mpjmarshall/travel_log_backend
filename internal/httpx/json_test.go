@@ -155,7 +155,7 @@ func TestTheBodyLimitIsEnforcedAtExactlyMaxBodyBytes(t *testing.T) {
 	}
 }
 
-// The limit is enforced by READING, not by trusting Content-Length.
+// The limit is enforced by reading, not by trusting Content-Length.
 func TestTheLimitHoldsWhenTheBodyDeclaresNoLength(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v1/trips/kyoto",

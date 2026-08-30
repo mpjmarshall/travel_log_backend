@@ -125,7 +125,7 @@ func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID strin
 	return nil
 }
 
-// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at is
+// RevokeSession and RevokeEverySession mirror `update … where revoked_at is
 // NULL`.
 func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
 	if f.failWith != nil {
@@ -356,7 +356,7 @@ func TestRegistrationClosesAfterTheFirstTraveller(t *testing.T) {
 }
 
 // The refusal costs no ARGON2, which is why the rule is asked of the
-// store rather than left to the INSERT to answer.
+// store rather than left to the insert to answer.
 func TestAClosedRegistrationRefusesBeforeItHashesAnything(t *testing.T) {
 	store := newFakeStore()
 	counting := &countingHasher{Hasher: Argon2id{Params: cheap.Params}}

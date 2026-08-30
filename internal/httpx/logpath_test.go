@@ -8,7 +8,7 @@ import (
 	"travellog/internal/httpx"
 )
 
-// two-sided, which is the lesson applied to A REDACTOR.
+// Two-sided, which is the lesson applied to A redactor.
 func TestLoggedPathHidesTheCapabilityAndNothingElse(t *testing.T) {
 	for _, tc := range []struct {
 		path string

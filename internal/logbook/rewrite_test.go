@@ -22,7 +22,7 @@ func fixtureMapping() map[string]string {
 	return map[string]string{cardIreland: cardDigest, heroMountain: heroDigest}
 }
 
-// four columns, and the count is the point.
+// Four columns, and the count is the point.
 func TestRewriteAssetsReachesAllFourColumns(t *testing.T) {
 	doc := logbook.Document{
 		Photos: []logbook.Photo{{ID: "p1", Asset: cardIreland}},
@@ -68,7 +68,7 @@ func TestRewriteAssetsLeavesAnAbsentCoverAbsent(t *testing.T) {
 	}
 }
 
-// it refuses an unmapped locator and names it.
+// It refuses an unmapped locator and names it.
 func TestRewriteAssetsRefusesAnUnmappedLocatorAndNamesIt(t *testing.T) {
 	for _, tc := range []struct {
 		what string
@@ -103,7 +103,7 @@ func TestRewriteAssetsRefusesAnUnmappedLocatorAndNamesIt(t *testing.T) {
 	}
 }
 
-// the input is not mutated, and this is the leg that costs something to get
+// The input is not mutated, and this is the leg that costs something to get
 // wrong.
 func TestRewriteAssetsDoesNotTouchTheDocumentItWasGiven(t *testing.T) {
 	doc := logbook.Document{
@@ -124,7 +124,7 @@ func TestRewriteAssetsDoesNotTouchTheDocumentItWasGiven(t *testing.T) {
 	}
 }
 
-// the client's own document, which is the only input this function has.
+// The client's own document, which is the only input this function has.
 func TestRewriteAssetsLeavesNoBundlePathInTheClientsOwnLog(t *testing.T) {
 	out, err := logbook.RewriteAssets(clientDocument(t), fixtureMapping())
 	if err != nil {

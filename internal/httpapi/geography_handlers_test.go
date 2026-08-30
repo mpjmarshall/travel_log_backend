@@ -222,7 +222,7 @@ func (h *harness) geography() *fakeGeography {
 const aKyoto = `{"name":"Kyoto","country":{"code":"JP","name":"Japan"},` +
 	`"centre":{"lat":35.0116,"lng":135.7681}}`
 
-// the two shapes are the route's whole asymmetry, and each half of this leg
+// The two shapes are the route's whole asymmetry, and each half of this leg
 // fails on its own.
 func TestCreatingACityAnswersTheCityAndAttachingOneAnswersTheWholeLog(t *testing.T) {
 	h, token := geographyHarness(t)
@@ -270,7 +270,7 @@ func TestCreatingACityAnswersTheCityAndAttachingOneAnswersTheWholeLog(t *testing
 	}
 }
 
-// the new city goes at the end of the ordered list.
+// The new city goes at the end of the ordered list.
 func TestAnAttachedCityLandsAtTheEndOfTheItinerary(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/trips/autumn", `{"name":"Autumn crossing"}`, token); got.status != http.StatusOK {
@@ -326,7 +326,7 @@ func TestACityCreatedWithNoCountryOrCentreIsRefusedByName(t *testing.T) {
 	}
 }
 
-// the emit leg, and it omits the key rather than sending an
+// The emit leg, and it omits the key rather than sending an
 // empty array.
 func TestAPlaceCreatedWithNoVisitsAnswersAnEmptyArrayAndNeverNull(t *testing.T) {
 	h, token := geographyHarness(t)
@@ -403,7 +403,7 @@ func TestAnEmptyVisitsArrayReachesTheStoreBecauseOnlyTheStoreCanJudgeIt(t *testi
 }
 
 // A reordered array comes back in the new order, and it is asserted on the
-// RESPONSE because the response is what the phone splices.
+// response because the response is what the phone splices.
 func TestAVisitsArrayComesBackInTheOrderItWasSent(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/cities/kyoto", aKyoto, token); got.status != http.StatusOK {
@@ -458,7 +458,7 @@ func TestAVisitNamingAnotherPlaceIsRefusedByName(t *testing.T) {
 	}
 }
 
-// the parameter is required, and the store must not be reached without it.
+// The parameter is required, and the store must not be reached without it.
 func TestRemovingAPlaceWithNoPhotosParameterIsRefusedAndRemovesNothing(t *testing.T) {
 	h, token := geographyHarness(t)
 	seedAPlace(t, h, token)

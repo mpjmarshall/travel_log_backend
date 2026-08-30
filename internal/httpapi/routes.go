@@ -3,7 +3,7 @@ package httpapi
 
 import "net/http"
 
-// Limit names WHICH limiter a route counts against — not a number.
+// Limit names which limiter a route counts against — not a number.
 type Limit int
 
 const (

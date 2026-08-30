@@ -1,4 +1,4 @@
-// The route table, asserted over the SLICE rather than over the mux.
+// The route table, asserted over the slice rather than over the mux.
 package httpapi
 
 import (
@@ -36,7 +36,7 @@ func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	}
 }
 
-// every route in the table is rate limited.
+// Every route in the table is rate limited.
 func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
 	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 3, publicPerMin: 3})
 	token := bearer(t, h)

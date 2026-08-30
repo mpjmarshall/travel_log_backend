@@ -27,7 +27,7 @@ func optionsOf(t *testing.T, dsn string) string {
 	return u.Query().Get("options")
 }
 
-// all three, on one line.
+// All three, on one line.
 func TestTheDSNCarriesTheThreeSessionSettings(t *testing.T) {
 	got, err := postgres.WithSessionOptions(bareDSN, 15*time.Second)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestTheDSNCarriesTheThreeSessionSettings(t *testing.T) {
 	}
 }
 
-// the unit is explicit and that is not decoration.
+// The unit is explicit and that is not decoration.
 func TestTheTimeoutsCarryTheirUnit(t *testing.T) {
 	got, err := postgres.WithSessionOptions(bareDSN, 15*time.Second)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestTheTimeoutsCarryTheirUnit(t *testing.T) {
 	}
 }
 
-// preserving an existing `options=` is LOAD-bearing, not polite.
+// preserving an existing `options=` is load-bearing, not polite.
 func TestAnExistingOptionsParameterSurvivesAndWins(t *testing.T) {
 	scoped := bareDSN + "&options=" + url.QueryEscape("-c search_path=t_123")
 

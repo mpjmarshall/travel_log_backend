@@ -16,7 +16,7 @@ const (
 	MaxPassphraseBytes = 1024
 )
 
-// DefaultSessionTTL is UNTUNED in the same sense's Argon2 parameters are:
+// DefaultSessionTTL is untuned in the same sense's Argon2 parameters are:
 // nothing has measured it against anything.
 const DefaultSessionTTL = 30 * 24 * time.Hour
 
@@ -102,7 +102,7 @@ type Service struct {
 	SessionTTL time.Duration
 }
 
-// dummyHash is a real argon2id encoding, at the SHIPPED parameters, of a
+// dummyHash is a real argon2id encoding, at the shipped parameters, of a
 // passphrase nobody holds.
 var dummyHash = func() string {
 	encoded, err := (Argon2id{Params: DefaultParams}).Hash(

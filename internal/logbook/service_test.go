@@ -1,4 +1,4 @@
-// The Service layer's SHAPE, which is the thing is about.
+// The Service layer's shape, which is the thing is about.
 package logbook_test
 
 import (
@@ -10,8 +10,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// the service is three operations, R3 built's first and R6 builds the
-// second.
+// The service is three operations, built in two stages.
 func TestTheServiceHasOnlyTheOperationsDEC62Named(t *testing.T) {
 	planned := map[string]string{
 		"CommitMedia": "R3",

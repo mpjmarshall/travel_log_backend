@@ -29,7 +29,7 @@ type Service struct {
 	Photos PhotoStore
 }
 
-// RemovePlace is D2, and it is the SECOND of's three operations named.
+// RemovePlace is D2, and it is the second of's three operations named.
 func (s Service) RemovePlace(ctx context.Context, travellerID, placeID string, photos PhotoDisposition) (Snapshot, error) {
 	if s.Places == nil {
 		return Snapshot{}, errors.New("logbook: the place service has no store")
@@ -43,7 +43,7 @@ func (s Service) RemovePlace(ctx context.Context, travellerID, placeID string, p
 	return s.Places.RemovePlace(ctx, travellerID, placeID, photos == DeletePhotos)
 }
 
-// RefilePhoto is M2.2's 'Change', and it is the THIRD and last of the
+// RefilePhoto is M2.2's 'Change', and it is the third and last of the
 // operations named.
 func (s Service) RefilePhoto(ctx context.Context, travellerID, photoID string, w RefileWrite) (PhotoRefiled, error) {
 	if s.Photos == nil {
@@ -66,7 +66,7 @@ func (s Service) RefilePhoto(ctx context.Context, travellerID, photoID string, w
 	return s.Photos.RefilePhoto(ctx, travellerID, photoID, w)
 }
 
-// CommitMedia is `POST /v1/media/{id}/commit`: HEAD the bucket, verify what
+// CommitMedia is `POST /v1/media/{id}/commit`: head the bucket, verify what
 // came back against what was declared, and set uploaded_at.
 func (s Service) CommitMedia(ctx context.Context, travellerID, id string) (MediaObject, error) {
 	if s.Media == nil || s.Objects == nil {

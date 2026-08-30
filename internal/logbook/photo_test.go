@@ -15,11 +15,11 @@ import (
 
 func photoID(id string) *string { return &id }
 
-// snoozeUntil is N1's own seven days, from a FIXED instant rather than
+// snoozeUntil is N1's own seven days, from a fixed instant rather than
 // time.Now.
 var snoozeUntil = time.Date(2027, time.October, 19, 0, 0, 0, 0, time.UTC)
 
-// A CAPTION-only put cannot unfile A photograph because there is nowhere to
+// A caption-only put cannot unfile A photograph because there is nowhere to
 // put the null.
 func TestPhotoWriteHasNoSlotForAPlaceOrAnOccasion(t *testing.T) {
 	forbidden := map[string]string{
@@ -142,7 +142,7 @@ func TestValidateSnoozeTellsAnAbsentGroupFromAnEmptyOne(t *testing.T) {
 	}
 }
 
-// `until` is required, because there is no un-SNOOZE.
+// `until` is required, because there is no un-snooze.
 func TestValidateSnoozeRequiresTheDateItIsSnoozingTo(t *testing.T) {
 	ids := []string{"ph-12"}
 	var invalid logbook.InvalidFieldError
@@ -225,7 +225,7 @@ func (c *countingRefiles) RefilePhoto(_ context.Context, _, photoID string, w lo
 	return logbook.PhotoRefiled{Photo: logbook.Photo{ID: photoID}}, nil
 }
 
-// The service passes the client the choice through unchanged.
+// The service passes the occasion the client named straight through.
 func TestTheServicePassesTheOccasionTheClientNamedStraightThrough(t *testing.T) {
 	store := &countingRefiles{}
 	service := logbook.Service{Photos: store}

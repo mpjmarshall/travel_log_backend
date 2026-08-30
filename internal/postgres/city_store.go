@@ -34,7 +34,7 @@ const readCityForWriteSQL = `SELECT name, country_code, country_name, centre_lat
 const readOneCitySQL = `SELECT id, name, country_code, country_name, centre_lat, centre_lng, cover_asset
 	FROM cities WHERE traveller_id = $1::uuid AND id = $2`
 
-// attachCitySQL appends the city to the END of that trip's ordered itinerary,
+// attachCitySQL appends the city to the end of that trip's ordered itinerary,
 // It is one statement doing three things on purpose.
 const attachCitySQL = `INSERT INTO trip_cities (traveller_id, trip_id, city_id, ordinal)
 	SELECT $1::uuid, $2, $3, coalesce(max(ordinal), -1) + 1
@@ -117,7 +117,7 @@ type cityBeforeWrite struct {
 	centre  logbook.LatLng
 }
 
-// requireWritableCity refuses a CREATE that is missing a not NULL field, and
+// requireWritableCity refuses a create that is missing a not NULL field, and
 // names the field rather than letting a constraint answer.
 func requireWritableCity(ctx context.Context, tx *sql.Tx, travellerID, id string, w logbook.CityWrite) (cityBeforeWrite, error) {
 	var before cityBeforeWrite

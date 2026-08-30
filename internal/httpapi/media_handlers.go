@@ -114,7 +114,7 @@ func commitMedia(deps Deps) http.HandlerFunc {
 	}
 }
 
-// mintMedia is `POST /v1/media/mint`: a LIST of ids, one round trip for a
+// mintMedia is `POST /v1/media/mint`: a list of ids, one round trip for a
 // twelve-photograph grid.
 func mintMedia(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

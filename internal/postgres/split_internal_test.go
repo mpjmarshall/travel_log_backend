@@ -29,7 +29,7 @@ func TestSplitStatementsIgnoresASemicolonInsideASingleQuotedString(t *testing.T)
 	assertStatements(t, got, []string{"INSERT INTO t VALUES ('a;b')", "SELECT 2"})
 }
 
-// no mutation of the doubled-quote branch can redden this, and the reason is
+// No mutation of the doubled-quote branch can redden this, and the reason is
 // arithmetic rather than accidental.
 func TestSplitStatementsHandlesADoubledQuoteInsideAString(t *testing.T) {
 	got := splitStatements("SELECT 'it''s; fine'; SELECT 2;")
@@ -75,7 +75,7 @@ func TestSplitStatementsIgnoresASemicolonInALineComment(t *testing.T) {
 	assertStatements(t, got, []string{"SELECT 1 -- ; not a separator", "SELECT 2"})
 }
 
-// PostgreSQL block comments NEST, unlike C's.
+// PostgreSQL block comments nest, unlike C's.
 func TestSplitStatementsIgnoresASemicolonInANestedBlockComment(t *testing.T) {
 	got := splitStatements("SELECT 1 /* outer /* inner ; */ still ; */ ; SELECT 2;")
 	assertStatements(t, got, []string{"SELECT 1 /* outer /* inner ; */ still ; */", "SELECT 2"})

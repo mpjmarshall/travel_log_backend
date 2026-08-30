@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Memory is the twin the handler legs in R3 run against: no daemon, no
+// Memory is the in-process twin the handler legs run against: no daemon, no
 // network, no build tag.
 type Memory struct {
 	mu      sync.Mutex
@@ -151,7 +151,7 @@ func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string
 	return "https://memory.invalid/" + path + "?" + q.Encode()
 }
 
-// PutWithoutChecksum is what an upload through one of's two BANNED presign
+// PutWithoutChecksum is what an upload through one of's two banned presign
 // calls leaves behind.
 func (m *Memory) PutWithoutChecksum(key Key, up Upload, body []byte) error {
 	path, _, err := Address(key.Traveller, key.Object)

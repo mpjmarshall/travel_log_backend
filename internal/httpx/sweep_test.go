@@ -1,4 +1,4 @@
-// The two monopolies, as MECHANISMS rather than as disciplines.
+// The two monopolies, as mechanisms rather than as disciplines.
 package httpx_test
 
 import (
@@ -70,7 +70,7 @@ func walkLibSource(t *testing.T, fn func(rel string, fset *token.FileSet, file *
 	}
 }
 
-// jsonImporters is the named list, and it is EQUALITY rather than a count.
+// jsonImporters is the named list, and it is equality rather than a count.
 var jsonImporters = map[string]string{
 	"internal/httpx/json.go": "spec L19's payload encoder and decoder: WriteJSON and DecodeJSON, " +
 		"and the two-function half below is what keeps it to those two",
@@ -113,7 +113,7 @@ func TestOnlyNamedFilesImportTheJSONPackage(t *testing.T) {
 	}
 }
 
-// The two-FUNCTION half, which the file-level grep cannot express at all.
+// The two-function half, which the file-level grep cannot express at all.
 func TestOnlyTwoFunctionsInJSONGoUseTheEncoder(t *testing.T) {
 	root := moduleRootFromHttpx(t)
 	fset := token.NewFileSet()
@@ -273,7 +273,7 @@ func badWireCodes(rel string, fset *token.FileSet, file *ast.File, known map[str
 	return bad
 }
 
-// the one exemption, named rather than allowed for.
+// The one exemption, named rather than allowed for.
 var wireCodeExemptions = []wireCodeUse{
 	{file: "internal/httpx/errors.go", fn: "WriteErrorFor", expr: "c"},
 }

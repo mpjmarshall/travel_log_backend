@@ -17,7 +17,7 @@ type MediaStore struct{ DB *sql.DB }
 
 var _ logbook.MediaStore = MediaStore{}
 
-// beginSQL is the upsert, and the `WHERE` on the conflict branch is the whole
+// beginSQL is the upsert, and the `where` on the conflict branch is the whole
 // of it.
 const beginSQL = `INSERT INTO media_objects (traveller_id, id, byte_size, content_type)
 	VALUES ($1::uuid, $2, $3, $4)
@@ -27,7 +27,7 @@ const beginSQL = `INSERT INTO media_objects (traveller_id, id, byte_size, conten
 		WHERE media_objects.uploaded_at IS NULL`
 
 // selectSQL reads the rows back, and it is a separate statement because
-// `RETURNING` cannot do this job.
+// `returning` cannot do this job.
 func selectSQL(n int) string {
 	holders := make([]string, n)
 	for i := range holders {
@@ -38,12 +38,12 @@ func selectSQL(n int) string {
 		WHERE traveller_id = $1::uuid AND id IN (` + strings.Join(holders, ", ") + `)`
 }
 
-// markSQL is the commit, and the `WHERE uploaded_at is NULL` is the retry
+// markSQL is the commit, and the `where uploaded_at is NULL` is the retry
 // contract.
 const markSQL = `UPDATE media_objects SET uploaded_at = now()
 	WHERE traveller_id = $1::uuid AND id = $2 AND uploaded_at IS NULL`
 
-// BeginMedia upserts the declared object and answers the row as it STANDS,
+// BeginMedia upserts the declared object and answers the row as it stands,
 // On the conflict path is not the row that was proposed.
 func (s MediaStore) BeginMedia(ctx context.Context, travellerID string, b logbook.MediaBegin) (logbook.MediaObject, error) {
 	if b.SHA256 == nil || b.ByteSize == nil || b.ContentType == nil {

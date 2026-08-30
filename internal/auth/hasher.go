@@ -24,7 +24,7 @@ type Params struct {
 // DefaultParams is the 64 MiB / t=1 / p=4, with a 16-byte per-user salt.
 var DefaultParams = Params{Memory: 64 * 1024, Time: 1, Threads: 4, KeyLen: 32, SaltLen: 16}
 
-// The floors below are what keeps a bad row out of the KDF.
+// The floors below are what keeps a bad row out of the kdf.
 const (
 	minSaltLen = 8
 	minKeyLen  = 16
@@ -42,7 +42,7 @@ type Hasher interface {
 // Argon2id is that implementation.
 type Argon2id struct{ Params Params }
 
-// Hash draws a fresh salt and answers the PHC encoding.
+// Hash draws a fresh salt and answers the phc encoding.
 func (h Argon2id) Hash(passphrase string) (string, error) {
 	if err := h.Params.check(); err != nil {
 		return "", err
@@ -59,7 +59,7 @@ func (h Argon2id) Hash(passphrase string) (string, error) {
 		"$" + base64.RawStdEncoding.EncodeToString(key), nil
 }
 
-// Verify recomputes at the cost the ENCODING names, never at this hasher's
+// Verify recomputes at the cost the encoding names, never at this hasher's
 // own.
 func (h Argon2id) Verify(encoded, passphrase string) (bool, error) {
 	p, salt, key, err := parseHash(encoded)

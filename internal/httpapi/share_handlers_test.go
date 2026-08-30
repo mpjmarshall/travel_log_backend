@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// the critic called this leg exactly right at v1 and it is carried verbatim
+// The critic called this leg exactly right at v1 and it is carried verbatim
 // in substance.
 func TestStoppingSharingDisarmsTheSwitchesForTheNextLink(t *testing.T) {
 	h := newHarness(t, options{})
@@ -104,8 +104,8 @@ func TestAShareWriteNamingNothingIsAcceptedAndChangesNothing(t *testing.T) {
 	}
 }
 
-// the three share routes are setters and an unknown trip is a 404, which is
-// the OTHER half of the asymmetry D3's delete carries.
+// The three share routes are setters and an unknown trip is a 404, which is
+// the other half of the asymmetry D3's delete carries.
 func TestTheShareRoutesAre404OnATripThatIsNotInTheLog(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -130,7 +130,7 @@ func TestTheShareRoutesAre404OnATripThatIsNotInTheLog(t *testing.T) {
 	}
 }
 
-// the mint refuses A capability somebody can guess, and it names the field.
+// The mint refuses A capability somebody can guess, and it names the field.
 func TestMintingALinkRefusesAGuessableToken(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

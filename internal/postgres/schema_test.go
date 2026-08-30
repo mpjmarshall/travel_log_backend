@@ -110,7 +110,7 @@ func count(t *testing.T, db *sql.DB, q string, args ...any) int {
 	return n
 }
 
-// the leg the defect hid from.
+// Deleting a place clears the pin and leaves the photograph standing.
 func TestDeletingAPlaceClearsThePinAndLeavesThePhotographStanding(t *testing.T) {
 	db := seeded(t)
 
@@ -168,7 +168,7 @@ func TestDeletingAPlaceLeavesEveryWalkUntouched(t *testing.T) {
 	}
 }
 
-// D2's DELETE branch is an ORDER of statements in Go, not a foreign key, and
+// D2's DELETE branch is an order of statements in Go, not a foreign key, and
 // the order silently inverts the promise.
 func TestTheOrderOfD2sDeleteBranchDecidesWhetherThePhotographsSurvive(t *testing.T) {
 	t.Run("photographs first, which is what the sheet promises", func(t *testing.T) {
@@ -221,7 +221,7 @@ func TestDeletingATripClearsVisitIdOnAnotherTripsPhotographAndClearsNothingElse(
 	}
 }
 
-// D3 itemises "N pins in …" as KEPT.
+// D3 itemises "N pins in …" as kept.
 func TestDeletingATripKeepsItsPlacesIncludingOnesWithNoVisitsLeft(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `DELETE FROM trips WHERE traveller_id=$1 AND id='kyoto-in-may'`, tid)
@@ -249,7 +249,7 @@ func TestDeletingATripKeepsItsPlacesIncludingOnesWithNoVisitsLeft(t *testing.T) 
 	}
 }
 
-// Each case clears every OTHER child of kyoto, so the refusal it asserts is
+// Each case clears every other child of kyoto, so the refusal it asserts is
 // the one it names.
 func TestDeletingACityIsRefusedByEveryChildThatPointsAtIt(t *testing.T) {
 	const (
@@ -340,7 +340,7 @@ func TestAnObjectStillReferencedCannotBeDeleted(t *testing.T) {
 }
 
 // The non-obvious half, and the reason it is written down: account deletion
-// is not made impossible by seven RESTRICT foreign keys.
+// is not made impossible by seven restrict foreign keys.
 func TestDeletingATravellerWorksDespiteEveryRestrict(t *testing.T) {
 	db := seeded(t)
 	res, err := db.Exec(`DELETE FROM travellers WHERE id=$1`, tid)
@@ -416,7 +416,7 @@ func TestTheEmailIndexBoundToPgCatalogsLower(t *testing.T) {
 	}
 }
 
-// the hazard itself, reproduced rather than argued.
+// The hazard itself, reproduced rather than argued.
 func TestAShadowedLowerBreaksTheLookupSilently(t *testing.T) {
 	db := seeded(t)
 	tx, err := db.Begin()
@@ -613,7 +613,7 @@ func TestAnIdOutsideTheSlugAlphabetIsRefused(t *testing.T) {
 	}
 }
 
-// every row here was inserted successfully on a real instance before its
+// Every row here was inserted successfully on a real instance before its
 // constraint existed.
 func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 	cases := []struct {
@@ -692,7 +692,7 @@ func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 	}
 }
 
-// , derived from pg_index.indkey rather than from A HAND-kept list — which is
+// , derived from pg_index.indkey rather than from A hand-kept list — which is
 // the whole correction.
 func TestEveryForeignKeyChildColumnSetLeadsSomeIndex(t *testing.T) {
 	db := migrated(t)
@@ -769,7 +769,7 @@ func TestEveryForeignKeyChildColumnSetLeadsSomeIndex(t *testing.T) {
 	t.Logf("foreign keys checked: %d, against %d non-partial indexes", total, len(indexes))
 }
 
-// leadsWith reports whether want is exactly the SET of's first len(want)
+// leadsWith reports whether want is exactly the set of's first len(want)
 // columns of have.
 func leadsWith(have, want []string) bool {
 	if len(have) < len(want) || len(want) == 0 {
@@ -862,7 +862,7 @@ func TestTheDeleteActionsAreWhatTheSheetsSay(t *testing.T) {
 	}
 }
 
-// the most dangerous line in 0001 is an absence.
+// The most dangerous line in 0001 is an absence.
 func TestThereIsNoForeignKeyFromTripsToPlaces(t *testing.T) {
 	db := migrated(t)
 	n := count(t, db, `
@@ -901,7 +901,7 @@ func TestNoColumnIsAReservedWord(t *testing.T) {
 	}
 }
 
-// Auto-generated constraint names are POSITIONAL.
+// Auto-generated constraint names are positional.
 func TestEveryConstraintWasNamedDeliberately(t *testing.T) {
 	db := migrated(t)
 	rows, err := db.Query(`
@@ -964,7 +964,7 @@ func TestTheMigrationCreatesExactlyTheTwelveTablesAndTheLedger(t *testing.T) {
 	}
 }
 
-// explain runs EXPLAIN and joins the plan into one string.
+// explain runs explain and joins the plan into one string.
 func explain(t *testing.T, db *sql.DB, q string) string {
 	t.Helper()
 	rows, err := db.Query("EXPLAIN (COSTS OFF) " + q)
@@ -1142,7 +1142,7 @@ func onlyMigration(t *testing.T, version string) fs.FS {
 	return out
 }
 
-// The rule lives in Go and the schema says so, in the catalog, where a DBA's
+// The rule lives in Go and the schema says so, in the catalog, where a dba's
 // `\d+` will show it.
 func TestTheTwoGoOnlyIntegrityColumnsCarryTheirRulingInTheCatalog(t *testing.T) {
 	db := migrated(t)
@@ -1179,7 +1179,7 @@ func TestTheTwoGoOnlyIntegrityColumnsCarryTheirRulingInTheCatalog(t *testing.T) 
 	}
 }
 
-// the allowlist is the same set in both places, and the leg reads both rather
+// The allowlist is the same set in both places, and the leg reads both rather
 // than restating either (the precedent).
 func TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet(t *testing.T) {
 	db := migrated(t)
@@ -1248,7 +1248,7 @@ func quotedLiterals(predicate string) []string {
 	return out
 }
 
-// , and the precondition is the half that makes it A MEASUREMENT.
+// , and the precondition is the half that makes it A measurement.
 func TestMigration0004HashesTheTokensThatWereAlreadyThere(t *testing.T) {
 	db, schema := testdb.Open(t)
 	m := Migrator{Schema: schema, Logger: quietLogger()}
@@ -1295,7 +1295,7 @@ func TestMigration0004HashesTheTokensThatWereAlreadyThere(t *testing.T) {
 	}
 }
 
-// the plaintext column is gone, which is the whole of the security claim.
+// The plaintext column is gone, which is the whole of the security claim.
 func TestThePlaintextShareTokenColumnIsGone(t *testing.T) {
 	db := migrated(t)
 

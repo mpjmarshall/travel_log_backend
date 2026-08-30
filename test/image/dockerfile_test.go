@@ -102,7 +102,7 @@ func exportImage(t *testing.T, tag, want string) (map[string]*tar.Header, []byte
 	return headers, wanted
 }
 
-// The user must be NUMERIC on both sides of the colon.
+// The user must be numeric on both sides of the colon.
 func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -128,8 +128,8 @@ func TestRuntimeImageRunsAsANumericNonRootUser(t *testing.T) {
 	}
 }
 
-// TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag is the HEALTHCHECK
-// WIRING leg, as distinct from the -healthcheck flag it invokes.
+// TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag is the healthcheck
+// wiring leg, as distinct from the -healthcheck flag it invokes.
 func TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -158,7 +158,7 @@ func TestRuntimeImageHealthcheckInvokesTheBinarysOwnFlag(t *testing.T) {
 	}
 }
 
-// TestRuntimeImageEntrypointIsTheBinary — with no CMD.
+// TestRuntimeImageEntrypointIsTheBinary — with no cmd.
 func TestRuntimeImageEntrypointIsTheBinary(t *testing.T) {
 	requireDocker(t)
 	cfg := inspectImage(t, image(t))
@@ -190,7 +190,7 @@ func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 }
 
 // TestTheShippedBinaryIsReadableAndExecutableByAnyUser is's second half of
-// the numeric-USER claim, and it is the half that is easy to miss.
+// the numeric-user claim, and it is the half that is easy to miss.
 func TestTheShippedBinaryIsReadableAndExecutableByAnyUser(t *testing.T) {
 	requireDocker(t)
 	files, _ := exportImage(t, image(t), "")

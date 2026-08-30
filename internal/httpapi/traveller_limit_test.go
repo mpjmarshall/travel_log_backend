@@ -1,4 +1,4 @@
-// The AUTHENTICATED budget, which is a different thing from the credential
+// The authenticated budget, which is a different thing from the credential
 // budget and is keyed on a different fact about the request.
 package httpapi
 
@@ -33,7 +33,7 @@ func TestAnAuthenticatedRouteRunsOutOfItsOwnAllowance(t *testing.T) {
 	}
 }
 
-// two travellers, one address.
+// Two travellers, one address.
 func TestOneTravellerRunningOutDoesNotRefuseAnotherAtTheSameAddress(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
 	first := bearerFor(t, h, "matt@example.com")
@@ -116,7 +116,7 @@ func TestARefusedAuthenticatedRequestNeverReachesTheHandler(t *testing.T) {
 	}
 }
 
-// the limiter sits inside the authentication, and this is the leg that says
+// The limiter sits inside the authentication, and this is the leg that says
 // so.
 func TestAnUnauthenticatedFloodDoesNotSpendTheTravellersAllowance(t *testing.T) {
 	h := newHarness(t, options{travellerPerMin: 3})
@@ -161,7 +161,7 @@ func TestTheTravellerLimitLogsTheTravellerAndNeverTheToken(t *testing.T) {
 }
 
 // aSecondTravellerBehindTheClosedRoute puts a traveller into the store
-// DIRECTLY and signs them in through the real routes.
+// directly and signs them in through the real routes.
 func aSecondTravellerBehindTheClosedRoute(t *testing.T, h *harness, email string) string {
 	t.Helper()
 	hash, err := cheapArgon.Hash("a long enough passphrase")

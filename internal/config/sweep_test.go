@@ -1,4 +1,4 @@
-// The os.Getenv monopoly, as a MECHANISM rather than a discipline.
+// The os.Getenv monopoly, as a mechanism rather than a discipline.
 package config_test
 
 import (
@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// moduleRoot walks up from the test the working directory to the directory
+// moduleRoot walks up from the test's working directory to the directory
 // holding go.mod.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
@@ -33,7 +33,7 @@ func moduleRoot(t *testing.T) string {
 }
 
 // walkSource calls fn for every non-test.go file in the module, with its
-// path relative to the module root and its parsed AST.
+// path relative to the module root and its parsed ast.
 func walkSource(t *testing.T, fn func(rel string, file *ast.File)) {
 	t.Helper()
 	root := moduleRoot(t)

@@ -17,7 +17,7 @@ func digestOf(body string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// one input, two outputs, and they cannot diverge.
+// One input, two outputs, and they cannot diverge.
 func TestAddressDerivesTheKeyAndTheHeaderFromOneDigest(t *testing.T) {
 	for _, body := range []string{
 		"",
@@ -70,7 +70,7 @@ func TestTwoTravellersNeverShareAPath(t *testing.T) {
 	}
 }
 
-// WHAT Address REFUSES, and every row is a value that would otherwise become
+// what Address refuses, and every row is a value that would otherwise become
 // a path segment.
 func TestAddressRefusesAnythingThatIsNotAnIdOrATraveller(t *testing.T) {
 	good := digestOf("fine")

@@ -1,4 +1,4 @@
-// TEST-FIRST (agent-graph-spec-V4 §6.7).
+// test-first (agent-graph-spec-V4 §6.7).
 package config_test
 
 import (
@@ -91,7 +91,7 @@ func with(key, value string) map[string]string {
 	return env
 }
 
-// the leg the step names.
+// All three missing variables are reported at once, not one per run.
 func TestLoadReportsAllThreeMissingVariablesAtOnce(t *testing.T) {
 	missing := []string{"DATABASE_URL", "DB_MAX_IDLE_CONNS", "ARGON2_MAX_CONCURRENT"}
 	setEnv(t, without(missing...))
@@ -273,7 +273,7 @@ func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
 	}
 }
 
-// MEASURED, in $(go env GOROOT)/src/database/sql/sql.go, SetMaxIdleConns.
+// measured, in $(go env goroot)/src/database/sql/sql.go, SetMaxIdleConns.
 func TestLoadRejectsMoreIdleConnectionsThanOpenOnes(t *testing.T) {
 	env := complete()
 	env["DB_MAX_OPEN_CONNS"] = "4"

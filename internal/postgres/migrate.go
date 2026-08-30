@@ -39,8 +39,8 @@ var ErrChecksumMismatch = errors.New("postgres: a migration was edited after it 
 // its first line.
 const noTransactionDirective = "-- migrate:no-transaction"
 
-// noTransactionReRunnable is the SECOND header line such a file must carry,
-// The runner REFUSES one that does not ((b)).
+// noTransactionReRunnable is the second header line such a file must carry,
+// The runner refuses one that does not ((b)).
 const noTransactionReRunnable = "-- migrate:re-runnable"
 
 // upName and downName are the only two filenames the runner accepts.
@@ -50,7 +50,7 @@ var (
 	schemaOK = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 )
 
-// Migration is one.up.sql file with the digest the runner records.
+// Migration is one .up.sql file with the digest the runner records.
 type Migration struct {
 	Version       string
 	Name          string
@@ -285,7 +285,7 @@ func loadMigrations(fsys fs.FS) ([]Migration, error) {
 	return out, nil
 }
 
-// declaresReRunnable reports whether a file's HEADER carries the
+// declaresReRunnable reports whether a file's header carries the
 // re-runnability declaration.
 func declaresReRunnable(src string) bool {
 	for _, line := range strings.Split(src, "\n") {

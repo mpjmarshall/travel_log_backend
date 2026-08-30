@@ -47,7 +47,7 @@ func aCity(t *testing.T, db *sql.DB, travellerID, id, name string) {
 	}
 }
 
-// aMediaObject is a COMMITTED object, and `uploaded_at` is what makes it one.
+// aMediaObject is a committed object, and `uploaded_at` is what makes it one.
 func aMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
@@ -92,7 +92,7 @@ func ptr[T any](v T) *T { return &v }
 func always(int64) bool { return true }
 func never(int64) bool  { return false }
 
-// the one leg in no mutation reddened, argued rather than left unsaid.
+// The one leg in no mutation reddened, argued rather than left unsaid.
 func TestLogbookStoreIsTheStoreTheDomainDeclared(t *testing.T) {
 	var _ logbook.Store = LogbookStore{}
 }
@@ -131,7 +131,7 @@ func TestAnUnknownTravellerAnswersTheDomainsOwnSentinel(t *testing.T) {
 	}
 }
 
-// the 304 leg, and it is decisive rather than counted.
+// The 304 leg, and it is decisive rather than counted.
 func TestA304ReadTouchesNoTableButTravellers(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -368,7 +368,7 @@ func TestPutTripRefusesACityTheTravellerDoesNotHold(t *testing.T) {
 	}
 }
 
-// two ways for A cover to be wrong, and the route answers both the same way.
+// Two ways for a cover to be wrong, and the route answers both the same way.
 func TestPutTripRefusesACoverThatWasNeverUploaded(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -481,7 +481,7 @@ func TestPutTripForAnUnknownTravellerAnswersTheDomainsSentinel(t *testing.T) {
 	}
 }
 
-// the shipped defect, reproduced.
+// The shipped defect, reproduced.
 func TestRenamingATripLeavesItsItineraryAndItsDatesAlone(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -540,7 +540,7 @@ func countTripCities(t *testing.T, db *sql.DB, travellerID, tripID string) int {
 	return n
 }
 
-// the assertion's three standing guards cannot make: a count that must not
+// The assertion's three standing guards cannot make: a count that must not
 // fall.
 func filedPhotographs(t *testing.T, db *sql.DB, travellerID string) int {
 	t.Helper()
@@ -679,7 +679,7 @@ func TestAPartialDateWriteThatWouldInvertTheOrderNamesTheField(t *testing.T) {
 	}
 }
 
-// The write response is a whole Trip the phone SPLICES into its cached log.
+// The write response is a whole Trip the phone splices into its cached log.
 func TestARenamedTripStillReportsThatItIsShared(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -816,7 +816,7 @@ func revokeShareLink(t *testing.T, db *sql.DB, travellerID, tripID string) {
 }
 
 // `v.At`, `p.TakenAt` and `w.RecordedOn` were read out of `sql.NullTime` with
-// `.Valid` never CHECKED.
+// `.Valid` never checked.
 func TestANullDateColumnIsADriverErrorAndNotAYearOneDate(t *testing.T) {
 	for _, tc := range []struct{ table, column, what string }{
 		{"visits", "at", "a visit's date, which is the day its photographs were taken"},
@@ -916,7 +916,7 @@ func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
 	}
 }
 
-// the shape the client's own history says went wrong, and the fixture cannot
+// The shape the client's own history says went wrong, and the fixture cannot
 // express it.
 func TestDeletingATripClearsAnotherTripsVisitReferenceAndNothingElse(t *testing.T) {
 	db := seeded(t)
@@ -1047,7 +1047,7 @@ func photoRow(t *testing.T, db *sql.DB, id string) storedPhoto {
 	return out
 }
 
-// the name lands, it is trimmed, and the version moves.
+// The name lands, it is trimmed, and the version moves.
 func TestSetTravellerNameWritesATrimmedNameAndMovesTheVersion(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)

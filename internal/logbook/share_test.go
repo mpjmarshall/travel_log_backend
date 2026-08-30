@@ -13,8 +13,8 @@ import (
 	"travellog/internal/logbook"
 )
 
-// the digest is of the bytes as typed, and the negative is what makes this A
-// MEASUREMENT.
+// The digest is of the bytes as typed, and the negative is what makes this A
+// measurement.
 func TestAShareTokenIsHashedAsItsOwnBytesAndNotAsBase64(t *testing.T) {
 	const token = "kyotomay9f2a"
 

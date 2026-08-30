@@ -24,7 +24,7 @@ import (
 // theToken is what the tests mint.
 const theToken = "mnpqrstuvwxy"
 
-// theAllowlist is docs/PUBLIC-ENVELOPE.md §3, typed out.
+// theAllowlist is docs/public-envelope.md §3, typed out.
 var theAllowlist = map[string][]string{
 	"":                     {"cities", "photos", "places", "trip", "version", "walks"},
 	"trip":                 {"cityIds", "coverUrl", "end", "id", "name", "start", "summary"},
@@ -106,7 +106,7 @@ func renderWalk(walk map[string][]string) string {
 	return b.String()
 }
 
-// the structural guard (the other half, and the whole point).
+// The structural guard (the other half, and the whole point).
 func TestThePublicEnvelopeCarriesExactlyTheAllowlistAtEveryLevel(t *testing.T) {
 	h := newHarness(t, options{})
 	h.setFlags(t, `{"shareCoordinates":true}`)
@@ -171,8 +171,8 @@ func TestWithCoordinatesOffTheOnlyLatLeftIsTheCitysCentre(t *testing.T) {
 	golden(t, "share_coordinates_off.golden", renderWalk(walkOf(t, body)))
 }
 
-// share photos off, over the wire: the key SET does not change and the
-// CONTENT does.
+// share photos off, over the wire: the key set does not change and the
+// content does.
 func TestWithPhotosOffTheArrayIsEmptyAndTheCoverIsNull(t *testing.T) {
 	h := newHarness(t, options{})
 	h.setFlags(t, `{"sharePhotos":false}`)
@@ -208,7 +208,7 @@ func TestWithPhotosOffTheArrayIsEmptyAndTheCoverIsNull(t *testing.T) {
 	}
 }
 
-// BYTE-IDENTICAL **and** the same work.
+// byte-identical **and** the same work.
 func TestARevokedTokenAndAnUnknownOneAreOneAnswerAndOneAmountOfWork(t *testing.T) {
 	h := newHarness(t, options{})
 	h.sharedTrip(t, theToken) // mint it, then kill it
@@ -285,7 +285,7 @@ func TestThePublicReadCarriesTheCapabilityHeadersOnEveryAnswer(t *testing.T) {
 	}
 }
 
-// every minted url uses the public lifetime, asserted by call site.
+// Every minted url uses the public lifetime, asserted by call site.
 func TestEveryURLTheEnvelopeEmbedsIsMintedAtThePublicLifetime(t *testing.T) {
 	const publicSeconds = "900" // fifteen minutes, DEC-84
 	const privateSeconds = "120"
@@ -335,7 +335,7 @@ func TestEveryURLTheEnvelopeEmbedsIsMintedAtThePublicLifetime(t *testing.T) {
 	}
 }
 
-// exhausting the public read does not refuse A SIGN-IN.
+// exhausting the public read does not refuse A sign-IN.
 func TestExhaustingThePublicReadDoesNotRefuseASignIn(t *testing.T) {
 	h := newHarness(t, options{publicPerMin: 2})
 	h.sharedTrip(t, theToken)

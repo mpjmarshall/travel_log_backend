@@ -219,7 +219,7 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 	}, nil
 }
 
-// limiters builds the API's three ceilings from's three variables that
+// limiters builds the API's three ceilings from their three variables, which
 // carry them.
 func limiters(cfg config.Config) (credential, traveller, public *httpx.Limiter) {
 	return httpx.NewLimiter(cfg.AuthRateLimitPerMin, nil),
@@ -227,8 +227,7 @@ func limiters(cfg config.Config) (credential, traveller, public *httpx.Limiter) 
 		httpx.NewLimiter(cfg.PublicRateLimitPerMin, nil)
 }
 
-// mediaConfig is the nine S3_* variables becoming the store's own Config, and
-// it is a function of its own for the reason limiters is one.
+// mediaConfig turns the nine S3_* variables into the store's own Config.
 func mediaConfig(cfg config.Config) media.Config {
 	return media.Config{
 		InternalEndpoint: cfg.S3InternalEndpoint,

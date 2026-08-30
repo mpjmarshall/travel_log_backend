@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// FormatETag writes both halves, and PANICS if it is handed less than that.
+// FormatETag writes both halves, and panics if it is handed less than that.
 func FormatETag(emitterVersion, logbookVersion int64) string {
 	if emitterVersion < 1 || logbookVersion < 1 {
 		panic(fmt.Sprintf(
@@ -45,7 +45,7 @@ func ParseETag(s string) (emitterVersion, logbookVersion int64, ok bool) {
 }
 
 // ETagMatches reports whether an If-None-Match header names the current tag,
-// under RFC 9110's weak comparison.
+// under rfc 9110's weak comparison.
 func ETagMatches(ifNoneMatch, etag string) bool {
 	current, ok := opaqueTag(etag)
 	if !ok {

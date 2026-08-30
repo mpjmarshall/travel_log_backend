@@ -9,7 +9,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// the answer is the whole logbook, in the client's own envelope.
+// The answer is the whole logbook, in the client's own envelope.
 func TestDeletingATripAnswersTheWholeLogbook(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -76,8 +76,8 @@ func TestARepeatedDeleteIsASuccessAndDoesNotMoveTheTag(t *testing.T) {
 	}
 }
 
-// A trip that never existed is the same answer, and on A log nobody has
-// written to it carries no ETag AT all.
+// A trip that never existed gets the same answer, and a log nobody has written
+// to carries no ETag at all.
 func TestDeletingATripFromALogNobodyHasWrittenCarriesNoTag(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

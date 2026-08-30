@@ -78,7 +78,7 @@ func TestTheStdlibsOwnPlainTextNeverReachesTheClient(t *testing.T) {
 	}
 }
 
-// A 404 a HANDLER wrote is already the envelope and may carry's one additive
+// A 404 a handler wrote is already the envelope and may carry's one additive
 // key, so the wrapper must leave it alone.
 func TestAHandlersOwn404IsNotRewritten(t *testing.T) {
 	const written = `{"code":"not_found","field":"tripId"}`
@@ -113,7 +113,7 @@ func TestAnOrdinarySuccessIsUntouched(t *testing.T) {
 	}
 }
 
-// MEASURED against a server at R1 entry state, and reproduced from outside
+// measured against a server at R1 entry state, and reproduced from outside
 // the test binary before this changed.
 func TestARouteThisBuildDoesNotHaveSaysSoRatherThanSayingNotFound(t *testing.T) {
 	for _, tc := range []struct {
@@ -145,7 +145,7 @@ func TestARouteThisBuildDoesNotHaveSaysSoRatherThanSayingNotFound(t *testing.T) 
 	}
 }
 
-// the 405 keeps its status and its Allow HEADER.
+// The 405 keeps its status and its Allow header.
 func TestThe405KeepsItsStatusAndItsAllowHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	muxUnderTest().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/logbook", nil))

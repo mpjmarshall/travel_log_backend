@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// LoadOptions is deliberately EMPTY, and it carries no `Force` and no
+// LoadOptions is deliberately empty, and it carries no `Force` and no
 // `Reset`.
 type LoadOptions struct{}
 
@@ -78,7 +78,7 @@ func Load(ctx context.Context, db *sql.DB, d *Dataset, _ LoadOptions) (Report, e
 	return report, nil
 }
 
-// insertStep is one table's whole INSERT: the column list, the per-column
+// insertStep is one table's whole insert: the column list, the per-column
 // cast each placeholder carries, and one []any per row.
 type insertStep struct {
 	table   string
@@ -87,7 +87,7 @@ type insertStep struct {
 	rows    [][]any
 }
 
-// statement renders `insert into t (a, b) VALUES ($1::uuid, $2), ($3::uuid,
+// statement renders `insert into t (a, b) values ($1::uuid, $2), ($3::uuid,
 // $4)` and the flat argument list beside it.
 func (s insertStep) statement() (string, []any) {
 	var b strings.Builder

@@ -1,4 +1,4 @@
-// TEST-FIRST (agent-graph-spec-V4 §6.7).
+// test-first (agent-graph-spec-V4 §6.7).
 package logging_test
 
 import (
@@ -98,7 +98,7 @@ func TestRedactionIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// The match is on a SUBSTRING of the key, not on equality, and this is the
+// The match is on a substring of the key, not on equality, and this is the
 // leg that says so.
 func TestRedactsKeysThatCONTAINAName(t *testing.T) {
 	for _, key := range []string{"access_token", "sessionToken", "authorization_header", "user_passphrase"} {

@@ -75,7 +75,7 @@ func StoredCaption(sent **string) *string {
 }
 
 // SnoozeWrite is the body of `POST /v1/photos/snooze`: N1's 'Later', and the
-// FIRST route in this API that takes a COLLECTION.
+// first route in this API that takes a collection.
 type SnoozeWrite struct {
 	PhotoIDs *[]string `json:"photoIds"`
 	Until    *Instant  `json:"until"`
@@ -115,7 +115,7 @@ type RefileWrite struct {
 	VisitAt *Instant `json:"visitAt"`
 }
 
-// ValidateRefile answers the SHAPE of the ids it was given and says nothing
+// ValidateRefile answers the shape of the ids it was given and says nothing
 // about whether they were given at all.
 func ValidateRefile(r RefileWrite) error {
 	if r.PlaceID != nil && !idPattern.MatchString(*r.PlaceID) {

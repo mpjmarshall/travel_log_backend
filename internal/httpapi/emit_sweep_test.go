@@ -1,4 +1,4 @@
-// the emit monopoly, as a mechanism rather than as a discipline (
+// The emit monopoly, as a mechanism rather than as a discipline (
 // definition_of_done 9).
 package httpapi
 
@@ -141,7 +141,7 @@ func emitsThroughLogbook(expr ast.Expr) bool {
 	return isIdent && pkg.Name == "logbook" && strings.HasPrefix(sel.Sel.Name, "Emit")
 }
 
-// the checker itself is checked, on the precedent httpx's error sweep set.
+// The checker itself is checked, on the precedent httpx's error sweep set.
 func TestTheEmitCheckerTellsTheFourShapesApart(t *testing.T) {
 	for _, tc := range []struct {
 		source string

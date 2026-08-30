@@ -114,8 +114,8 @@ func ValidatePlace(p PlaceWrite) error {
 	return nil
 }
 
-// checkVisits is the field the whole step is about, and it checks the SHAPE
-// of the array rather than what writing it would destroy.
+// checkVisits validates the shape of the visits array, not what writing it
+// would destroy.
 func checkVisits(visits []Visit, placeID string) error {
 	seen := make(map[string]bool, len(visits))
 	for _, visit := range visits {
@@ -195,7 +195,7 @@ func (d PhotoDisposition) String() string {
 	}
 }
 
-// ParsePhotoDisposition reads the query parameter, and an ABSENT one is
+// ParsePhotoDisposition reads the query parameter, and an absent one is
 // refused by the same branch a misspelled one is.
 func ParsePhotoDisposition(raw string) (PhotoDisposition, error) {
 	switch raw {
