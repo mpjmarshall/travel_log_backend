@@ -287,10 +287,9 @@ still apply.
 
 ## 10. The admin panel, and the four ways it contradicts this document
 
-*Planned 30 August 2026. `ADMIN-PANEL.md` is the design; this section is what
-it costs a public deploy.* **Nothing here is built yet** — this section exists
-so that whoever deploys it is choosing rather than discovering, which is what
-this whole file is for.
+*Planned and built 30 August 2026. `ADMIN-PANEL.md` is the design; this
+section is what it costs a public deploy.* Built and verified against a running
+stack, so what follows describes what is there rather than what is intended.
 
 This document opens by saying the target is local only, everything is
 loopback-bound, and every password is guessable on purpose. The panel is the
@@ -314,6 +313,16 @@ thing between the internet and every traveller's account is one password.
    test in the plan. This is the same third evidence tier as §1's sizing and
    the iOS manifest keys: guarded by nothing but a human with a browser.
 
+   **That is not hypothetical: it happened on the first run.** The policy
+   shipped as `default-src 'self'`, which is correct-looking and wrong — htmx
+   injects a `<style>` element for its own `.htmx-indicator` rules, so every
+   page logged two CSP violations and the loading indicators never worked. The
+   search and the swaps were unaffected, which is exactly why nothing looked
+   broken. The policy is now `default-src 'self'; style-src 'self'
+   'unsafe-inline'`; **script stays at `'self'`**, which is the half that
+   matters, and a leg asserts both directions. Read the browser console the
+   first time this is deployed anywhere new.
+
 3. **The first thing that deletes from the bucket** — and it is worth saying
    why that is new. **Nothing in this codebase has ever deleted a media
    object.** `media.Store` has four methods and none of them removes anything,
@@ -322,6 +331,11 @@ thing between the internet and every traveller's account is one password.
    is gone. The panel's delete adds a fifth method and cleans up after itself,
    rows first so a storage failure leaves a recoverable orphan rather than a
    live photograph pointing at nothing.
+
+   **Verified end to end**, which matters because nothing in `make check` talks
+   to MinIO: a traveller with one trip and one real object was deleted through
+   the panel, and the row, the cascade and the object all went, with every
+   other traveller untouched.
 
    **It does not sweep the orphans that already exist.** Measured on the live
    stack on 30 August 2026: 4 objects, 5,175,532 bytes, and no code path that
