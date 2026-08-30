@@ -244,3 +244,42 @@ func (s AdminStore) RevokeSessionByID(ctx context.Context, sessionID string) err
 	}
 	return nil
 }
+
+// DeleteTraveller removes the traveller, everything eleven foreign keys cascade
+// from them, and answers the object ids read before the rows went.
+//
+// It holds the traveller's advisory lock, so a delete cannot interleave with a
+// write that client is making.
+func (s AdminStore) DeleteTraveller(ctx context.Context, id string) ([]string, error) {
+	objects := []string{}
+
+	err := WithTravellerLock(ctx, s.DB, id, func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id FROM media_objects WHERE traveller_id = $1::uuid`, id)
+		if err != nil {
+			return fmt.Errorf("postgres: the traveller %s's objects: %w", id, err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var object string
+			if err := rows.Scan(&object); err != nil {
+				return fmt.Errorf("postgres: reading an object id: %w", err)
+			}
+			objects = append(objects, object)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("postgres: the traveller %s's objects: %w", id, err)
+		}
+
+		_, err = tx.ExecContext(ctx, `DELETE FROM travellers WHERE id = $1::uuid`, id)
+		if err != nil {
+			return fmt.Errorf("postgres: deleting the traveller %s: %w", id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return objects, nil
+}

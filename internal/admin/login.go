@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"travellog/internal/httpx"
+	"travellog/internal/media"
 	"travellog/internal/postgres"
 )
 
@@ -37,6 +38,7 @@ type Deps struct {
 	Render   Renderer
 	Store    Store
 	Writer   Writer
+	Objects  media.Store
 }
 
 type attempts struct {

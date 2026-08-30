@@ -170,3 +170,16 @@ func (m *Memory) PutWithoutChecksum(key Key, up Upload, body []byte) error {
 	}
 	return nil
 }
+
+// Delete forgets an object, and forgetting one that was never there is not an
+// error.
+func (m *Memory) Delete(_ context.Context, key Key) error {
+	path, _, err := Address(key.Traveller, key.Object)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.objects, path)
+	return nil
+}

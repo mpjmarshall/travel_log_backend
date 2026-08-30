@@ -58,4 +58,6 @@ type Store interface {
 	PresignGet(ctx context.Context, key Key, aud Audience) (string, error)
 
 	Stat(ctx context.Context, key Key) (Attributes, error)
+
+	Delete(ctx context.Context, key Key) error
 }

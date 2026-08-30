@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"travellog/internal/admin"
+	"travellog/internal/media"
 	"travellog/internal/postgres"
 )
 
@@ -62,6 +63,11 @@ func pageDeps(t *testing.T, store *fakeStore) (*http.ServeMux, *http.Cookie) {
 }
 
 func writeDeps(t *testing.T, store *fakeStore, writer *fakeWriter) (*http.ServeMux, *http.Cookie, string) {
+	return writeDepsWithObjects(t, store, writer, nil)
+}
+
+func writeDepsWithObjects(t *testing.T, store *fakeStore, writer *fakeWriter,
+	objects media.Store) (*http.ServeMux, *http.Cookie, string) {
 	t.Helper()
 	set, err := admin.NewTemplates(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -77,6 +83,7 @@ func writeDeps(t *testing.T, store *fakeStore, writer *fakeWriter) (*http.ServeM
 		Render:   set,
 		Store:    store,
 		Writer:   writer,
+		Objects:  objects,
 	}
 	mux := http.NewServeMux()
 	admin.Mount(mux, deps)

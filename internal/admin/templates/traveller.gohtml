@@ -23,6 +23,15 @@
 </form>
 <h2>Sessions</h2>
 {{template "sessiontable" .}}
+<h2>Delete</h2>
+<p class="note">This removes {{.Traveller.Email}} and everything of theirs:
+{{.Traveller.Trips}} trips, {{.Traveller.Photos}} photos, {{.Traveller.Places}} places,
+{{.Traveller.Walks}} walks, and their {{.Storage}} of pictures. It cannot be undone.</p>
+<form hx-post="/admin/travellers/{{.Traveller.ID}}/delete" hx-target="body" class="pager">
+  <input type="text" name="email" placeholder="Type {{.Traveller.Email}} to confirm"
+         autocomplete="off">
+  <button class="danger" type="submit">Delete this traveller</button>
+</form>
 {{else}}
 <h1>Not found</h1>
 <p class="note">No traveller with that id.</p>
