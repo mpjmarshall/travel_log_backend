@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"travellog/internal/mail"
 
 	"travellog/internal/auth"
 	"travellog/internal/config"
@@ -66,7 +68,8 @@ func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 
 func wiredMux(t *testing.T, log *slog.Logger) *http.ServeMux {
 	t.Helper()
-	mount, err := apiRoutes(wiredConfig(), nil, log, media.NewMemory())
+	mount, err := apiRoutes(wiredConfig(), nil, log, media.NewMemory(), mail.SenderFunc(
+		func(context.Context, string, mail.Message) error { return nil }))
 	if err != nil {
 		t.Fatalf("apiRoutes: %v", err)
 	}

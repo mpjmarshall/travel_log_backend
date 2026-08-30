@@ -91,6 +91,11 @@ func main() {
 
 // run owns the database handle for the lifetime of the process.
 func run(cfg config.Config, addr string, log *slog.Logger) error {
+	sender, err := mailer(cfg, log)
+	if err != nil {
+		return err
+	}
+
 	dsn, err := postgres.WithSessionOptions(cfg.DatabaseURL, cfg.RequestTimeout)
 	if err != nil {
 		return err
@@ -129,7 +134,7 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 		return err
 	}
 
-	mount, err := apiRoutes(cfg, db, log, objects)
+	mount, err := apiRoutes(cfg, db, log, objects, sender)
 	if err != nil {
 		return err
 	}
@@ -188,14 +193,9 @@ func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.S
 
 // apiRoutes builds the auth service from the config and answers something
 // that mounts its routes.
-func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.Store) (func(*http.ServeMux), error) {
+func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.Store, sender mail.Sender) (func(*http.ServeMux), error) {
 	service := &auth.Service{Store: postgres.AuthStore{DB: db}}
 	credential, traveller, public := limiters(cfg)
-
-	sender, err := mailer(cfg, log)
-	if err != nil {
-		return nil, err
-	}
 
 	return func(mux *http.ServeMux) {
 		httpapi.Mount(mux, httpapi.Deps{
