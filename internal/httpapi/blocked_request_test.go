@@ -20,6 +20,7 @@ import (
 	"travellog/internal/config"
 	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
+	"travellog/internal/mail"
 	"travellog/internal/media"
 	"travellog/internal/postgres"
 	"travellog/internal/postgres/testdb"
@@ -166,6 +167,7 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		Walks:          postgres.WalkStore{DB: db},
 		Public:         postgres.ShareReadStore{DB: db},
 		Log:            log,
+		Mail:           mail.SenderFunc(func(context.Context, string, mail.Message) error { return nil }),
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),
 		PublicLimit:    httpx.NewLimiter(1000, nil),

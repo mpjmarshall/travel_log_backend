@@ -18,8 +18,8 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	if len(routes) != 22 {
-		t.Errorf("the table holds %d routes; R8's surface is twenty-two — two "+
+	if len(routes) != 23 {
+		t.Errorf("the table holds %d routes; the surface is twenty-three — three "+
 			"credential routes, one conditional read, one whole-state write, D3's "+
 			"cascade, T5's city, C1's pin, D2's removal, H1's three share writes, "+
 			"U1's pencil, the revocation surface, the three media routes, R7's four "+
@@ -215,6 +215,7 @@ func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
 		{"no traveller rate limiter", func(d *Deps) { d.TravellerLimit = nil }, "authenticated routes need a rate limiter"},
 		{"no public rate limiter", func(d *Deps) { d.PublicLimit = nil }, "public read needs a rate limiter"},
 		{"no logbook store", func(d *Deps) { d.Logbook = nil }, "logbook routes need a store"},
+		{"no mailer", func(d *Deps) { d.Mail = nil }, "code route needs a mailer"},
 		{"no logger", func(d *Deps) { d.Log = nil }, "routes need a logger"},
 		{"no share store", func(d *Deps) { d.Share = nil }, "share routes need a store"},
 		{"no public store", func(d *Deps) { d.Public = nil }, "public read needs a store"},

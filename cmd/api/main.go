@@ -23,6 +23,7 @@ import (
 	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
 	"travellog/internal/logging"
+	"travellog/internal/mail"
 	"travellog/internal/media"
 	"travellog/internal/postgres"
 	"travellog/migrations"
@@ -198,8 +199,14 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 	}
 	credential, traveller, public := limiters(cfg)
 
+	sender, err := mailer(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+
 	return func(mux *http.ServeMux) {
 		httpapi.Mount(mux, httpapi.Deps{
+			Mail:           sender,
 			Auth:           service,
 			Logbook:        postgres.LogbookStore{DB: db},
 			Share:          postgres.ShareStore{DB: db},
@@ -361,4 +368,17 @@ func probe(addr string) int {
 		return 1
 	}
 	return 0
+}
+
+// mailSendTimeout bounds one delivery attempt.
+const mailSendTimeout = 15 * time.Second
+
+// mailer builds the sign-in code sender, detached so delivery time cannot say
+// whether an address has a log here.
+func mailer(cfg config.Config, log *slog.Logger) (mail.Sender, error) {
+	sender, err := mail.NewLogSender(log, cfg.Development)
+	if err != nil {
+		return nil, fmt.Errorf("no mail provider is configured and DEVELOPMENT is not set: %w", err)
+	}
+	return mail.Detached(mail.WithTimeout(sender, mailSendTimeout), log), nil
 }
