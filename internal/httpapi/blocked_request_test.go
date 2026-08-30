@@ -1,13 +1,5 @@
-// The one leg in this package that runs against a REAL PostgreSQL, and the
-// only one that can (DEC-96, leg five).
-//
-// WHY IT IS NOT WITH THE OTHER STORE LEGS. Everything internal/postgres can
-// say about a blocked query is that the query is blocked. The claim here is
-// about what the CLIENT receives — a status and a header — which needs the
-// store, the handler, the middleware chain and a lock held on another session
-// at the same time. There is nowhere else that has all four.
-//
-// It needs a database and SKIPS, saying so, when there is none.
+// The one leg in this package that runs against a real PostgreSQL, and the
+// only one that can (leg five).
 package httpapi_test
 
 import (
@@ -36,26 +28,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// THE MEASURED SHAPE THIS LEG REFUSES TO ACCEPT. The operations lens executed
-// what R1's lock_timeout leaves behind (OE-19): with an ALTER queued behind an
-// open reader, ONE `GET /v1/logbook` returned curl http=000 at its own 30s
-// limit — no status, no body, no error — and ten concurrent ones all returned
-// 000 after 18.8s, with 9 backends active/Lock. `/healthz` answered 200 in
-// 4.7ms throughout, because it pings and never touches `trips`, and docker
-// said healthy.
-//
-// ASSERT ON THE ANSWER, NOT ON THE ELAPSED TIME. A leg whose only failure mode
-// is a hang is a leg somebody eventually deletes, so this one answers from a
-// goroutine behind a select with a deadline and asserts the STATUS. The
-// deadline exists to turn "it stalled" into a sentence, not to measure
-// anything.
-//
-// THE BOUNDS ARE SHORTENED HERE AND THE MECHANISM IS NOT. Production is 15s on
-// both; this leg runs at 700ms of statement_timeout and 3s of request budget,
-// because a leg that takes fifteen seconds to prove a header is a leg somebody
-// stops running. Which of the two bounds fires first is deliberately NOT
-// asserted — both answer 503 with Retry-After, which is the whole reason they
-// are allowed to be equal in production.
+// the measured shape this leg refuses to accept.
 func TestARequestBlockedOnALockGetsABoundedAnswerAndNotSilence(t *testing.T) {
 	db, schema := testdb.Open(t)
 	ctx := context.Background()
@@ -65,8 +38,6 @@ func TestARequestBlockedOnALockGetsABoundedAnswerAndNotSilence(t *testing.T) {
 		t.Fatalf("migrating: %v", err)
 	}
 
-	// The application's own pool, with DEC-96's session settings on it — which
-	// is the thing under test as much as the middleware is.
 	appDSN, err := postgres.WithSessionOptions(scopedDSN(t, schema), 700*time.Millisecond)
 	if err != nil {
 		t.Fatalf("WithSessionOptions: %v", err)
@@ -79,9 +50,6 @@ func TestARequestBlockedOnALockGetsABoundedAnswerAndNotSilence(t *testing.T) {
 
 	server, token := realServer(t, app, 3*time.Second)
 
-	// A REAL LOCK, HELD, ON A SEPARATE BACKEND. `trips` is the first table the
-	// read touches, and an ACCESS EXCLUSIVE lock is exactly what a migration's
-	// ALTER takes.
 	holder := testdb.Second(t, schema)
 	held, err := holder.Conn(ctx)
 	if err != nil {
@@ -137,9 +105,7 @@ func TestARequestBlockedOnALockGetsABoundedAnswerAndNotSilence(t *testing.T) {
 	}
 }
 
-// AND THE CONTROL. The same server, the same pool, no lock: the read answers
-// 200. Without it, leg five is satisfied by a server that answers 503 to
-// everything.
+// The control.
 func TestTheSameReadAnswers200WhenNothingHoldsTheLock(t *testing.T) {
 	db, schema := testdb.Open(t)
 	if _, err := (postgres.Migrator{Schema: schema, Logger: quietLog()}).
@@ -172,13 +138,8 @@ func TestTheSameReadAnswers200WhenNothingHoldsTheLock(t *testing.T) {
 	}
 }
 
-// realServer is the whole shipped stack over a real pool: the real auth store,
-// the real logbook store, Mount, and httpx.Base. It answers a bearer header
-// for a traveller registered through the routes.
-//
-// THE HASHER IS THE CHEAP ONE. The shipped Argon2id parameters are 64 MiB a
-// call and this makes two; the claim under test is about a lock, not about a
-// KDF.
+// realServer is the whole shipped stack over a real pool: the real auth
+// store, the real logbook store, Mount, and httpx.Base.
 func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httptest.Server, string) {
 	t.Helper()
 	log := quietLog()
@@ -208,14 +169,9 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),
 		PublicLimit:    httpx.NewLimiter(1000, nil),
-		// THE MEDIA GROUP IS PRESENT SO Mount COMES UP; NO LEG HERE TOUCHES
-		// IT. This file is about DEC-96's bounded answer to a request blocked
-		// on a lock, and the media routes are wired against the real
-		// PostgreSQL store beside the logbook one so that a leg added here
-		// later gets the same database rather than a fake.
-		Media:         postgres.MediaStore{DB: db},
-		Objects:       media.NewMemory(),
-		MediaMaxBytes: config.MinMediaMaxBytes,
+		Media:          postgres.MediaStore{DB: db},
+		Objects:        media.NewMemory(),
+		MediaMaxBytes:  config.MinMediaMaxBytes,
 	})
 	server := httptest.NewServer(httpx.Chain(mux, httpx.Base(log, requestTimeout)...))
 	t.Cleanup(server.Close)

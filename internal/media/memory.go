@@ -15,36 +15,18 @@ import (
 
 // Memory is the twin the handler legs in R3 run against: no daemon, no
 // network, no build tag.
-//
-// IT IS NOT A STUB THAT SAYS YES. Every rule the real bucket enforces is
-// enforced here too — the digest, the exact length, the content type, the
-// write-once, and the bucket having to exist before anything can be stored —
-// because a twin that accepts what MinIO refuses turns a handler leg into
-// evidence about nothing. What it deliberately does NOT do is sign: its URLs
-// are unroutable by construction, and the leg that a signature is right is the
-// integration one and can only be the integration one (DEC-16 draws exactly
-// this line).
-//
-// The URLs it hands back still carry X-Amz-SignedHeaders and X-Amz-Expires,
-// because the two legs that read those — the header-map honesty leg and the
-// audience-lifetime leg — are about this package's own bookkeeping rather than
-// about SigV4, and they are worth having at both seams.
 type Memory struct {
 	mu      sync.Mutex
 	made    bool
 	objects map[string]Attributes
 
-	// TTL is exported so a test can set the two lifetimes to the values the
-	// deployment uses. It defaults to DEC-44's two minutes and DEC-84's
-	// fifteen, which are the numbers deploy/.env.example carries.
 	TTL map[Audience]time.Duration
 }
 
 var _ Store = (*Memory)(nil)
 
-// NewMemory answers an empty twin with NO bucket, which is the state DEC-98 is
-// about: a fresh MinIO has none either, and a handler test that never calls
-// EnsureBucket should fail the way production would.
+// NewMemory answers an empty twin with no bucket, which is the state is
+// about.
 func NewMemory() *Memory {
 	return &Memory{
 		objects: map[string]Attributes{},
@@ -82,12 +64,6 @@ func (m *Memory) PresignGet(_ context.Context, key Key, aud Audience) (string, e
 	if aud != Private && aud != Public {
 		return "", fmt.Errorf("media: %d is not an audience", aud)
 	}
-	// THE DISPOSITION IS ON THE TWIN'S URLs TOO (DEC-51). It is inside the
-	// real signature, so a holder cannot strip it — measured: deleting the
-	// query parameter answers 403 SignatureDoesNotMatch. A twin whose read
-	// URLs did not carry it would let a handler leg about "every presigned
-	// GET is marked as a download" pass against a handler that stopped asking
-	// for one, which is the vacuous shape this package's whole design refuses.
 	return m.fake("GET", path, m.lifetime(aud), nil,
 		"response-content-disposition", "attachment"), nil
 }
@@ -110,12 +86,7 @@ func (m *Memory) Stat(_ context.Context, key Key) (Attributes, error) {
 }
 
 // Put is what an upload through one of this twin's URLs would do, and it
-// applies the same four refusals the signature makes real MinIO apply. It is
-// how a handler leg says "the client's upload landed" without a bucket.
-//
-// The error strings carry the S3 CODE the real server answers, because that is
-// what the integration legs assert on and a twin that invented its own
-// vocabulary would make the two tiers untranslatable.
+// applies the same four refusals the signature makes real MinIO apply.
 func (m *Memory) Put(key Key, up Upload, body []byte) error {
 	if err := checkUpload(key, up); err != nil {
 		return err
@@ -160,9 +131,8 @@ func (m *Memory) lifetime(aud Audience) time.Duration {
 	return 0
 }
 
-// fake builds an unroutable URL carrying the two query parameters the legs
-// read. `memory.invalid` is a reserved TLD (RFC 2606), so a test that
-// accidentally fetches one gets a DNS failure rather than somebody's server.
+// fake builds an unroutable URL carrying's two query parameters the legs
+// read.
 func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string]string, extra ...string) string {
 	q := url.Values{}
 	q.Set("X-Amz-Expires", strconv.FormatInt(int64(ttl/time.Second), 10))
@@ -181,21 +151,8 @@ func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string
 	return "https://memory.invalid/" + path + "?" + q.Encode()
 }
 
-// PutWithoutChecksum is what an upload through one of the two BANNED presign
-// calls leaves behind: the right bytes at the right address, with NO checksum
-// recorded against them.
-//
-// IT IS A TEST SEAM AND IT IS THE ONLY REASON THE BAN IS A RUNTIME GUARD RATHER
-// THAN AN AST WALK (DEC-88). `StatObject` with `Checksum: true` answers the
-// digest the BUCKET stored, and both banned calls sign `host` and nothing else,
-// so an object uploaded through either carries an EMPTY checksum — measured
-// against MinIO. Without a way to produce that state, the commit path's
-// non-empty-and-matching check is a branch no leg can reach, and the emptiness
-// this package's Attributes.SHA256 comment calls "load-bearing" is a claim
-// nothing checks.
-//
-// It deliberately skips the write-once and the digest refusals as well, because
-// a `host`-only signature enforces neither — that IS the finding.
+// PutWithoutChecksum is what an upload through one of's two BANNED presign
+// calls leaves behind.
 func (m *Memory) PutWithoutChecksum(key Key, up Upload, body []byte) error {
 	path, _, err := Address(key.Traveller, key.Object)
 	if err != nil {

@@ -1,25 +1,4 @@
 // What the runtime image DOES, measured by running something inside it.
-//
-// dockerfile_test.go proves the Dockerfile's lines survived the build. These
-// legs prove the result works, which is a different claim: a CA bundle can be
-// present and unreadable, a USER can be numeric and unable to execute the
-// binary, and a timezone database can be embedded in a binary that never asks
-// for one.
-//
-// THE PROBE IS THE MECHANISM, and it exists because `scratch` cannot be
-// inspected from the inside: no shell, no ls, nothing to exec but /api itself,
-// and /api takes no argument that would report any of this. So a tiny Go
-// program is cross-compiled for the daemon's platform, layered onto THE IMAGE
-// UNDER TEST with a two-line Dockerfile, and run. It inherits that image's
-// filesystem and its USER, so what it reports is a fact about the real image
-// and not about a lookalike.
-//
-// The probe is a string constant rather than a package under test/, on
-// purpose. `go build ./...` — the literal first command of `make check` —
-// writes the executable of a single main package into the current directory,
-// which is why CLAUDE.md has a paragraph about ./api being git-ignored. A
-// SECOND main package in the module would put a second binary there every time
-// anybody ran the gate.
 package image_test
 
 import (
@@ -32,8 +11,7 @@ import (
 )
 
 // probeSource is compiled twice: once as written, and once with TZIMPORT
-// replaced by the blank import. The pair is the negative control for the
-// timezone claim — see TestScratchWithoutEmbeddedTzdataCannotResolveAZone.
+// replaced by the blank import.
 const probeSource = `package main
 
 import (
@@ -116,15 +94,6 @@ var (
 )
 
 // probeImage builds (once) the probe images layered on the image under test.
-//
-// The only difference between the two binaries is the `_ "time/tzdata"` line
-// cmd/api/main.go carries, written into the probe's source verbatim.
-//
-// GOOS/GOARCH ARE THE WHOLE REASON THE DAEMON'S ARCHITECTURE IS READ FIRST: the
-// host is darwin/arm64 and the container is linux/arm64, and a probe built for
-// the host produces "exec /probe: exec format error" — measured, on the first
-// run. CGO_ENABLED=0 is set for the same reason the root Dockerfile sets it:
-// scratch has no libc.
 func probeImage(t *testing.T, embedTzdata bool) string {
 	t.Helper()
 	base := image(t)
@@ -208,9 +177,7 @@ func runProbe(t *testing.T, embedTzdata bool, args ...string) probeReport {
 }
 
 // TestTheContainerProcessRunsAsTheNumericUser is the RUNNING half of the USER
-// claim. `docker image inspect` proves the Dockerfile said 65532:65532; this
-// proves the kernel gave the process that uid, which is what would fail if the
-// value were a name scratch cannot resolve.
+// claim.
 func TestTheContainerProcessRunsAsTheNumericUser(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, true)
@@ -231,16 +198,7 @@ func TestTheContainerProcessRunsAsTheNumericUser(t *testing.T) {
 }
 
 // TestTheShippedBinaryIsReadableByTheUserItRunsAs opens /api from inside the
-// image, as 65532, and it is the ONLY leg in this tier that can see a
-// permission defect on the binary.
-//
-// That is not the arrangement this file started with. The stack coming up was
-// supposed to be the executable half, and a `COPY --chmod=700` mutation left
-// that leg green: runc execve's the entrypoint while it still holds
-// CAP_DAC_OVERRIDE from the default capability set, and the caps vanish in the
-// execve because a non-root euid inherits none. This probe runs AFTER that
-// point, which is why its open() reports `permission denied` on the same
-// image that boots fine. The full measurement is in stack_test.go.
+// image, as 65532.
 func TestTheShippedBinaryIsReadableByTheUserItRunsAs(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, true)
@@ -254,17 +212,7 @@ func TestTheShippedBinaryIsReadableByTheUserItRunsAs(t *testing.T) {
 }
 
 // TestScratchWithoutEmbeddedTzdataCannotResolveAZone is the measurement
-// VS1-BACKFILL could not make. It compiled a program with and without
-// `_ "time/tzdata"` ON MACOS and got four identical answers, because
-// /usr/share/zoneinfo and /var/db/timezone/zoneinfo both exist there and the
-// embedded database is consulted only after every filesystem source fails. It
-// recorded a test_strategy of "none" for exactly that reason.
-//
-// Inside `scratch` the filesystem sources are gone, so the same experiment
-// finally separates. This leg is the NEGATIVE half: a binary without the
-// import cannot load Asia/Tokyo in this image. If it ever passes silently —
-// because a base image gained zoneinfo — the import stops being load-bearing
-// and the next leg stops proving anything, so this one is not decoration.
+// -BACKFILL could not make.
 func TestScratchWithoutEmbeddedTzdataCannotResolveAZone(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, false)
@@ -283,8 +231,6 @@ func TestScratchWithoutEmbeddedTzdataCannotResolveAZone(t *testing.T) {
 
 // TestEmbeddedTzdataResolvesInsideScratch is the positive half: the same
 // program, in the same image, with the one import cmd/api/main.go carries.
-// Measured together with the leg above, this is the whole of the tzdata claim
-// — the image has no zone files, and the embedded database is what answers.
 func TestEmbeddedTzdataResolvesInsideScratch(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, true)
@@ -294,12 +240,8 @@ func TestEmbeddedTzdataResolvesInsideScratch(t *testing.T) {
 	}
 }
 
-// TestTheCABundleGivesTheContainerARealRootStore is the FUNCTIONAL half of the
-// CA claim. x509.SystemCertPool is what crypto/tls consults, and on Linux it
-// reads exactly the path the Dockerfile copies — so an empty pool here is the
-// shape of every outbound TLS dial failing with "unknown authority".
-//
-// Measured on this image: 150 roots. The floor is 100.
+// TestTheCABundleGivesTheContainerARealRootStore is the FUNCTIONAL half of
+// the CA claim.
 func TestTheCABundleGivesTheContainerARealRootStore(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, true)
@@ -315,13 +257,7 @@ func TestTheCABundleGivesTheContainerARealRootStore(t *testing.T) {
 }
 
 // TestOutboundTLSVerifiesAgainstTheCopiedBundle is the strongest form of the
-// CA claim — a real handshake, verified against the real roots — and it is
-// also the only leg here that needs the internet.
-//
-// The failure classification is the point: a dial that cannot resolve or
-// connect SKIPS, because that is a fact about the network. A dial that
-// connects and then fails to VERIFY is a hard failure, because that is the
-// defect this leg exists for.
+// CA claim.
 func TestOutboundTLSVerifiesAgainstTheCopiedBundle(t *testing.T) {
 	requireDocker(t)
 	r := runProbe(t, true, "proxy.golang.org:443")

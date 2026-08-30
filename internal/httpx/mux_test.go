@@ -9,9 +9,7 @@ import (
 	"travellog/internal/httpx"
 )
 
-// muxUnderTest is one route, so every other request is either a path the mux
-// does not know or a method it does not accept — the two responses net/http
-// writes for itself.
+// muxUnderTest is one route.
 func muxUnderTest() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/logbook", func(w http.ResponseWriter, r *http.Request) {
@@ -27,9 +25,6 @@ func TestAnUnknownPathAnswersTheEnvelopeAndNotPlainText(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	// The WORD changed at DEC-103 and the envelope did not; what this leg is
-	// about is the envelope. See TestARouteThisBuildDoesNotHaveSaysSoRatherThanSayingNotFound
-	// for why the word is no longer `not_found`.
 	if got, want := rec.Body.String(), `{"code":"unsupported_route"}`; got != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}
@@ -39,8 +34,6 @@ func TestAnUnknownPathAnswersTheEnvelopeAndNotPlainText(t *testing.T) {
 }
 
 // The 405 net/http writes for a path it knows under a method it does not.
-// THE STATUS IS KEPT AND THE Allow HEADER WITH IT — see MuxErrors for why the
-// status is the stdlib's fact and the code is the vocabulary's nearest word.
 func TestAKnownPathUnderTheWrongMethodAnswersTheEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	muxUnderTest().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/logbook", nil))
@@ -59,8 +52,7 @@ func TestAKnownPathUnderTheWrongMethodAnswersTheEnvelope(t *testing.T) {
 	}
 }
 
-// The measured strings, asserted as absences. Without them the leg above
-// passes against a wrapper that APPENDS the envelope to the plain text.
+// The measured strings, asserted as absences.
 func TestTheStdlibsOwnPlainTextNeverReachesTheClient(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path, plain string
@@ -86,19 +78,8 @@ func TestTheStdlibsOwnPlainTextNeverReachesTheClient(t *testing.T) {
 	}
 }
 
-// A 404 a HANDLER wrote is already the envelope and may carry DEC-12's one
-// additive key, so the wrapper must leave it alone. THE `field` IS WHAT MAKES
-// THIS LEG ABLE TO FAIL: a wrapper that rewrites every 404 regardless of
-// Content-Type produces `{"code":"not_found"}`, which is byte-identical to
-// what WriteError writes and invisible to a leg that used one.
-//
-// AND IT IS THE OTHER HALF OF DEC-103. `bodyUnsupportedRoute` is written only
-// when `stdlibWroteIt` is true — 404-or-405 with a NON-JSON Content-Type,
-// which is only when net/http answered because no pattern matched — so "the
-// mux answered" already means "this build does not have that route". A route
-// this build HAS, answering about an id it does not hold, is the one case
-// where `not_found` is the right word, and it is the case the client's
-// NotFoundScreen exists for.
+// A 404 a HANDLER wrote is already the envelope and may carry's one additive
+// key, so the wrapper must leave it alone.
 func TestAHandlersOwn404IsNotRewritten(t *testing.T) {
 	const written = `{"code":"not_found","field":"tripId"}`
 
@@ -132,24 +113,8 @@ func TestAnOrdinarySuccessIsUntouched(t *testing.T) {
 	}
 }
 
-// === DEC-103: the mux answering is not the same thing as the trip being gone ===
-
-// MEASURED against a server at R1 entry state, and reproduced from outside the
-// test binary before this changed: `DELETE /v1/trips/{id}` -> `405
-// {"code":"not_found"}`, `PATCH /v1/me` -> `404 {"code":"not_found"}`, `PUT
-// /v1/places/x` -> `404 {"code":"not_found"}`. Every route this plan has not
-// built yet answered `not_found` — THE SAME WORD the vocabulary uses for "that
-// trip is not in your log".
-//
-// TWO CONSEQUENCES AND THE SECOND IS THE BAD ONE. A client build ahead of the
-// server tells the user their trip, place, photograph or walk is GONE, on
-// eighteen routes, and `NotFoundScreen` says exactly that — verified on
-// `wipe/mock-data`, not_found_screen.dart:84 renders "That $what is not in your
-// log". And `deletePhoto`, `removePlace` and `deleteTrip` all treat an unknown
-// id as SUCCESS by decision (logbook.dart:119, :156, :201 each return
-// `Future<bool>.value(true)`), so the obvious network mapping of that rule
-// makes a delete against an undeployed route REPORT SUCCESS, DELETE NOTHING,
-// and advance the client's cache.
+// MEASURED against a server at R1 entry state, and reproduced from outside
+// the test binary before this changed.
 func TestARouteThisBuildDoesNotHaveSaysSoRatherThanSayingNotFound(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
@@ -180,10 +145,7 @@ func TestARouteThisBuildDoesNotHaveSaysSoRatherThanSayingNotFound(t *testing.T) 
 	}
 }
 
-// THE 405 KEEPS ITS STATUS AND ITS Allow HEADER. mux.go's recorded decision
-// stands: the status is the stdlib's FACT about the request, and `Allow` is
-// information a 404 would throw away. What changed is the word in the body, so
-// the status and the code stop contradicting each other.
+// the 405 keeps its status and its Allow HEADER.
 func TestThe405KeepsItsStatusAndItsAllowHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	muxUnderTest().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/logbook", nil))

@@ -1,19 +1,4 @@
-// The logbook store against a real PostgreSQL. Test-first.
-//
-// This file needs a database and SKIPS, saying so, when there is none.
-//
-// WHAT ONLY THIS FILE CAN SAY, and it is why the handler tests run against a
-// fake instead of duplicating it:
-//
-//  1. THE ORDERED LIST SURVIVES STORAGE. cityIds is an ordered array on the
-//     wire and a join table underneath (DEC-64), so the only thing standing
-//     between "Kyoto then Seoul" and "Seoul then Kyoto" is `ORDER BY ordinal`
-//     — and natural order agrees with it until the day a row is rewritten.
-//  2. THE SHARING FIELDS SURVIVE A WRITE THAT DOES NOT NAME THEM (SF6).
-//  3. THE 304 PATH READS NOTHING BUT travellers. Proven by dropping the five
-//     entity tables and watching the refused read still succeed.
-//  4. THE DATE COLUMNS COME BACK AS MIDNIGHT UTC. A `date` scanned wrong is a
-//     day out, which no shape assertion can see.
+// The logbook store against a real PostgreSQL.
 package postgres
 
 import (
@@ -63,14 +48,6 @@ func aCity(t *testing.T, db *sql.DB, travellerID, id, name string) {
 }
 
 // aMediaObject is a COMMITTED object, and `uploaded_at` is what makes it one.
-//
-// IT USED TO LEAVE uploaded_at NULL, and every leg that referenced it passed
-// because the cover check was a bare existence check. R3 made it a COMMITTED
-// check — the four foreign keys guarantee the row exists and say nothing about
-// uploaded_at, because an FK cannot see a column it does not reference — so a
-// helper that begins and never uploads is a helper whose objects no route may
-// reference. `aBegunMediaObject` below is the uncommitted one, and it has its
-// own callers.
 func aMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
@@ -81,7 +58,7 @@ func aMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
 }
 
 // aBegunMediaObject is the other half: a row that exists and whose bytes have
-// not landed. It is what "begun and never uploaded" looks like on disk.
+// not landed.
 func aBegunMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
 	t.Helper()
 	if _, err := db.ExecContext(context.Background(),
@@ -93,10 +70,7 @@ func aBegunMediaObject(t *testing.T, db *sql.DB, travellerID, id string) {
 
 const anAsset = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// day, text and ptr are DEC-89's pointer contract at the call site. `day` and
-// `text` answer a POINTER TO A POINTER because their fields are nullable: the
-// outer one says the key was in the body, the inner one carries the value. A
-// leg that wants "sent, and sent as null" writes `ptr[*logbook.Instant](nil)`.
+// day, text and ptr are the pointer contract at the call site.
 func day(t *testing.T, s string) **logbook.Instant {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, s)
@@ -118,17 +92,10 @@ func ptr[T any](v T) *T { return &v }
 func always(int64) bool { return true }
 func never(int64) bool  { return false }
 
-// THE ONE LEG IN VS7 NO MUTATION REDDENED, ARGUED RATHER THAN LEFT UNSAID.
-// It is a compile-time assertion: the way it fails is `LogbookStore does not
-// implement logbook.Store`, which is exit 1 out of the build rather than a
-// wrong answer from a test. VS6 recorded four of these and settled that it is
-// the right red for a claim about types — an interface and its only
-// implementation drifting apart is not a behaviour anything can observe.
+// the one leg in no mutation reddened, argued rather than left unsaid.
 func TestLogbookStoreIsTheStoreTheDomainDeclared(t *testing.T) {
 	var _ logbook.Store = LogbookStore{}
 }
-
-// === the read ===
 
 func TestAFreshTravellersLogIsEmptyAtVersionZero(t *testing.T) {
 	store, db, _ := logbookStore(t)
@@ -164,15 +131,7 @@ func TestAnUnknownTravellerAnswersTheDomainsOwnSentinel(t *testing.T) {
 	}
 }
 
-// THE 304 LEG, AND IT IS DECISIVE RATHER THAN COUNTED. DEC-31 says a 304
-// costs one indexed row read; a document built and then thrown away saves
-// bandwidth and no server work at all, which is half the point.
-//
-// The five entity tables are DROPPED and the read is then asked to refuse.
-// pg_stat_all_tables was the first attempt and is the wrong instrument — its
-// counters are collected asynchronously and cached per transaction, so the leg
-// would have been a flake pretending to be a measurement. A table that is not
-// there cannot be read from by accident.
+// the 304 leg, and it is decisive rather than counted.
 func TestA304ReadTouchesNoTableButTravellers(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -195,8 +154,6 @@ func TestA304ReadTouchesNoTableButTravellers(t *testing.T) {
 		t.Errorf("version = %d, want 0", snap.Version)
 	}
 
-	// The control. Without it the leg above is satisfied by a Read that never
-	// touches those tables at all, which would also break the 200.
 	if _, err := store.Read(ctx, id, always); err == nil {
 		t.Errorf("an ASSEMBLING read succeeded with no trips table, so the leg above " +
 			"proves nothing about which queries the 304 skipped")
@@ -210,9 +167,6 @@ func TestAnAssembledReadCarriesTheOrderedCityIDs(t *testing.T) {
 		aCity(t, db, id, city, strings.ToUpper(city))
 	}
 
-	// Deliberately NOT alphabetical, and deliberately not the insertion order
-	// of the cities either: natural order agrees with ordinal until it does
-	// not, and this is the arrangement where the two disagree.
 	want := []string{"seoul", "kyoto", "matsumoto"}
 	if _, _, err := store.PutTrip(context.Background(), id, logbook.TripWrite{
 		ID: ptr("autumn-crossing"), Name: ptr("Autumn crossing"), CityIDs: ptr(want),
@@ -282,16 +236,7 @@ func TestTheDateColumnsComeBackAsMidnightUTC(t *testing.T) {
 	}
 }
 
-// === the write ===
-
-// THIS LEG CHANGED ITS MIND AT R1 AND THAT IS THE INTERESTING HALF. It used
-// to be named …ReplacesWholeState and to assert `summary == nil` after a body
-// that omitted it, with the reason "a whole-state upsert clears what the body
-// omits". DEC-89 reverses exactly that sentence: what the body omits is left
-// alone. So the leg now asserts the two halves separately — a field that WAS
-// sent is written, and a field that was NOT sent survives — because a leg that
-// only checked the first would go green against a statement that writes every
-// column, which is the defect.
+// this leg changed its mind at R1 and that is the interesting half.
 func TestPutTripWritesWhatWasSentAndLeavesTheRestAlone(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -331,13 +276,7 @@ func TestPutTripWritesWhatWasSentAndLeavesTheRestAlone(t *testing.T) {
 	}
 }
 
-// AND THE OTHER HALF OF THE POINTER CONTRACT: sent-as-null still clears. It is
-// reachable from Go and not from the wire — encoding/json collapses an
-// explicit `null` onto absent for a `**T` field, measured and written out at
-// logbook.TripWrite — so this leg is what keeps the store's own branch honest
-// while no client can reach it. Delete the CASE WHEN's `sent` flag and the
-// leg above reddens; write every column unconditionally and this one stays
-// green, which is why both exist.
+// The other half of the pointer contract: sent-as-null still clears.
 func TestASentNullClearsTheFieldItNames(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -371,10 +310,8 @@ func TestASentNullClearsTheFieldItNames(t *testing.T) {
 	}
 }
 
-// SF6, AND IT IS THE ACCEPTANCE CHECK: a PUT body carrying shareCoordinates
-// leaves the stored flag unchanged. The body cannot even express it, so what
-// this leg really proves is that the UPDATE does not name the three columns
-// and reset them to their defaults.
+// SF6, and it is the acceptance check: a PUT body carrying shareCoordinates
+// leaves the stored flag unchanged.
 func TestPutTripNeverTouchesTheSharingFields(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -389,9 +326,6 @@ func TestPutTripNeverTouchesTheSharingFields(t *testing.T) {
 		t.Fatalf("setting the sharing flags: %v", err)
 	}
 
-	// The body a client sends when it means to rename the trip. It carries
-	// `shareCoordinates: true` as the acceptance check asks; DEC-13 keeps
-	// unknown fields tolerated, so it decodes and is not heard.
 	var body logbook.TripWrite
 	if err := json.Unmarshal([]byte(
 		`{"id":"kyoto","name":"Kyoto again","shareCoordinates":true}`), &body); err != nil {
@@ -434,13 +368,7 @@ func TestPutTripRefusesACityTheTravellerDoesNotHold(t *testing.T) {
 	}
 }
 
-// TWO WAYS FOR A COVER TO BE WRONG, AND THE ROUTE ANSWERS BOTH THE SAME WAY.
-//
-// The object nobody ever began is refused by the foreign key as well; the
-// object begun and never uploaded is refused ONLY here, because an FK cannot
-// see a column it does not reference. Both reach the client as
-// `422 invalid_field` on `coverAsset`, which is the point of the Go check —
-// the FK's own answer is a 500 with no field on it.
+// two ways for A cover to be wrong, and the route answers both the same way.
 func TestPutTripRefusesACoverThatWasNeverUploaded(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -486,10 +414,7 @@ func TestPutTripAcceptsACoverThatHasBeenUploaded(t *testing.T) {
 	}
 }
 
-// A REORDER IS THE CASE THE MANDATED WRITE STRATEGY EXISTS FOR. The schema's
-// own comment records the measurement: `trip_cities_ordinal_uq` is
-// non-deferrable, so UPDATE-in-place collides row by row even when the final
-// state is unique, and delete-then-insert does not.
+// A reorder is the case the mandated write strategy exists for.
 func TestReorderingTheCitiesOfATripDoesNotCollide(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -556,21 +481,7 @@ func TestPutTripForAnUnknownTravellerAnswersTheDomainsSentinel(t *testing.T) {
 	}
 }
 
-// === DEC-89: absent means leave alone ===
-
-// THE SHIPPED DEFECT, REPRODUCED. Executed by the safety lens against a real
-// build of HEAD 89fc93f, and re-executed here before anything was changed:
-// PUT /v1/trips/autumn-crossing with three cities and both dates -> 200 and
-// trip_cities reads kyoto:0 / osaka:1 / seoul:2; then a body of {id, name} —
-// which is EXACTLY what T4's pencil sends, because renameTrip owns the name
-// and nothing else — answers 200 with "cityIds": [], "start": null,
-// "end": null and SELECT count(*) FROM trip_cities -> 0.
-//
-// THE BODY IN THIS LEG IS THE BODY THE CLIENT SENDS. A synthesised whole
-// entity cannot fail this way, which is why every leg written against one has
-// been green since the route shipped — TestPutTripCreatesAndThenReplacesWholeState
-// names every field it means to replace, and so proves the replacement rather
-// than the absence.
+// the shipped defect, reproduced.
 func TestRenamingATripLeavesItsItineraryAndItsDatesAlone(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -589,7 +500,6 @@ func TestRenamingATripLeavesItsItineraryAndItsDatesAlone(t *testing.T) {
 		t.Fatalf("PutTrip: %v", err)
 	}
 
-	// T4's pencil. Two keys. Nothing else is in the body at all.
 	got, _, err := store.PutTrip(ctx, id, logbook.TripWrite{
 		ID:   ptr("autumn-crossing"),
 		Name: ptr("Autumn crossing, renamed"),
@@ -630,21 +540,8 @@ func countTripCities(t *testing.T, db *sql.DB, travellerID, tripID string) int {
 	return n
 }
 
-// THE ASSERTION THE THREE STANDING GUARDS CANNOT MAKE: a count that must not
-// fall (DEC-89).
-//
-// The safety lens measured that a caption-only PUT which unfiles a photograph
-// passes ALL THREE of the plan's current guards green — the dangling check
-// sees no dangling reference, the place-without-occasion check sees no place,
-// and the pair-agreement check sees a pair that agrees. Every one of them
-// asks whether the log is COHERENT; none asks whether it is still the same
-// log. `count(*) WHERE place_id IS NOT NULL` is the one that does, and it is
-// unchanged across every route R6 and R7 will write except `refile` (raises
-// it) and the D1/D2-delete branches (lower it by an amount the sheet states).
-//
-// IT IS HERE, ON THE TRIP ROUTE, BECAUSE THE TRIP ROUTE IS THE ONE THAT
-// SHIPPED. Deleting a trip cascades to its photographs, so a write that
-// touched trips at all could move this number; a rename must not.
+// the assertion's three standing guards cannot make: a count that must not
+// fall.
 func filedPhotographs(t *testing.T, db *sql.DB, travellerID string) int {
 	t.Helper()
 	var n int
@@ -724,9 +621,6 @@ func aFiledPhoto(t *testing.T, db *sql.DB, travellerID, id, tripID, cityID, plac
 	}
 }
 
-// The two refusals DEC-89 makes reachable, and both are 422s naming a field
-// rather than the 500s a constraint would have produced.
-
 func TestACreateWithNoNameNamesTheFieldRatherThanViolatingNotNull(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -745,12 +639,8 @@ func TestACreateWithNoNameNamesTheFieldRatherThanViolatingNotNull(t *testing.T) 
 	}
 }
 
-// A PARTIAL DATE WRITE IS ONLY HALF VISIBLE TO ValidateTrip, and this is the
-// other half. The body carries one date and the database holds the other, so
-// nothing outside the transaction can compare them — and
-// trips_dates_ordered_ck would answer with SQLSTATE 23514, which reaches the
-// client as a 500 with no field on it. New under DEC-89: a whole-state upsert
-// always carried both dates, so this shape did not exist.
+// A partial date write is only half visible to ValidateTrip, and this is the
+// other half.
 func TestAPartialDateWriteThatWouldInvertTheOrderNamesTheField(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -789,29 +679,7 @@ func TestAPartialDateWriteThatWouldInvertTheOrderNamesTheField(t *testing.T) {
 	}
 }
 
-// === DEC-91: the emitted trip says whether it is shared ===
-
-// DEC-32's write response is a whole Trip the phone SPLICES into its cached
-// log. With DEC-85 hashing tokens at rest that Trip carries `shareLinkId:
-// null`, and THE CLIENT HOLDS THE ONLY COPY — it minted the token. So an
-// ordinary rename overwrites it, and H1 then renders no URL and puts BOTH
-// controls out of reach: verified on `wipe/mock-data`, 'Copy link' is
-// `onPressed: url == null || _busy ? null : () => _copy(url)`
-// (share_sheet_screen.dart:224) and 'Stop sharing' is
-// `onPressed: !trip.isShared || _busy ? null : _stop` (line 228), with
-// `Trip.isShared => shareLinkId != null` (trip.dart:102). Meanwhile the row in
-// share_links is un-revoked and `GET /l/{token}` still serves it. The user
-// loses the capability AND the only control that revokes it, from an action
-// that has nothing to do with sharing.
-//
-// `Trip.withName`'s own doc states the invariant verbatim (trip.dart:185-187):
-// "A live link belongs to the trip and not to its name — renaming a trip you
-// have shared must not quietly kill the URL somebody is holding."
-//
-// THE PLAN'S EXISTING GUARD IS BLIND TO IT: "the write's answer spliced into
-// the cached document decodes equal to the next whole read" — and the next
-// whole read is null too. THIS LEG USES A TRIP THAT HAS A LIVE LINK. That is
-// the difference, and it is why the leg it replaces passed.
+// The write response is a whole Trip the phone SPLICES into its cached log.
 func TestARenamedTripStillReportsThatItIsShared(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -851,8 +719,7 @@ func TestARenamedTripStillReportsThatItIsShared(t *testing.T) {
 }
 
 // The whole-log read has to agree with the write's answer, or the splice and
-// the next fetch disagree about the same trip — which is exactly the shape of
-// bug the ETag makes permanent.
+// the next fetch disagree about the same trip.
 func TestTheWholeLogAgreesWithTheWriteAboutSharing(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -866,9 +733,6 @@ func TestTheWholeLogAgreesWithTheWriteAboutSharing(t *testing.T) {
 		}
 	}
 	aLiveShareLink(t, db, id, "shared-one", "token-live")
-	// A REVOKED link on the private one, which is the case a naive EXISTS
-	// without `revoked_at IS NULL` gets wrong — and it is the ordinary state,
-	// because DEC-67 revokes and keeps rather than deleting.
 	aRevokedShareLink(t, db, id, "private-one", "token-dead")
 
 	snap, err := store.Read(ctx, id, always)
@@ -885,10 +749,7 @@ func TestTheWholeLogAgreesWithTheWriteAboutSharing(t *testing.T) {
 	}
 }
 
-// AND IT LEAKS NO CAPABILITY. `shared` is a boolean derived from the row's
-// existence; the token itself never reaches the emitter. The leg is here
-// because "derive a flag from share_links" and "emit share_links" are one
-// keystroke apart.
+// It leaks no capability.
 func TestTheSharedFlagCarriesNoToken(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -954,26 +815,8 @@ func revokeShareLink(t *testing.T, db *sql.DB, travellerID, tripID string) {
 	}
 }
 
-// === DEC-102: a NULL date is a driver error, not a year-1 date ===
-
 // `v.At`, `p.TakenAt` and `w.RecordedOn` were read out of `sql.NullTime` with
-// `.Valid` NEVER CHECKED. Correct today because all three columns are NOT
-// NULL — but the constraint was doing 100% of the work, and the same file is
-// careful with `instantOrNil` and with `if lat.Valid && lng.Valid`, so the
-// asymmetry read as an oversight rather than as a decision.
-//
-// WHAT A NULL PRODUCED IS THE POINT. `sql.NullTime`'s zero value is
-// `0001-01-01T00:00:00Z`, which the emitter renders as
-// `0001-01-01T00:00:00.000Z` — and `DateTime.parse` accepts that happily, so
-// every screen renders a year-1 date and nothing anywhere reports a fault.
-// Scanned into `time.Time` the driver errors instead, which is the honest
-// answer to a column that has lost its constraint.
-//
-// IT IS WRITTEN AS A MUTATION-SHAPED LEG because there is no way to reach the
-// branch through the real schema: the leg DROPS the NOT NULL in its own
-// scratch schema, inserts a NULL, and asserts the READ errors. That is a claim
-// about the scan and not about the schema, which is why the schema is bent
-// rather than the Go.
+// `.Valid` never CHECKED.
 func TestANullDateColumnIsADriverErrorAndNotAYearOneDate(t *testing.T) {
 	for _, tc := range []struct{ table, column, what string }{
 		{"visits", "at", "a visit's date, which is the day its photographs were taken"},
@@ -1011,8 +854,7 @@ func TestANullDateColumnIsADriverErrorAndNotAYearOneDate(t *testing.T) {
 	}
 }
 
-// AND THE CONTROL. The same fixture with the constraint intact reads fine, so
-// the leg above is about the NULL and not about the ALTER.
+// The control.
 func TestTheSameFixtureReadsCleanlyWithTheConstraintIntact(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -1045,9 +887,6 @@ func insertWithNullDate(t *testing.T, db *sql.DB, travellerID, table string) {
 		statement = `INSERT INTO photos (traveller_id, id, trip_id, city_id, taken_at, asset)
 			VALUES ($1::uuid, 'photo-null', 'autumn-crossing', 'kyoto', NULL, '` + anAsset + `')`
 	case "walks":
-		// THE TRACK IS NOT `[]` SINCE 0003 (walks_points_present_ck, PD-21).
-		// This leg is about a NULL DATE, and an empty array would make it fail
-		// on the track instead — a red for the wrong reason.
 		statement = `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
 			VALUES ($1::uuid, 'walk-null', 'autumn-crossing', 'kyoto', NULL, 1.2,
 			        '[{"lat":35.0,"lng":135.0}]'::jsonb)`
@@ -1077,34 +916,12 @@ func insertDatedRow(t *testing.T, db *sql.DB, travellerID, table string) {
 	}
 }
 
-// ------------------------------------------------------- D3: the trip cascade
-
-// THE SHAPE THE CLIENT'S OWN HISTORY SAYS WENT WRONG, AND THE FIXTURE CANNOT
-// EXPRESS IT.
-//
-// "Deleting a trip left twenty-two of ANOTHER trip's photographs naming a
-// visit that had gone — no count moved and the log was corrupt." In the
-// client's captured document no photograph of another trip names an
-// autumn-crossing visit (measured at this working tree: 0), so the
-// fixture-scale legs in internal/seed cannot reach this branch at all. It is
-// built here instead, which is the same arrangement `to_file_test.dart` uses
-// in the client for the window filter its sample log no longer exercises.
-//
-// WHAT MUST HAPPEN: `visit_id` is cleared and NOTHING ELSE ON THE ROW MOVES.
-// `photos_visit_fk … ON DELETE SET NULL (visit_id)` is what does it, and the
-// COLUMN LIST is what makes it executable — a composite FK's plain SET NULL
-// nulls traveller_id too, which is NOT NULL, and the delete aborts.
-//
-// AND THE PHOTOGRAPH ITSELF SURVIVES. That is the assertion a dangling-
-// reference check cannot make: deleting the photograph leaves nothing dangling
-// either.
+// the shape the client's own history says went wrong, and the fixture cannot
+// express it.
 func TestDeletingATripClearsAnotherTripsVisitReferenceAndNothingElse(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
 
-	// The fixture already holds it: `p-autumn` is filed on autumn-crossing and
-	// names `v-fushimi-may`, a visit of kyoto-in-may. Asserted rather than
-	// assumed, because this leg is worthless if it is not the shape.
 	var tripID, visitTrip string
 	if err := db.QueryRowContext(ctx, `
 		SELECT p.trip_id, v.trip_id FROM photos p JOIN visits v
@@ -1139,8 +956,6 @@ func TestDeletingATripClearsAnotherTripsVisitReferenceAndNothingElse(t *testing.
 			"    is what clears it, and the COLUMN LIST is what makes it executable.",
 			after.visitID)
 	}
-	// AND NOTHING ELSE MOVED. `place_id` in particular: the pin is still
-	// Fushimi Inari, and the sheet says nothing about another trip's filing.
 	if after.placeID != before.placeID {
 		t.Errorf("p-autumn's place_id went from %q to %q. Only visit_id is in the column "+
 			"list; clearing the pin as well is a photograph that has lost its place "+
@@ -1152,20 +967,8 @@ func TestDeletingATripClearsAnotherTripsVisitReferenceAndNothingElse(t *testing.
 	}
 }
 
-// A DELETE THAT REMOVES NOTHING MOVES NO VERSION, and that is the branch a
+// A delete that removes nothing moves no version, and that is the branch a
 // retried delete takes.
-//
-// The client treats an unknown id as success — "the caller asked for that trip
-// to be absent and it is" — and DEC-103 exists because deletes DO get retried,
-// against servers that answered 404 for a route they did not have. So the
-// second call has to be cheap in the one way the phone can feel: if it bumped
-// logbook_version, every retry would invalidate the whole cached document and
-// the next GET would carry the log back down the wire for nothing.
-//
-// IT IS ASSERTED AS A VERSION AND AS A DOCUMENT. The version is the falsifiable
-// half — `WithTravellerTx` takes the bump BEFORE the body runs, so the only way
-// not to move it is to let the body's error roll the transaction back, and an
-// implementation that "helpfully" ignores the miss moves it.
 func TestADeleteThatRemovesNothingIsSuccessAndMovesNoVersion(t *testing.T) {
 	db := seeded(t)
 	store := LogbookStore{DB: db}
@@ -1200,13 +1003,7 @@ func TestADeleteThatRemovesNothingIsSuccessAndMovesNoVersion(t *testing.T) {
 	}
 }
 
-// AND A TRIP OF ANOTHER TRAVELLER IS AN UNKNOWN TRIP, NOT A DELETE.
-//
-// Every statement in this file is scoped by traveller_id and the primary keys
-// are composite, so this cannot go wrong by accident — which is exactly why it
-// is worth one leg: the shape that WOULD go wrong is a `WHERE id = $1` that
-// somebody writes because the id looks unique, and the fixture has only ever
-// had one traveller for it to be right about.
+// A trip of another traveller is an unknown trip, not A DELETE.
 func TestOneTravellerCannotDeleteAnothersTrip(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -1250,20 +1047,7 @@ func photoRow(t *testing.T, db *sql.DB, id string) storedPhoto {
 	return out
 }
 
-// ---------------------------------------------------- U1's PENCIL: THE NAME
-
-// THE NAME LANDS, IT IS TRIMMED, AND THE VERSION MOVES.
-//
-// The version half is DEC-50's list: `traveller: {name}` is the sixth key of
-// the emitted document, so the traveller row is on the BUMPING side — a rename
-// that moved no version would leave every phone answering 304 to a log whose
-// owner has changed.
-//
-// The trim is the client's rule applied at the record: its sheet's gate is
-// `trim().isNotEmpty`, "so a name that passes the gate and then goes to disk
-// with its whitespace still on is the gate's string rather than the user's",
-// and a name arriving from anything that is not that sheet gets the same
-// treatment.
+// the name lands, it is trimmed, and the version moves.
 func TestSetTravellerNameWritesATrimmedNameAndMovesTheVersion(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -1293,15 +1077,7 @@ func TestSetTravellerNameWritesATrimmedNameAndMovesTheVersion(t *testing.T) {
 	}
 }
 
-// AN EMPTY NAME IS A NAMED FIELD AND NOT A CONSTRAINT VIOLATION.
-//
-// `travellers_name_present_ck` refuses `”` and would answer SQLSTATE 23514,
-// which reaches the client as a 500 with nothing to act on. The Go check is
-// what produces the 422 that names the field — DEC-58's precedent, both halves
-// kept, the check to say WHICH field and the constraint to be the guarantee.
-//
-// AND IT DOES NOT CLEAR THE NAME. The refusal has to be taken before the
-// UPDATE, not reported after it.
+// an empty name is a named field and not A constraint violation.
 func TestSetTravellerNameRefusesAnEmptyNameAndKeepsTheOldOne(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)
@@ -1340,10 +1116,8 @@ func TestSetTravellerNameRefusesAnEmptyNameAndKeepsTheOldOne(t *testing.T) {
 	}
 }
 
-// A NAME LONGER THAN THIS BUILD TAKES IS THE SAME KIND OF REFUSAL, and it is
-// the same ceiling a trip's name wears. Nothing in the schema bounds
-// `travellers.name` — it is `text` — so without this a one-megabyte name is
-// storable and then re-emitted on every read of the whole log, for ever.
+// A name longer than this build takes is the same kind of refusal, and it is
+// the same ceiling a trip's name wears.
 func TestSetTravellerNameRefusesANameLongerThanTheBuildTakes(t *testing.T) {
 	store, db, _ := logbookStore(t)
 	id := aTraveller(t, db)

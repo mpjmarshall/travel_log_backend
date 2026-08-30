@@ -1,10 +1,4 @@
-// The route table, asserted over the SLICE rather than over the mux (DEC-28).
-//
-// `http.ServeMux` has no exported enumeration of its registered patterns, so a
-// coverage check written against it is unimplementable and gets silently
-// downgraded to a grep. Everything here iterates Routes() and then asks the
-// mux about each row, which is a check that can fail for a reason about the
-// code.
+// The route table, asserted over the SLICE rather than over the mux.
 package httpapi
 
 import (
@@ -24,34 +18,6 @@ func tableOnAMux(t *testing.T) (*http.ServeMux, []Route) {
 
 func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	mux, routes := tableOnAMux(t)
-	// TWENTY-ONE AT R7, AND THE NUMBER IS A LITERAL ON PURPOSE. Deriving it
-	// from `len(Routes(...))` would make this line unfalsifiable — it would say
-	// "the table holds as many routes as the table holds". What it is for is
-	// that a route ARRIVING or LEAVING is a decision somebody made, and it
-	// should cost one line in a test rather than nothing at all. It was four
-	// at VS7; R3 added begin, commit and mint; R5 added six — D3's cascade,
-	// H1's three share writes, U1's pencil and the one revocation surface; R6
-	// added three; R7 adds five.
-	//
-	// R5's SIX WAS NOT SEVEN BECAUSE "REVOKE THEM ALL" IS A QUERY PARAMETER,
-	// AND R6's THREE IS NOT FOUR FOR THE SAME REASON: `?photos=keep|delete`
-	// rides on `DELETE /v1/places/{id}`. R7's FIVE IS NOT SIX BECAUSE N1's two
-	// walk controls are two fields of one body on one path — `setWalkName` and
-	// `dismissWalk` write two columns of one row, and DEC-89's contract is what
-	// tells them apart. There is deliberately no `DELETE /v1/walks/{id}`:
-	// 'Discard' is a flag, D2's sheet promises the track survives both
-	// branches, and nothing in this app authorises destroying a recording of a
-	// day — the same argument that leaves `DELETE /v1/cities/{id}` out of R6.
-	//
-	// R8 ADDS EXACTLY ONE AND IT IS THE LAST: `GET /l/{token}`, the only row
-	// in this table with no bearer token in front of it.
-	//
-	// TWENTY-TWO HERE AND TWENTY-THREE SHIPPED, AND THE DIFFERENCE IS NOT AN
-	// ERROR IN EITHER. The plan's route table holds 23 rows and the
-	// twenty-third is `GET /healthz`, which is cmd/api's and deliberately not
-	// in this table — a liveness probe is not part of the API. The two numbers
-	// are asserted in two places on purpose: this one, over the slice, and
-	// cmd/api's own leg over the mux the server serves.
 	if len(routes) != 22 {
 		t.Errorf("the table holds %d routes; R8's surface is twenty-two — two "+
 			"credential routes, one conditional read, one whole-state write, D3's "+
@@ -70,18 +36,8 @@ func TestEveryRouteInTheTableReachesTheMux(t *testing.T) {
 	}
 }
 
-// EVERY ROUTE IN THE TABLE IS RATE LIMITED. This leg replaces
-// TestOnlyTheUnauthenticatedRoutesAreRateLimited, which asserted the defect as
-// though it were the design: `Mount` applied the limiter and the authentication
-// as EITHER/OR, so `limited == !route.Auth` passed on a table in which every
-// authenticated route had no ceiling at all.
-//
-// The two budgets are different budgets — see TestTheTwoBudgetsAreNotOneBudget
-// below — so both ceilings are set low here and the claim is only that each
-// route has ONE.
+// every route in the table is rate limited.
 func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
-	// Three of each: register and sign-in spend two credential tokens getting
-	// the bearer, which leaves one for the loop to spend and then be refused.
 	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: 3, publicPerMin: 3})
 	token := bearer(t, h)
 
@@ -102,35 +58,8 @@ func TestEveryRouteInTheTableIsRateLimited(t *testing.T) {
 	}
 }
 
-// AND THEY ARE NOT ONE BUDGET — THREE OF THEM, SINCE R8. The credential
-// ceiling bounds an unauthenticated 64 MiB-per-attempt Argon2 surface and is
-// deliberately low; the authenticated one bounds a stolen token and has to be
-// high enough that no honest client meets it; and the public one bounds a
-// route with no identity at all and must not be either of the first two.
-//
-// This is the leg that fails if somebody "composes" by wrapping the
-// authenticated routes in the credential limiter — every route would have a
-// ceiling, TestEveryRouteInTheTableIsRateLimited would pass, and a phone
-// syncing a log would meet a limit built for a password guesser.
-//
-// AND IT IS THE LEG THAT FAILS IF R8's ROW INHERITS THE CREDENTIAL BUCKET,
-// which is what the old `Auth`-derived rule would have given it (PD-09): the
-// expectation below is now a function of `route.Limit` and not of `route.Auth`,
-// because those two stopped agreeing at this step. `GET /l/{token}` is
-// unauthenticated and is NOT a credential attempt.
+// They are not one budget — three of them, since R8.
 func TestTheThreeBudgetsAreThreeBudgets(t *testing.T) {
-	// THE TRAVELLER CEILING IS DERIVED FROM THE TABLE AND NOT A CONSTANT, and
-	// that is a correction R6 had to make rather than a preference. It was 60
-	// with a hard-coded `for range 6`, which is a ceiling this leg's OWN
-	// traffic outgrows the moment the table passes ten authenticated rows —
-	// and it did: at sixteen rows the loop spends 90 tokens against 60 and the
-	// last four routes are refused for a reason that has nothing to do with
-	// which budget they draw on. A leg that reddens when a route is ADDED is a
-	// leg somebody edits the number in; deriving it means the next step's
-	// routes cost nothing. THE PUBLIC CEILING IS DERIVED THE SAME WAY.
-	//
-	// THE CREDENTIAL CEILING STAYS A SMALL LITERAL, because being refused
-	// there is the assertion.
 	const tries = 6
 	ceiling := tries*len(Routes(Deps{})) + tries
 	h := newHarness(t, options{ratePerMin: 3, travellerPerMin: ceiling, publicPerMin: ceiling})
@@ -173,28 +102,10 @@ func TestEveryAuthenticatedRouteRefusesAMissingCredential(t *testing.T) {
 	}
 }
 
-// `TestMutatingAgreesWithTheMethod` WAS HERE AND IS DELETED WITH ITS FIELD
-// (OE-10), and the deletion is recorded rather than silent because R3 was the
-// step told to re-examine it.
-//
-// It asserted that a field equals a function of another field, over a field
-// nothing read — so the only mutation it could catch was somebody mistyping a
-// boolean in a row nobody consults. The trigger the deletion named has now
-// FIRED: `POST /v1/media/mint` is the POST that writes nothing, so
-// `Mutating == (Method != GET)` genuinely stops holding at this step. It still
-// does not bring the field back, because a field is real when something reads
-// it and not when it would be accurate. routes.go carries the long form.
-//
-// WHAT REPLACES IT IS A LEG ABOUT A FIELD THAT IS READ. `Limit` decides which
-// ceiling Mount applies, so a wrong value changes behaviour — which is exactly
-// what `Mutating` could not do.
+// `TestMutatingAgreesWithTheMethod` was here and is deleted with its field
 func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 	for _, route := range Routes(newHarness(t, options{}).deps) {
 		t.Run(route.Method+" "+route.Pattern, func(t *testing.T) {
-			// TWO SEPARATE BUDGETS, AND THE LEG SETS THE ONE THE ROW NAMES TO
-			// ONE AND THE OTHER TO PLENTY. That is what makes it about WHICH
-			// limiter rather than about limiting: a route wired to the wrong
-			// bucket meets a ceiling of a thousand and never 429s at all.
 			opt := options{ratePerMin: 1000, travellerPerMin: 1000, publicPerMin: 1000}
 			switch route.Limit {
 			case LimitTraveller:
@@ -208,23 +119,9 @@ func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 
 			bearerHeader := ""
 			if route.Auth {
-				// `bearer` spends two tokens from the CREDENTIAL bucket, which
-				// is why the credential ceiling is 1000 on this branch — a
-				// traveller-limited route must not be refused because
-				// signing in was.
 				bearerHeader = bearer(t, h)
 			}
 
-			// ONE ROUTE DESTROYS ITS OWN CREDENTIAL, AND IT IS SIGNED IN AGAIN
-			// BETWEEN THE TWO SPENDS RATHER THAN EXEMPTED. `DELETE
-			// /v1/auth/session` revokes the token it was called with, so the
-			// second request would be a 401 before the limiter is ever
-			// reached — and an exemption would leave the only revocation
-			// surface in the API as the one route nothing asserts a ceiling
-			// on. Signing in again spends the CREDENTIAL bucket, which is
-			// 1000 on this branch, and mints a new token for the same
-			// traveller — so the TRAVELLER bucket, which is what this leg is
-			// about, is untouched by the re-sign-in.
 			renews := route.Method == http.MethodDelete && route.Pattern == "/v1/auth/session"
 
 			spend := func() int {
@@ -249,9 +146,7 @@ func TestEveryRouteWearsTheCeilingItsTableRowNames(t *testing.T) {
 	}
 }
 
-// bodyFor is a request body each route will get past its own decoder. The
-// legs above are about ceilings and headers, so what matters is that the
-// request REACHES the handler rather than what the handler answers.
+// bodyFor is a request body each route will get past its own decoder.
 func bodyFor(route Route) string {
 	if strings.HasPrefix(route.Pattern, "/v1/media") {
 		digest := strings.Repeat("a", 64)
@@ -260,15 +155,8 @@ func bodyFor(route Route) string {
 	return aTrip
 }
 
-// DEC-51's HEADERS ARE ON EXACTLY THE ROWS THAT DECLARE THEM, AND THE
-// ASSERTION IS ON PRESENCE (PD-09).
-//
-// The security lens's finding about v7.0's only header-adjacent leg is the
-// reason that last clause is written down: it compared two answers to each
-// other, and would have passed with the headers absent from BOTH. So this
-// asserts the literal values on the rows that say NoStore, and asserts their
-// ABSENCE on the rows that do not — because a policy applied everywhere is a
-// policy that says nothing about anything.
+// The headers are on exactly the rows that declare them, and the assertion is
+// on presence.
 func TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -304,10 +192,6 @@ func TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem(t *testing.T) {
 		})
 	}
 
-	// THE VACUOUS DIRECTIONS, BOTH OF THEM. A table with no NoStore rows
-	// passes the loop above having asserted nothing about the headers, and a
-	// table where EVERY row declares them passes having asserted nothing about
-	// the discrimination.
 	if declared == 0 {
 		t.Error("no route in the table declares NoStore, so this leg checked nothing")
 	}
@@ -317,21 +201,9 @@ func TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem(t *testing.T) {
 	}
 }
 
-// A NIL DEPENDENCY PANICS AT WIRING TIME RATHER THAN AT THE FIRST REQUEST, and
-// that is the argument DEC-48 already made for the limiter. A nil store does
-// not read as "no logbook" — it reads as working software until somebody asks
-// for their log and gets a 500 out of the recover middleware.
+// A nil dependency panics at wiring time rather than at's first request,
+// That is the argument already made for the limiter.
 func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
-	// EVERY ROW USED TO PANIC FOR THE SAME REASON, AND IT WAS NOT THE ONE THE
-	// ROW WAS NAMED FOR. The table built each Deps from scratch and never set
-	// PublicLimit, Share, Cities, Places, Photos, Walks or Public — so five of
-	// its seven rows tripped the PublicLimit check long before reaching the
-	// dependency they claimed to test. It had been green since the public read
-	// landed and it was proving one thing seven times.
-	//
-	// So each case now starts from a COMPLETE Deps and removes exactly one
-	// field, and asserts the panic NAMES that field. A row that trips an
-	// earlier check fails on the message rather than passing on the panic.
 	full := newHarness(t, options{}).deps
 
 	for _, tc := range []struct {
@@ -364,9 +236,6 @@ func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
 				if !ok {
 					t.Fatalf("Mount panicked with %T, want the string it writes", r)
 				}
-				// THE HALF THAT MAKES THE ROW MEAN WHAT IT SAYS. Without it a
-				// row passes on any panic at all, which is how this table came
-				// to prove one thing fourteen times.
 				if !strings.Contains(msg, tc.names) {
 					t.Errorf("Mount with %s panicked on a DIFFERENT dependency.\n"+
 						"  got:  %s\n  want it to name: %s", tc.name, msg, tc.names)

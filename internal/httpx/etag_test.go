@@ -12,12 +12,7 @@ func TestFormatETagCarriesBothHalves(t *testing.T) {
 	}
 }
 
-// DEC-49(a), and it is the whole reason the emitter half exists. v3's ETag was
-// `W/"<logbook_version>"`, which moves only on a WRITE — so a deploy that
-// changed the emitted document (a field added, a date rendered differently,
-// DEC-40's `"version": 2` itself) left every phone holding a cached body
-// getting 304 forever and serving the OLD SHAPE until somebody happened to
-// write. The validator did not cover the thing that produced the bytes.
+// (a), and it is the whole reason the emitter half exists.
 func TestADeployThatMovesTheEmitterInvalidatesEveryCachedBody(t *testing.T) {
 	before := httpx.FormatETag(1, 7)
 	after := httpx.FormatETag(2, 7)
@@ -31,12 +26,7 @@ func TestADeployThatMovesTheEmitterInvalidatesEveryCachedBody(t *testing.T) {
 	}
 }
 
-// "cannot be called with one half" (VS3's step text). A zero version is the
-// shape a caller reaches by forgetting an argument or by reading a column that
-// has not been set, and it is a programmer error rather than a client one —
-// so it panics here, where the stack still names the caller, rather than
-// emitting `W/"0-7"` and being discovered as a cache that never invalidates.
-// The recover middleware turns it into a 500, not a dead process.
+// "cannot be called with one half" (the step text).
 func TestFormatETagRefusesAMissingHalf(t *testing.T) {
 	cases := []struct {
 		name             string
@@ -70,8 +60,6 @@ func TestParseETagRoundTripsWhatFormatWrote(t *testing.T) {
 }
 
 // The strong form is accepted on the way IN and never emitted on the way out.
-// A cache, a proxy or a hand-written curl echoes `"2-7"` without the W/, and
-// refusing it would answer 200 to a client that is correctly revalidating.
 func TestParseETagAcceptsTheStrongFormItNeverEmits(t *testing.T) {
 	emitter, logbook, ok := httpx.ParseETag(`"2-7"`)
 	if !ok || emitter != 2 || logbook != 7 {
@@ -128,10 +116,7 @@ func TestETagMatchesUsesWeakComparison(t *testing.T) {
 	}
 }
 
-// An empty current tag must never match, INCLUDING against `*`. A handler that
-// reached the comparison with no ETag computed has a bug, and answering 304 to
-// it hands the client an empty body it will treat as "unchanged" forever —
-// which is DEC-49(b)'s permanent-empty-app failure arriving by a second route.
+// An empty current tag must never match, INCLUDING against `*`.
 func TestNothingMatchesAnEmptyCurrentTag(t *testing.T) {
 	for _, ifNoneMatch := range []string{`*`, `W/"2-7"`, ``} {
 		if httpx.ETagMatches(ifNoneMatch, "") {

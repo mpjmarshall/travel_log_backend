@@ -1,10 +1,4 @@
-// The Argon2 concurrency cap (DEC-48), test-first.
-//
-// THE ONE LEG DEC-48 NAMES IS "the N+1th CONCURRENT login is REFUSED, not made
-// to wait", and it is asserted on the ANSWER rather than on a timer. A leg
-// that measured how long the N+1th call took would pass against a gate that
-// queues for 50ms and fail on a loaded machine, which is the wrong test twice
-// over.
+// The Argon2 concurrency cap, test-first.
 package auth
 
 import (
@@ -14,10 +8,8 @@ import (
 	"time"
 )
 
-// blocking is a Hasher that parks inside Hash and Verify until it is released,
-// so a test can hold N calls open and ask what the N+1th does. It is the only
-// way to observe a cap without racing it: two real Argon2 calls on a fast
-// machine may simply not overlap.
+// blocking is a Hasher that parks inside Hash and Verify until it is
+// released, so a test can hold N calls open and ask what the N+1th does.
 type blocking struct {
 	entered chan struct{}
 	release chan struct{}
@@ -75,8 +67,6 @@ func TestTheNPlusOnethConcurrentCallIsRefusedAndNotMadeToWait(t *testing.T) {
 		}
 	}
 
-	// The N+1th, on this goroutine, so a queueing gate would hang the test
-	// rather than pass it.
 	done := make(chan error, 1)
 	go func() { _, err := capped.Hash("x"); done <- err }()
 	select {
@@ -109,9 +99,6 @@ func TestVerifyIsCappedToo(t *testing.T) {
 		t.Fatalf("the first Verify never reached the hasher")
 	}
 
-	// The second Verify goes on its own goroutine for the reason the N+1th
-	// Hash does: an uncapped one parks inside the blocking hasher and never
-	// comes back, and a leg that HANGS is a red nobody can read.
 	second := make(chan error, 1)
 	go func() { _, err := capped.Verify("encoded", "x"); second <- err }()
 	select {
@@ -142,9 +129,8 @@ func TestASlotIsReturnedWhenTheCallFinishes(t *testing.T) {
 	}
 }
 
-// A hasher that FAILS must still return its slot, or a run of malformed
-// stored hashes wedges the gate closed and every login afterwards is a 429
-// with nothing to explain it.
+// A hasher that fails must still return its slot, or malformed stored hashes
+// drain the gate permanently.
 func TestASlotIsReturnedEvenWhenTheHasherFails(t *testing.T) {
 	g, err := NewGate(1)
 	if err != nil {
@@ -162,9 +148,7 @@ func TestASlotIsReturnedEvenWhenTheHasherFails(t *testing.T) {
 	}
 }
 
-// A panicking hasher must return its slot too. Nothing in this repository
-// panics on purpose, but argon2.IDKey does on parameters Verify now refuses —
-// and "now refuses" is a property of one function that a later edit can undo.
+// A panicking hasher must return its slot too.
 func TestASlotIsReturnedWhenTheHasherPanics(t *testing.T) {
 	g, err := NewGate(1)
 	if err != nil {
@@ -177,8 +161,6 @@ func TestASlotIsReturnedWhenTheHasherPanics(t *testing.T) {
 		_, _ = capped.Hash("x")
 	}()
 
-	// The probe shares the GATE and not the hasher, so what it reports is
-	// whether the slot came back rather than whether the panic repeats.
 	probe := Capped{Hasher: Argon2id{Params: cheap.Params}, Gate: g}
 	if _, err := probe.Hash("x"); errors.Is(err, ErrBusy) {
 		t.Errorf("the gate is wedged after a panicking call: its slot was never returned")
@@ -190,9 +172,7 @@ type panicking struct{}
 func (panicking) Hash(string) (string, error)         { panic("argon2: number of rounds too small") }
 func (panicking) Verify(string, string) (bool, error) { panic("argon2: parallelism degree too low") }
 
-// Capped satisfies Hasher, so the cap is applied by WRAPPING the one
-// implementation rather than by asking every call site to remember a
-// semaphore. Its failure mode is a build error, and that is the right one.
+// Capped satisfies Hasher.
 func TestCappedIsTheHasher(t *testing.T) {
 	g, err := NewGate(2)
 	if err != nil {

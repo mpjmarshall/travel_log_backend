@@ -1,49 +1,5 @@
 // `make seed` — the captured client log into PostgreSQL, and the only command
 // in this repository that writes data nobody asked for.
-//
-// IT IS A DEVELOPER COMMAND (DEC-75). Mock data on the SERVER, run deliberately
-// by a developer, is not the same thing as an app that ships fake trips baked
-// in: the first is a fixture and the second is the "stranger's data" objection
-// the client's own record makes. NOTHING IN cmd/api IMPORTS internal/seed and
-// cmd/api/imports_test.go says so.
-//
-// TWO GUARDS, AND NEITHER IS THE ONE THE PLAN WROTE (DEC-97).
-//
-//  1. IT REFUSES WHEN ANY TRAVELLER ROW EXISTS. Not "when the log is
-//     non-empty" — a freshly migrated database IS empty, so a log-shaped
-//     predicate does not fire on `make up && make seed`, which is the obvious
-//     first thing an operator types. DEC-86 closes registration once any
-//     traveller exists, so that run would hand the deployment's only account a
-//     passphrase printed in a terminal, with a 600/min budget, and no way for
-//     the real traveller ever to create theirs. It is the same predicate
-//     register uses, so it covers the other direction too: a traveller who has
-//     registered and written nothing is not an empty database.
-//
-//  2. IT REFUSES WITHOUT `--i-know-this-is-a-dev-database`. A DSN cannot tell
-//     a development database from a production one, and PD-02's required
-//     `-dsn` with no environment fallback stops an ambient DATABASE_URL from
-//     aiming it — but it cannot stop a correct-looking URL pointing somewhere
-//     real. The marker is the operator saying so.
-//
-// AND BOTH REFUSALS PRINT WHERE THEY WERE POINTED (SAF-MAJ-8), because an
-// operator who has aimed at the wrong database has to learn it from the
-// refusal rather than from what happens next. What is at stake is not
-// recoverable by any control the client has: NOTHING IN THIS APPLICATION CAN
-// DELETE A CITY (DEC-57), so a load into somebody's record leaves twelve
-// cities and two media objects standing permanently, with no route, no sheet
-// and no control able to reach them.
-//
-// THE PASSPHRASE IS GENERATED PER RUN, so a fixture cannot become a shipped
-// credential.
-//
-// THE ORDER IS MEDIA FIRST, DATABASE SECOND (DEC-78), and the seam is stated
-// rather than hidden: the two PNGs are uploaded to the bucket BEFORE the
-// ten-table transaction, so a load that fails at table seven rolls the database
-// back and LEAVES THE OBJECTS. That is intended — content addressing makes the
-// re-upload idempotent, and a database referencing bytes nobody uploaded is the
-// worse failure — but it has to be written down, because once `-sweep-media`
-// has a grace window an uploaded-not-committed object is indistinguishable from
-// an orphan.
 package main
 
 import (
@@ -71,12 +27,11 @@ import (
 	"travellog/internal/seed"
 )
 
-// defaultFixture is where DEC-75's captured document lives. It is a FLAG with
-// a default rather than an embed: embedding it would put 1.1 MB of PNG and an
-// 85 KB log into every binary that links internal/logbook, cmd/api included.
+// defaultFixture is where the captured document lives.
 const defaultFixture = "internal/logbook/testdata/client_sample_log.json"
 
-// devMarker is guard 2, spelled once so the refusal and the flag cannot drift.
+// devMarker is guard 2, spelled once so the refusal and the flag cannot
+// drift.
 const devMarker = "i-know-this-is-a-dev-database"
 
 func main() {
@@ -122,9 +77,6 @@ func run() error {
 			"an ambient DATABASE_URL must not be able to aim this at a real database")
 	}
 
-	// GUARD 2, AND IT IS CHECKED BEFORE THE FIRST CONNECTION. The refusal says
-	// where it was pointed, so an operator who has aimed at the wrong database
-	// learns it here rather than afterwards.
 	if !o.dev {
 		return fmt.Errorf("refusing to load a captured logbook into %s\n"+
 			"    without --%s.\n\n"+
@@ -147,9 +99,6 @@ func run() error {
 		return fmt.Errorf("connecting to %s: %w", redactDSN(o.dsn), err)
 	}
 
-	// GUARD 1, EARLY. Load takes it again INSIDE the transaction, which is
-	// where it is a guard; this one is so a refused run does not upload two
-	// photographs to a bucket first.
 	if existing, err := seed.ExistingTraveller(ctx, db); err != nil {
 		return err
 	} else if existing != nil {
@@ -166,10 +115,6 @@ func run() error {
 		return fmt.Errorf("the captured log at %s: %w", o.fixture, err)
 	}
 
-	// THE TRAVELLER ID COMES FROM THE DATABASE, not from a uuid package. It is
-	// `gen_random_uuid()` exactly as `POST /v1/auth/register` uses, and it has
-	// to exist BEFORE the upload because the bucket key is
-	// `<traveller>/<digest>` (DEC-38).
 	var travellerID string
 	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&travellerID); err != nil {
 		return fmt.Errorf("asking the database for a traveller id: %w", err)
@@ -184,8 +129,6 @@ func run() error {
 		fmt.Printf("    %s  %s  %d bytes\n", a.digest, a.locator, a.size)
 	}
 
-	// MEDIA FIRST (DEC-78). See the file comment for what a failure between
-	// here and the commit leaves behind.
 	if o.skipMedia {
 		fmt.Printf("  -skip-media: the bytes are NOT uploaded, so every mint for these two\n" +
 			"    objects will 404 until something puts them in the bucket.\n")
@@ -230,8 +173,6 @@ func run() error {
 	return nil
 }
 
-// === the two photographs ===
-
 type asset struct {
 	locator string // what the client's own document calls it
 	path    string // where the bytes are on disk
@@ -242,17 +183,7 @@ type asset struct {
 }
 
 // readImagery turns the directory beside the fixture into the asset table.
-//
-// THE DIGEST IS COMPUTED FROM THE BYTES AND IS NEVER A LITERAL, and that is
-// what makes the ONE input the round trip cannot check unfalsifiable. The round
-// trip applies RewriteAssets once and compares its own output against what came
-// back, so a mapping that pointed one locator at the other's digest would agree
-// with itself on both sides. Here it cannot: the address IS the content, so a
-// wrong mapping is bytes whose sha256 is not the key they were signed for, and
-// DEC-88's signed checksum refuses the PUT.
 func readImagery(dir string) ([]asset, error) {
-	// The client's own locators, which are a fact about a document this
-	// repository did not write. `assets/imagery/` is the Flutter bundle prefix.
 	names := []string{"card-ireland.png", "hero-mountain.png"}
 
 	out := make([]asset, 0, len(names))
@@ -268,10 +199,8 @@ func readImagery(dir string) ([]asset, error) {
 			path:    path,
 			digest:  hex.EncodeToString(sum[:]),
 			size:    int64(len(body)),
-			// media_objects_content_type_ck is `IN ('image/jpeg', 'image/png')`
-			// since migration 0003 (DEC-104), and both of these are PNG.
-			kind:  "image/png",
-			bytes: body,
+			kind:    "image/png",
+			bytes:   body,
 		})
 	}
 	return out, nil
@@ -286,9 +215,7 @@ func mappingOf(assets []asset) map[string]string {
 }
 
 // objectsOf is the media_objects half, with `uploaded_at` SET — which is what
-// makes a seeded object indistinguishable from an uploaded one. `alreadyExists`
-// and every cover check in R3 read that column and never row presence, so a
-// seeded row with it NULL is a cover no route would accept.
+// makes a seeded object indistinguishable from an uploaded one.
 func objectsOf(travellerID string, assets []asset, at time.Time) []seed.MediaObject {
 	out := make([]seed.MediaObject, 0, len(assets))
 	for _, a := range assets {
@@ -301,16 +228,13 @@ func objectsOf(travellerID string, assets []asset, at time.Time) []seed.MediaObj
 	return out
 }
 
-// uploadAll puts the bytes in the bucket through internal/media's own signing,
-// so the seed's upload is the same capability a phone gets.
+// uploadAll puts the bytes in the bucket through internal/media's own
+// signing, so the seed's upload is the same capability a phone gets.
 func uploadAll(ctx context.Context, cfg media.Config, travellerID string, assets []asset) error {
 	if strings.TrimSpace(cfg.InternalEndpoint) == "" || strings.TrimSpace(cfg.Bucket) == "" {
 		return errors.New("-s3-endpoint and -s3-bucket are required unless -skip-media; " +
 			"`make seed` derives all four from the running container")
 	}
-	// The public base is the same host here: the seed runs where it can reach
-	// the bucket, and it PUTs the URL it signs rather than handing it to a
-	// phone. TTLs are minutes because the upload happens immediately.
 	cfg.PublicBaseURL = cfg.InternalEndpoint
 	cfg.TTLPrivate, cfg.TTLPublic = 5*time.Minute, 5*time.Minute
 
@@ -356,10 +280,6 @@ func upload(ctx context.Context, store media.Store, travellerID string, a asset)
 
 	switch {
 	case res.StatusCode == http.StatusPreconditionFailed:
-		// DEC-88: `If-None-Match: *` is signed into the PUT, so a second upload
-		// of the same address answers 412 with the ORIGINAL BYTES INTACT. THE
-		// COMMIT PATH READS 412 AS SUCCESS and so does this: the object is
-		// already there, at an address that is its own checksum.
 		fmt.Printf("    %s is already in the bucket (412, write-once) — the bytes are its own address\n", a.digest)
 		return nil
 	case res.StatusCode >= 200 && res.StatusCode < 300:
@@ -370,17 +290,12 @@ func upload(ctx context.Context, store media.Store, travellerID string, a asset)
 	}
 }
 
-// === the generated credential ===
-
-// passphraseWords is the alphabet DEC-67's share ids already use, minus the
-// characters that are ambiguous in a terminal font. It is not a wordlist: the
-// passphrase is read once, out of a terminal, and typed into a phone.
+// passphraseWords is the alphabet the share ids already use, minus the
+// characters that are ambiguous in a terminal font.
 const passphraseAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
 
 // passphraseLength is 24 characters over a 31-character alphabet, which is
-// about 118 bits. auth.MinPassphraseBytes is 8, and this is not a number
-// chosen against that floor: it is chosen so that a credential printed in a
-// terminal and never rotated is not the weak link.
+// about 118 bits.
 const passphraseLength = 24
 
 func newPassphrase() (string, error) {
@@ -394,8 +309,6 @@ func newPassphrase() (string, error) {
 	}
 	return string(out), nil
 }
-
-// === what a completed run says ===
 
 func printReport(o options, travellerID, passphrase string, report seed.Report) {
 	fmt.Printf("\n  loaded in %s\n", report.Duration.Round(time.Millisecond))
@@ -416,12 +329,6 @@ func printReport(o options, travellerID, passphrase string, report seed.Report) 
 
 // redactDSN keeps everything that identifies WHICH database and drops the one
 // thing that identifies nothing.
-//
-// DEC-97 asks for the DSN in the refusal so an operator who has pointed at the
-// wrong database learns it there. The host, the port, the database name and the
-// user are the whole of that; the password adds nothing to the identification
-// and does go into terminal scrollback. It is a narrowing of the ruling and it
-// is stated rather than silent.
 func redactDSN(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil || u.Host == "" {

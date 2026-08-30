@@ -17,8 +17,7 @@ func digestOf(body string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ONE INPUT, TWO OUTPUTS, AND THEY CANNOT DIVERGE (DEC-88). The checksum binds
-// the header to the BODY; this is the only thing binding it to the KEY.
+// one input, two outputs, and they cannot diverge.
 func TestAddressDerivesTheKeyAndTheHeaderFromOneDigest(t *testing.T) {
 	for _, body := range []string{
 		"",
@@ -38,10 +37,6 @@ func TestAddressDerivesTheKeyAndTheHeaderFromOneDigest(t *testing.T) {
 				"wrong deletes somebody else's photographs", path, want)
 		}
 
-		// The header is base64 of the same bytes the hex names, and the two
-		// encodings are not a style choice: MinIO answers 400 InvalidArgument
-		// to a hex digest in this header, which is a different sentence from a
-		// genuine mismatch.
 		raw, err := base64.StdEncoding.DecodeString(checksum)
 		if err != nil {
 			t.Fatalf("the checksum header %q is not base64: %v", checksum, err)
@@ -54,7 +49,7 @@ func TestAddressDerivesTheKeyAndTheHeaderFromOneDigest(t *testing.T) {
 }
 
 // The path is the only thing keeping one traveller out of another's objects,
-// so two travellers holding the SAME object must still get two paths.
+// Two travellers holding the same object must still get two paths.
 func TestTwoTravellersNeverShareAPath(t *testing.T) {
 	const other = "11111111-2222-3333-4444-555555555555"
 	digest := digestOf("the same photograph, uploaded twice")
@@ -75,10 +70,8 @@ func TestTwoTravellersNeverShareAPath(t *testing.T) {
 	}
 }
 
-// WHAT Address REFUSES, and every row is a value that would otherwise become a
-// path segment. The digest rows are migration 0001's own constraint in Go —
-// `media_objects_id_sha256_ck CHECK (id ~ '^[0-9a-f]{64}$')` — and the two
-// must agree or the bucket and the table disagree about what an id is.
+// WHAT Address REFUSES, and every row is a value that would otherwise become
+// a path segment.
 func TestAddressRefusesAnythingThatIsNotAnIdOrATraveller(t *testing.T) {
 	good := digestOf("fine")
 

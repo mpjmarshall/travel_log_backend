@@ -1,10 +1,4 @@
-// M2's note, N1's 'Later' and M2.2's 'Change', as contracts. No database.
-//
-// WHAT IS HERE IS THE SHAPE OF A REQUEST AND THE SHAPE OF THE TYPE. Whether a
-// caption-only PUT leaves a photograph's filing alone is a fact about a
-// STATEMENT, so it is in internal/postgres and internal/seed — except for the
-// one half of it that is a fact about the TYPE, which is here and is the
-// strongest form the claim takes: `PhotoWrite` has nowhere to put a place.
+// M2's note, N1's 'Later' and M2.2's 'Change', as contracts.
 package logbook_test
 
 import (
@@ -22,25 +16,11 @@ import (
 func photoID(id string) *string { return &id }
 
 // snoozeUntil is N1's own seven days, from a FIXED instant rather than
-// time.Now — the clock is pinned everywhere else in this project and a leg
-// whose input moves is a leg that can fail on a Tuesday.
+// time.Now.
 var snoozeUntil = time.Date(2027, time.October, 19, 0, 0, 0, 0, time.UTC)
 
-// ==================================================== THE COLUMNS THAT ARE NOT ON IT
-
-// A CAPTION-ONLY PUT CANNOT UNFILE A PHOTOGRAPH BECAUSE THERE IS NOWHERE TO
-// PUT THE NULL (DEC-89, SAF-MAJ-5).
-//
-// This is the type-level half of the step's worst defect, and it is asserted
-// on the STRUCT rather than on a value: a leg that decoded `{"caption":"x"}`
-// and checked that nothing else was set would pass just as well against a type
-// that HAS the fields and happened not to receive them.
-//
-// The measured defect it forecloses: `ph-0` carried
-// `place_id=bukchon, visit_id=v-bukchon-0`; the whole-state form of M2's note
-// wrote both to NULL alongside the caption; and all three of this plan's
-// standing guards stayed green, because the reference is GONE rather than
-// dangling, there is no place left to be occasion-less, and two NULLs agree.
+// A CAPTION-only put cannot unfile A photograph because there is nowhere to
+// put the null.
 func TestPhotoWriteHasNoSlotForAPlaceOrAnOccasion(t *testing.T) {
 	forbidden := map[string]string{
 		"PlaceID": "a photograph's pin is set by `POST /v1/photos/{id}/refile` and cleared " +
@@ -61,17 +41,8 @@ func TestPhotoWriteHasNoSlotForAPlaceOrAnOccasion(t *testing.T) {
 	}
 }
 
-// AND EVERY FIELD THAT IS THERE IS A POINTER, WHICH IS THE OTHER HALF OF THE
-// CONTRACT (DEC-89).
-//
-// A bare value makes absent and zero the same request. On `TripWrite.CityIDs`
-// that shipped and destroyed an itinerary on every rename, measured against a
-// running server; here it would clear a caption on every write that named a
-// coordinate.
-//
-// IT WALKS BOTH WRITE TYPES IN THIS FILE AND THE WALK ONE TOO, because the
-// rule is the convention and not a property of one struct — and a step adding
-// a fourth write type inherits it by being in this loop.
+// Every field that is there is a pointer, which is the other half of the
+// contract.
 func TestEveryFieldOnEveryWriteTypeIsAPointer(t *testing.T) {
 	for _, write := range []any{
 		logbook.PhotoWrite{}, logbook.WalkWrite{}, logbook.SnoozeWrite{},
@@ -91,18 +62,7 @@ func TestEveryFieldOnEveryWriteTypeIsAPointer(t *testing.T) {
 	}
 }
 
-// ==================================================== THE CAPTION
-
-// AN EMPTY OR WHITESPACE CAPTION IS NULL AND NEVER THE EMPTY STRING.
-//
-// The client's rule, copied rather than invented: M2's two note blocks are
-// both guarded by `caption != null`, so `caption = ”` is an empty box with no
-// way back out of it. `photos_caption_present_ck` is the guarantee and this is
-// what stops it reaching the client as a 500.
-//
-// THE FOURTH CASE IS THE ONE THAT MATTERS AND IT IS NOT ABOUT EMPTINESS: a
-// caption that was NOT SENT must not be read as a clear, or every write that
-// names a coordinate wipes the note.
+// an empty or whitespace caption is null and never the empty string.
 func TestStoredCaptionIsNullForEmptyAndUntouchedForAbsent(t *testing.T) {
 	for _, tc := range []struct {
 		body  string
@@ -135,15 +95,8 @@ func TestStoredCaptionIsNullForEmptyAndUntouchedForAbsent(t *testing.T) {
 	}
 }
 
-// AND `{"caption":null}` IS INDISTINGUISHABLE FROM AN ABSENT KEY, WHICH IS
-// MEASURED RATHER THAN DESIGNED.
-//
-// encoding/json's `indirect` breaks at the outermost SETTABLE pointer when the
-// literal is null, so a `**string` field is set to nil by both. The
-// consequence is a client prerequisite: M2's cleared note has to send
-// `{"caption":""}`, because `{"caption":null}` is heard as "leave it alone".
-// TripWrite's own comment records the same probe for `summary`; this leg is
-// what makes it falsifiable on the field a real control actually clears.
+// `{"caption":null}` is indistinguishable from an absent key, which is
+// measured rather than designed.
 func TestASentNullCaptionIsHeardAsAnAbsentOne(t *testing.T) {
 	var absent, explicit logbook.PhotoWrite
 	if err := json.Unmarshal([]byte(`{"id":"ph-0"}`), &absent); err != nil {
@@ -169,15 +122,7 @@ func TestASentNullCaptionIsHeardAsAnAbsentOne(t *testing.T) {
 	}
 }
 
-// ==================================================== THE SNOOZE
-
-// AN ABSENT `photoIds` AND AN EMPTY ONE ARE DIFFERENT REQUESTS.
-//
-// Both write nothing, and they are told apart so the first is a 422 naming the
-// field — a body that never named a group — and the second is the 200 the
-// client's own "returns false without writing when the group is empty"
-// describes. Collapsing them would make a malformed request look like an
-// ordinary empty one.
+// an absent `photoIds` and an empty one are different requests.
 func TestValidateSnoozeTellsAnAbsentGroupFromAnEmptyOne(t *testing.T) {
 	when := logbook.At(snoozeUntil)
 
@@ -197,7 +142,7 @@ func TestValidateSnoozeTellsAnAbsentGroupFromAnEmptyOne(t *testing.T) {
 	}
 }
 
-// AND `until` IS REQUIRED, BECAUSE THERE IS NO UN-SNOOZE.
+// `until` is required, because there is no un-SNOOZE.
 func TestValidateSnoozeRequiresTheDateItIsSnoozingTo(t *testing.T) {
 	ids := []string{"ph-12"}
 	var invalid logbook.InvalidFieldError
@@ -207,13 +152,7 @@ func TestValidateSnoozeRequiresTheDateItIsSnoozingTo(t *testing.T) {
 	}
 }
 
-// A REPEATED ID IS REFUSED BY NAME.
-//
-// It is not fastidiousness: the update is `id = ANY($2)`, so a repeat is
-// silently harmless there — and the answer is built from the rows that were
-// written, so a client pairing its request against the answer by INDEX would
-// pair them wrongly. `checkCityIDs` and `checkVisits` refuse a repeat for the
-// same class of reason.
+// A repeated id is refused by name.
 func TestValidateSnoozeRefusesARepeatedId(t *testing.T) {
 	when := logbook.At(snoozeUntil)
 	ids := []string{"ph-12", "ph-13", "ph-12"}
@@ -228,20 +167,8 @@ func TestValidateSnoozeRefusesARepeatedId(t *testing.T) {
 	}
 }
 
-// ==================================================== THE REFILE
-
-// A RE-FILE THAT NAMES NO OCCASION IS REFUSED BEFORE ANY STATEMENT RUNS, AND
-// THE REFUSAL IS THE SERVICE'S (PD-05).
-//
-// THE MUTATION THIS LEG IS FOR: delete `Service.RefilePhoto`'s `VisitID == nil`
-// branch and a nil reaches the store, whose parameterised `visit_id = $n` is
-// then NULL — so the photograph is written naming a PLACE WITH NO OCCASION.
-// That is the half-record state the client's model has never expressed:
-// measured across all 284 fixture photographs, 95 carry both columns, 189
-// carry neither, place-only 0, visit-only 0.
-//
-// IT ASSERTS THE STORE WAS NOT REACHED, and that is not decoration: a refusal
-// taken AFTER the update would satisfy a status assertion perfectly.
+// a re-file that names no occasion is refused before any statement runs, and
+// the refusal is the service's.
 func TestARefileThatNamesNoOccasionIsRefusedBeforeAnyStatementRuns(t *testing.T) {
 	store := &countingRefiles{}
 	service := logbook.Service{Photos: store}
@@ -260,16 +187,12 @@ func TestARefileThatNamesNoOccasionIsRefusedBeforeAnyStatementRuns(t *testing.T)
 			"returned", store.calls)
 	}
 
-	// AND A RE-FILE THAT NAMES NO PLACE IS REFUSED TOO. M2.2 lists the pins in
-	// the photograph's own city and there is no 'nowhere' among them.
 	visit := "v-nishiki-0"
 	if _, err := service.RefilePhoto(t.Context(), "traveller", "ph-45",
 		logbook.RefileWrite{VisitID: &visit}); !errors.As(err, &invalid) || invalid.Field != "placeId" {
 		t.Errorf("a re-file with no placeId = %v, want an InvalidFieldError naming placeId", err)
 	}
 
-	// THE POSITIVE CONTROL, and it is what makes the two zeroes above mean
-	// something: a complete body DOES reach the store.
 	if _, err := service.RefilePhoto(t.Context(), "traveller", "ph-45",
 		logbook.RefileWrite{PlaceID: &place, VisitID: &visit}); err != nil {
 		t.Fatalf("a complete re-file: %v", err)
@@ -302,12 +225,7 @@ func (c *countingRefiles) RefilePhoto(_ context.Context, _, photoID string, w lo
 	return logbook.PhotoRefiled{Photo: logbook.Photo{ID: photoID}}, nil
 }
 
-// AND THE SERVICE PASSES THE CLIENT'S CHOICE THROUGH UNCHANGED.
-//
-// The whole route is "validate rather than re-derive", so the one thing this
-// layer must not do is substitute an id of its own. A mutation that rewrote
-// `VisitID` on the way past would be invisible to every leg that only checks
-// the refusals.
+// The service passes the client the choice through unchanged.
 func TestTheServicePassesTheOccasionTheClientNamedStraightThrough(t *testing.T) {
 	store := &countingRefiles{}
 	service := logbook.Service{Photos: store}
@@ -330,12 +248,7 @@ func TestTheServicePassesTheOccasionTheClientNamedStraightThrough(t *testing.T) 
 	}
 }
 
-// A MALFORMED ID IS REFUSED BY THE VALIDATOR AND A MISSING ONE IS NOT.
-//
-// The split is the one ValidateCity already makes with "a city needs a name":
-// this function is about the SHAPE of what it was given. Whether an occasion
-// was named at all is the Service's, above, because that is where the server's
-// authority to choose is refused.
+// A malformed id is refused by the validator and A missing one is not.
 func TestValidateRefileChecksShapeAndSaysNothingAboutAbsence(t *testing.T) {
 	bad := "Fushimi Inari"
 	var invalid logbook.InvalidFieldError
@@ -353,8 +266,6 @@ func TestValidateRefileChecksShapeAndSaysNothingAboutAbsence(t *testing.T) {
 			"one rule", err)
 	}
 }
-
-// ==================================================== THE PHOTO WRITE ITSELF
 
 func TestValidatePhotoNamesTheFirstFieldThatIsWrong(t *testing.T) {
 	long := strings.Repeat("x", logbook.MaxCaptionBytes+1)
@@ -392,9 +303,6 @@ func TestValidatePhotoNamesTheFirstFieldThatIsWrong(t *testing.T) {
 		}
 	}
 
-	// THE POSITIVE CONTROL: M2's own body, which is a caption and nothing
-	// else. Without it every row above passes against a validator that
-	// refuses everything.
 	var note logbook.PhotoWrite
 	if err := json.Unmarshal([]byte(`{"id":"ph-0","caption":"a new note"}`), &note); err != nil {
 		t.Fatalf("decoding M2's note: %v", err)

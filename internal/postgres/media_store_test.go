@@ -1,11 +1,4 @@
-// media_objects against a real PostgreSQL: the bounded conflict branch, the
-// separate SELECT, and the reference that is only legal once the bytes have
-// landed.
-//
-// EVERY LEG HERE NEEDS THE REAL DATABASE AND SAYS SO WHEN THERE IS NONE. What
-// is here is exactly what a fake cannot say: that `ON CONFLICT … WHERE` really
-// leaves the row alone, that `DO UPDATE … WHERE <false>` really returns zero
-// rows, and that the four foreign keys really refuse a reference.
+// media_objects against a real PostgreSQL.
 package postgres
 
 import (
@@ -28,19 +21,8 @@ func begun(t *testing.T, db *sql.DB, travellerID, digest string, size int64, con
 	return row
 }
 
-// A CLIENT RE-BEGINNING AN ALREADY-COMMITTED DIGEST MUST NOT BE ABLE TO
-// RESTATE WHAT THOSE BYTES ARE.
-//
-// EXECUTED BY THE DATABASE LENS AGAINST THE REAL TABLE, BEFORE THE GUARD
-// EXISTED: without `WHERE media_objects.uploaded_at IS NULL` on the conflict
-// branch, a committed `(10 | image/png)` row became `(999999 | text/html)`.
-// Migration 0003's allowlist does NOT close it, because any
-// allowlisted-but-wrong type passes — this leg re-declares a png as a jpeg,
-// which the CHECK is perfectly happy with and which makes the row lie about an
-// object whose bytes cannot change.
-//
-// MUTATION: drop the WHERE and the second half of this leg reddens on both
-// columns.
+// A client re-beginning an already-committed digest must not be able to
+// restate what those bytes are.
 func TestReBeginningACommittedObjectCannotRestateWhatItIs(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -53,9 +35,6 @@ func TestReBeginningACommittedObjectCannotRestateWhatItIs(t *testing.T) {
 			"derived from uploaded_at, and a row that exists is not the same thing")
 	}
 
-	// THE UNCOMMITTED ROW IS STILL MUTABLE, and it has to be: a client that
-	// picked a different rendition of the same photograph and re-began is
-	// correcting a declaration about bytes that are not there yet.
 	corrected := begun(t, db, tid, digest, 4096, "image/jpeg")
 	if corrected.ByteSize != 4096 || corrected.ContentType != "image/jpeg" {
 		t.Fatalf("re-beginning an UNCOMMITTED object left it at %d | %s — the "+
@@ -77,8 +56,6 @@ func TestReBeginningACommittedObjectCannotRestateWhatItIs(t *testing.T) {
 			again.ByteSize, again.ContentType)
 	}
 
-	// AND THE ROW ON DISK, not only what the method answered. A store that
-	// re-read correctly and wrote wrongly would pass everything above.
 	var size int64
 	var mediaType string
 	if err := db.QueryRowContext(ctx,
@@ -91,16 +68,8 @@ func TestReBeginningACommittedObjectCannotRestateWhatItIs(t *testing.T) {
 	}
 }
 
-// THE SEPARATE SELECT IS NOT A STYLE CHOICE, AND THIS IS THE MEASUREMENT THAT
-// SAYS SO.
-//
-// v6 deleted the `RETURNING` projection as OE-4 with the reason "not an xmax
-// trick", which leaves the door open for somebody to put it back as an
-// ordinary projection. `DO UPDATE … WHERE <false>` returns ZERO ROWS — no row
-// emitted at all — so a handler reading its answer off RETURNING gets NOTHING
-// on exactly the `alreadyExists` path, which is the one path the response is
-// about. This leg runs the statement WITH a RETURNING clause and counts what
-// comes back.
+// the separate select is not A style choice, and this is the measurement that
+// says so.
 func TestTheSuppressedConflictBranchEmitsNoRowAtAll(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -130,9 +99,6 @@ func TestTheSuppressedConflictBranchEmitsNoRowAtAll(t *testing.T) {
 			"ever true, this comment and OE-4's reasoning are both wrong", returned)
 	}
 
-	// THE CONTROL. On the path where the branch is NOT suppressed, RETURNING
-	// does emit a row — which is what makes the zero above a fact about the
-	// WHERE rather than about RETURNING.
 	fresh := strings.Repeat("f", 64)
 	live, err := db.QueryContext(ctx, beginSQL+" RETURNING id", tid, fresh, 10, "image/png")
 	if err != nil {
@@ -148,12 +114,8 @@ func TestTheSuppressedConflictBranchEmitsNoRowAtAll(t *testing.T) {
 	}
 }
 
-// A COMMIT IS IDEMPOTENT AT THE STORE, WHICH IS WHAT MAKES THE RETRY CONTRACT
-// POSSIBLE AT THE ROUTE (SAF-MIN-12).
-//
-// The bucket-versus-database seam is the only non-atomic one in the plan: the
-// bucket confirms, the update fails, and the object exists with uploaded_at
-// NULL — bytes the user has uploaded and cannot attach.
+// A commit is idempotent at the store, which is what makes the retry contract
+// possible at the route.
 func TestMarkingAnAlreadyUploadedObjectChangesNothingAndAnswersTheRow(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -186,26 +148,8 @@ func TestMarkingAnAlreadyUploadedObjectChangesNothingAndAnswersTheRow(t *testing
 	}
 }
 
-// AN ASSET IS REFERENCEABLE ONLY AFTER IT IS COMMITTED, AND THE POSITIVE HALF
-// IS WHAT MAKES THIS LEG WORTH ANYTHING.
-//
-// v6's own note: a validator that rejects everything passes "an uncommitted
-// asset is refused" perfectly, which is why both halves are in one leg. The
-// mutation that matters is "make it refuse everything" — that reddens the
-// POSITIVE half and nothing else does.
-//
-// IT LIVES HERE AND NOT IN internal/httpapi BECAUSE THE CHECK IS A QUERY, and
-// the query has to run under the traveller's advisory lock beside the city and
-// date checks — a check made out in a handler is a check made against a
-// database that can move underneath it.
-//
-// AND DEC-58's "ENFORCED TWICE" IS PRECISE RATHER THAN LOOSE, which is worth
-// writing down because the ruling's own phrasing is not. The four foreign keys
-// guarantee the ROW EXISTS; they say nothing about `uploaded_at`, because an
-// FK cannot see a column it does not reference. So the schema refuses a
-// reference to an object nobody ever began, and THIS check is what refuses a
-// reference to one that was begun and never uploaded. Two different lies,
-// two different guards, and only one of them is the database's.
+// an asset is referenceable only after it is committed, and the positive half
+// is what makes this leg worth anything.
 func TestATripCannotWearACoverWhoseBytesHaveNotLanded(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -233,8 +177,6 @@ func TestATripCannotWearACoverWhoseBytesHaveNotLanded(t *testing.T) {
 		t.Fatalf("MarkMediaUploaded: %v", err)
 	}
 
-	// THE POSITIVE HALF. Without it the assertion above is satisfied by a
-	// store that refuses every cover.
 	trip, _, err := store.PutTrip(ctx, tid, write)
 	if err != nil {
 		t.Fatalf("referencing a COMMITTED object = %v, want it to succeed", err)
@@ -243,10 +185,6 @@ func TestATripCannotWearACoverWhoseBytesHaveNotLanded(t *testing.T) {
 		t.Errorf("coverAsset = %v, want %s", trip.CoverAsset, digest)
 	}
 
-	// AND THE THIRD LIE, WHICH IS THE SCHEMA'S AND NOT THIS CHECK'S: an object
-	// nobody ever began. The Go check answers it too, because a row that is
-	// not there is not a committed row — but the FOREIGN KEY is what makes it
-	// unbypassable by the next route somebody adds (DEC-58).
 	neverBegun := strings.Repeat("4", 64)
 	if _, err := db.ExecContext(ctx,
 		`UPDATE trips SET cover_asset=$3 WHERE traveller_id=$1::uuid AND id=$2`,
@@ -256,13 +194,8 @@ func TestATripCannotWearACoverWhoseBytesHaveNotLanded(t *testing.T) {
 	}
 }
 
-// MediaObjects ANSWERS ONLY THIS TRAVELLER'S ROWS, and an unknown traveller is
-// ErrNoTraveller rather than an empty result.
-//
-// THE DIFFERENCE REACHES THE PHONE. An empty result read as "no such object"
-// is a 404, and the honest answer for a traveller whose row has been deleted
-// between the credential being accepted and the query running is that the
-// credential is not live — sign in again.
+// MediaObjects answers only this traveller's rows, and an unknown traveller
+// is ErrNoTraveller rather than an empty result.
 func TestMediaObjectsIsScopedToTheTravellerAndReportsAnUnknownOne(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
@@ -271,8 +204,6 @@ func TestMediaObjectsIsScopedToTheTravellerAndReportsAnUnknownOne(t *testing.T) 
 	mine := strings.Repeat("5", 64)
 	begun(t, db, tid, mine, 10, "image/png")
 
-	// assetA and assetB are seeded for `tid`; otherT has no rows at all and no
-	// traveller row either.
 	rows, err := store.MediaObjects(ctx, tid, []string{mine, assetA, noSuch})
 	if err != nil {
 		t.Fatalf("MediaObjects: %v", err)
@@ -288,24 +219,12 @@ func TestMediaObjectsIsScopedToTheTravellerAndReportsAnUnknownOne(t *testing.T) 
 	}
 }
 
-// THE LEG CONTENT ADDRESSING EXISTS FOR: TWO PHOTOGRAPHS, ONE OBJECT, AND
-// EITHER CAN BE DELETED.
-//
-// There is exactly ONE row in media_objects for bytes that appear twice, and
-// what stops the object being destroyed by the first deletion is the four
-// foreign keys — `ON DELETE RESTRICT` on the reference, and nothing at all in
-// the other direction. The whole reference count IS the four keys, which is
-// why OE-12 could delete `Remove` from the object store: the sweep's liveness
-// query is a NOT EXISTS across those four columns and is not knowable until
-// R7.
+// the leg content addressing exists for: two photographs, one object, and
+// either can be deleted.
 func TestTwoPhotographsShareOneObjectAndEitherCanGo(t *testing.T) {
 	db := seeded(t)
 	ctx := context.Background()
 
-	// The seeded fixture files p-may and p-autumn against assetA and assetB.
-	// Point both at assetA, which is what two photographs of the same bytes
-	// looks like — the client hashes the file, so identical bytes are
-	// identical ids.
 	if _, err := db.ExecContext(ctx,
 		`UPDATE photos SET asset=$2 WHERE traveller_id=$1::uuid`, tid, assetA); err != nil {
 		t.Fatalf("pointing both photographs at one object: %v", err)
@@ -333,7 +252,6 @@ func TestTwoPhotographsShareOneObjectAndEitherCanGo(t *testing.T) {
 		t.Errorf("%d photographs survive, want 1", n)
 	}
 
-	// AND THE OBJECT CANNOT BE REMOVED WHILE THE SURVIVOR POINTS AT IT.
 	if _, err := db.ExecContext(ctx,
 		`DELETE FROM media_objects WHERE traveller_id=$1::uuid AND id=$2`, tid, assetA); err == nil {
 		t.Error("an object a photograph still points at was deleted — photos_asset_fk " +

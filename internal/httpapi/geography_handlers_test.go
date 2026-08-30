@@ -1,18 +1,5 @@
 // The three R6 routes over the real mux, the real middleware chain and the
-// real auth, with fake stores. Test-first.
-//
-// WHAT IS HERE AND WHAT IS DELIBERATELY NOT. These legs are about what leaves
-// the process: which shape a city write answers, that a bare Place never
-// reaches the wire carrying `"visits":null`, that `visits: []` is refused by
-// name, and that `?photos` has no default. What only a real PostgreSQL can say
-// — that a no-op re-send does not unfile a photograph, that D2's two
-// statements are in the order the sheet promises, that a count does not fall —
-// is in internal/postgres and internal/seed and is NOT repeated here.
-//
-// R5 WROTE THAT RULE DOWN AFTER PAYING FOR IT: "a leg over a twin cannot guard
-// a statement the twin does not execute". So the fakes below are honest little
-// stores — they honour DEC-89's pointer contract and D2's two branches — and
-// nothing in this file is offered as evidence about a statement.
+// real auth, with fake stores.
 package httpapi
 
 import (
@@ -26,29 +13,15 @@ import (
 	"travellog/internal/logbook"
 )
 
-// === the fakes ===
-
-// fakeGeography satisfies logbook.CityStore AND logbook.PlaceStore over the
-// same little document the trip fake writes to, so a city created here is a
-// city a later place write can name.
-//
-// IT HONOURS DEC-89 BECAUSE IT HAS TO. A fake that applied every field
-// regardless would make every handler leg green against the contract this
-// whole step is about — the same reason fakeLogbook.PutTrip carries its own
-// `leave alone` branch.
+// fakeGeography satisfies logbook.CityStore and logbook.PlaceStore over the
+// same little document the trip fake writes to.
 type fakeGeography struct {
 	mu       sync.Mutex
 	books    *fakeLogbook
 	failWith error
 
-	// lastPlaceWrite is what the handler handed the store, so a leg can assert
-	// that an OMITTED key arrived as nil rather than as an empty slice — which
-	// is the difference the whole step turns on and is invisible in the
-	// response.
 	lastPlaceWrite logbook.PlaceWrite
 
-	// removals counts D2's calls and records the branch, so a leg can prove
-	// the store was not reached at all when the parameter was missing.
 	removals []logbook.PhotoDisposition
 }
 
@@ -71,8 +44,6 @@ func (f *fakeGeography) PutCity(_ context.Context, _ string, w logbook.CityWrite
 		}
 	}
 	if found < 0 {
-		// The store's own create-time refusals, so a leg about them is a leg
-		// about the same rule the real store enforces under the lock.
 		switch {
 		case w.Name == nil:
 			return logbook.CityWritten{}, logbook.InvalidFieldError{Field: "name",
@@ -179,9 +150,6 @@ func (f *fakeGeography) PutPlace(_ context.Context, _ string, w logbook.PlaceWri
 	if logbook.Sent(w.CoverAsset) {
 		next.CoverAsset = logbook.Value(w.CoverAsset)
 	}
-	// DEC-89, IN THE FAKE. An absent Visits leaves the stored list exactly
-	// where it is — including leaving it NIL on a create, which is what makes
-	// the EmitPlace leg below able to fail.
 	if w.Visits != nil {
 		next.Visits = *w.Visits
 	}
@@ -217,9 +185,6 @@ func (f *fakeGeography) RemovePlace(_ context.Context, _, placeID string, delete
 		kept = append(kept, place)
 	}
 	if !gone {
-		// A miss is a success and moves no version — the store's contract, and
-		// a fake that bumped anyway would make the ETag leg green against a
-		// store that did.
 		doc := f.books.doc
 		return logbook.Snapshot{Version: f.books.version, Document: &doc}, nil
 	}
@@ -234,8 +199,6 @@ func (f *fakeGeography) RemovePlace(_ context.Context, _, placeID string, delete
 		if deletePhotos {
 			continue
 		}
-		// D2's keep branch clears BOTH columns, which is
-		// `Photo.copyWith(clearPlace: true)`, and leaves everything else.
 		photo.PlaceID, photo.VisitID = nil, nil
 		photos = append(photos, photo)
 	}
@@ -245,8 +208,6 @@ func (f *fakeGeography) RemovePlace(_ context.Context, _, placeID string, delete
 	doc := f.books.doc
 	return logbook.Snapshot{Version: f.books.version, Document: &doc}, nil
 }
-
-// === helpers ===
 
 func geographyHarness(t *testing.T) (*harness, string) {
 	t.Helper()
@@ -261,12 +222,8 @@ func (h *harness) geography() *fakeGeography {
 const aKyoto = `{"name":"Kyoto","country":{"code":"JP","name":"Japan"},` +
 	`"centre":{"lat":35.0116,"lng":135.7681}}`
 
-// === T5's CITY ===
-
-// THE TWO SHAPES ARE THE ROUTE'S WHOLE ASYMMETRY, and each half of this leg
-// fails on its own: a route that always answered the city would leave the
-// phone unable to see the itinerary it just changed, and one that always
-// answered the envelope would send the whole log back on a plain rename.
+// the two shapes are the route's whole asymmetry, and each half of this leg
+// fails on its own.
 func TestCreatingACityAnswersTheCityAndAttachingOneAnswersTheWholeLog(t *testing.T) {
 	h, token := geographyHarness(t)
 
@@ -313,9 +270,7 @@ func TestCreatingACityAnswersTheCityAndAttachingOneAnswersTheWholeLog(t *testing
 	}
 }
 
-// THE NEW CITY GOES AT THE END OF THE ORDERED LIST, which is the client's own
-// `t.withCities([...t.cityIds, id])` and is a fact about travel order rather
-// than about sets: T1 and T4 draw the itinerary in the order it was walked.
+// the new city goes at the end of the ordered list.
 func TestAnAttachedCityLandsAtTheEndOfTheItinerary(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/trips/autumn", `{"name":"Autumn crossing"}`, token); got.status != http.StatusOK {
@@ -371,21 +326,8 @@ func TestACityCreatedWithNoCountryOrCentreIsRefusedByName(t *testing.T) {
 	}
 }
 
-// === C1's PIN ===
-
-// THE EMIT LEG (CF-BLO-3, PD-15), AND IT OMITS THE KEY RATHER THAN SENDING AN
-// EMPTY ARRAY.
-//
-// That distinction is the same one the request contract makes, arriving on the
-// response: a body with `visits: []` is refused outright, so a leg that sent
-// one could never reach the answer this is about. A wishlist place — C1's pin,
-// the ONE control that drives this route — has a nil visits list all the way
-// through, and a bare `Place` marshals it as `"visits":null`, which
-// `place.g.dart:30-32` reads as `(json['visits'] as List<dynamic>)` with no
-// null branch and throws on.
-//
-// IT ASSERTS ON THE BYTES AND NOT ON A DECODED MAP, because `null` and `[]`
-// both decode to "the key is present" and only one of them is a list.
+// the emit leg, and it omits the key rather than sending an
+// empty array.
 func TestAPlaceCreatedWithNoVisitsAnswersAnEmptyArrayAndNeverNull(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/cities/kyoto", aKyoto, token); got.status != http.StatusOK {
@@ -410,12 +352,7 @@ func TestAPlaceCreatedWithNoVisitsAnswersAnEmptyArrayAndNeverNull(t *testing.T) 
 	}
 }
 
-// AND THE OMISSION REACHED THE STORE AS AN OMISSION (DEC-89, SAF-MAJ-4).
-//
-// The response cannot show this: a place with no visits and a place whose
-// visits were just cleared both answer `"visits":[]`. What tells them apart is
-// what the handler handed the store, and the difference is 30 photographs at
-// fixture scale.
+// The omission reached the store as an omission.
 func TestAPlaceWriteWithNoVisitsKeyHandsTheStoreNilAndNotAnEmptySlice(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/cities/kyoto", aKyoto, token); got.status != http.StatusOK {
@@ -433,11 +370,7 @@ func TestAPlaceWriteWithNoVisitsKeyHandsTheStoreNilAndNotAnEmptySlice(t *testing
 	}
 }
 
-// `visits: []` IS REFUSED BY NAME, AND NOTHING IS TOUCHED (DEC-89, SAF-MAJ-4).
-//
-// The store must not be reached at all: this refusal is a fact about the
-// request rather than about any row, so it happens before a transaction is
-// opened and before the traveller's advisory lock is taken.
+// `visits: []` is refused by name, and nothing is touched.
 func TestAnEmptyVisitsArrayReachesTheStoreBecauseOnlyTheStoreCanJudgeIt(t *testing.T) {
 	h, token := geographyHarness(t)
 	if got := h.put(t, "/v1/cities/kyoto", aKyoto, token); got.status != http.StatusOK {
@@ -450,11 +383,6 @@ func TestAnEmptyVisitsArrayReachesTheStoreBecauseOnlyTheStoreCanJudgeIt(t *testi
 	}
 	h.geography().lastPlaceWrite = logbook.PlaceWrite{}
 
-	// THIS LEG ASSERTED THE OPPOSITE AND THE ASSERTION WAS WRONG, not merely
-	// obsolete. `visits: []` against a place with occasions is a destruction
-	// and against a place with none it is a no-op, and the handler cannot tell
-	// those apart — it has a body and no database. Stopping the request here
-	// refused both, which refused every wishlist place in the client's log.
 	got := h.put(t, "/v1/places/fushimi-inari", `{"visits":[]}`, token)
 	if got.status != http.StatusOK {
 		t.Fatalf("PUT with `visits: []` = %d %s, want 200 — the twin holds no occasions, "+
@@ -474,7 +402,7 @@ func TestAnEmptyVisitsArrayReachesTheStoreBecauseOnlyTheStoreCanJudgeIt(t *testi
 	}
 }
 
-// A REORDERED ARRAY COMES BACK IN THE NEW ORDER, and it is asserted on the
+// A reordered array comes back in the new order, and it is asserted on the
 // RESPONSE because the response is what the phone splices.
 func TestAVisitsArrayComesBackInTheOrderItWasSent(t *testing.T) {
 	h, token := geographyHarness(t)
@@ -530,15 +458,7 @@ func TestAVisitNamingAnotherPlaceIsRefusedByName(t *testing.T) {
 	}
 }
 
-// === D2's REMOVAL ===
-
-// THE PARAMETER IS REQUIRED, AND THE STORE MUST NOT BE REACHED WITHOUT IT.
-//
-// "A default is a silent answer to the question D2 makes the user answer on
-// screen." A 422 alone would not prove it: a handler that defaulted to keep
-// and then also answered 422 is not a shape anybody writes, but a handler that
-// reached the store and THEN refused is — so the count of removals is the
-// assertion that matters.
+// the parameter is required, and the store must not be reached without it.
 func TestRemovingAPlaceWithNoPhotosParameterIsRefusedAndRemovesNothing(t *testing.T) {
 	h, token := geographyHarness(t)
 	seedAPlace(t, h, token)
@@ -560,8 +480,7 @@ func TestRemovingAPlaceWithNoPhotosParameterIsRefusedAndRemovesNothing(t *testin
 	}
 }
 
-// AND BOTH SPELLINGS REACH THE BRANCH THEY NAME. Without this the leg above is
-// satisfied by a route that refuses everything.
+// Both spellings reach the branch they name.
 func TestTheTwoPhotoBranchesEachReachTheStore(t *testing.T) {
 	h, token := geographyHarness(t)
 	seedAPlace(t, h, token)
@@ -585,7 +504,7 @@ func TestTheTwoPhotoBranchesEachReachTheStore(t *testing.T) {
 	}
 }
 
-// D2 ANSWERS THE WHOLE LOG AND NOT A 204, for D3's reason: the cache cannot
+// D2 answers the whole log and not A 204, for D3's reason: the cache cannot
 // splice a cascade.
 func TestRemovingAPlaceAnswersTheWholeLogbook(t *testing.T) {
 	h, token := geographyHarness(t)
@@ -611,9 +530,8 @@ func TestRemovingAPlaceAnswersTheWholeLogbook(t *testing.T) {
 	}
 }
 
-// A REMOVAL OF SOMETHING ABSENT IS A SUCCESS AND MOVES NO TAG, which is
-// DeleteTrip's contract and the client's own: `removePlace` answers true for an
-// id the log does not hold.
+// A removal of something absent is a success and moves no tag, which is
+// DeleteTrip's contract and the client's own.
 func TestRemovingAPlaceThatIsNotInTheLogSucceedsAndMovesNothing(t *testing.T) {
 	h, token := geographyHarness(t)
 	seedAPlace(t, h, token)
@@ -632,8 +550,6 @@ func TestRemovingAPlaceThatIsNotInTheLogSucceedsAndMovesNothing(t *testing.T) {
 			"delete throws away the phone's whole cached document", got, want)
 	}
 }
-
-// === helpers ===
 
 func seedAPlace(t *testing.T, h *harness, token string) {
 	t.Helper()

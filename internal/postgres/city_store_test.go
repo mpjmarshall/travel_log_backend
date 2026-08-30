@@ -1,21 +1,4 @@
-// T5's city against a real PostgreSQL. Test-first.
-//
-// This file needs a database and SKIPS, saying so, when there is none.
-//
-// WHAT ONLY THIS FILE CAN SAY:
-//
-//  1. THE ATTACHED CITY LANDS AT THE END OF AN ORDERED JOIN TABLE. `cityIds`
-//     is an array on the wire and `trip_cities` underneath (DEC-64), so the
-//     only thing between "Kyoto then Seoul" and "Seoul then Kyoto" is an
-//     ordinal computed from the rows that are already there.
-//  2. A RE-PUT DOES NOT ATTACH TWICE. `trip_cities_pkey` would refuse it, and
-//     what a client sees is a 500 on a request that had already succeeded.
-//  3. A WRITE THAT NAMES ONLY THE NAME LEAVES THE COUNTRY AND THE CENTRE
-//     ALONE (DEC-89) — and the proposed INSERT tuple is checked against five
-//     NOT NULL columns and four CHECKs before the conflict is resolved, so
-//     "leave alone" here means "propose the stored value" rather than
-//     "propose NULL".
-//  4. AN UNKNOWN `attachTo` ROLLS THE WHOLE WRITE BACK, city included.
+// T5's city against a real PostgreSQL.
 package postgres
 
 import (
@@ -61,14 +44,8 @@ func aCityWrite(id, name string) logbook.CityWrite {
 	}
 }
 
-// === THE LEG WRITTEN FIRST ===
-
-// A CITY CREATED WITH `attachTo` JOINS THAT TRIP'S ITINERARY AT THE END, AND
-// THE ANSWER IS THE WHOLE LOG.
-//
-// The order is the client's own — `t.withCities([...t.cityIds, id])` — and it
-// is travel order rather than a set: T1 and T4 draw the itinerary in the order
-// it was walked, so prepending would silently reorder somebody's trip.
+// A city created with `attachTo` joins that trip's itinerary at the end, and
+// the answer is the whole log.
 func TestACityAttachedToATripLandsAtTheEndAndAnswersTheWholeLog(t *testing.T) {
 	store, db := cityStore(t)
 
@@ -97,9 +74,6 @@ func TestACityAttachedToATripLandsAtTheEndAndAnswersTheWholeLog(t *testing.T) {
 			"END, and the order is travel order rather than a set", got)
 	}
 
-	// And the answered DOCUMENT agrees with the rows, which is what the phone
-	// splices. A store that wrote the row and answered a stale document would
-	// pass the assertion above.
 	for _, trip := range written.Document.Trips {
 		if trip.ID != "autumn-crossing" {
 			continue
@@ -110,8 +84,8 @@ func TestACityAttachedToATripLandsAtTheEndAndAnswersTheWholeLog(t *testing.T) {
 	}
 }
 
-// A CITY CREATED WITHOUT `attachTo` BELONGS TO NO TRIP AND THE ANSWER IS THE
-// CITY. Both halves fail on their own.
+// A city created without `attachTo` belongs to no trip and the answer is the
+// city.
 func TestACityCreatedWithNoAttachToBelongsToNoTripAndAnswersTheCity(t *testing.T) {
 	store, db := cityStore(t)
 
@@ -135,12 +109,7 @@ func TestACityCreatedWithNoAttachToBelongsToNoTripAndAnswersTheCity(t *testing.T
 	}
 }
 
-// A RE-PUT DOES NOT ATTACH TWICE, which is what makes the route retriable.
-//
-// `trip_cities_pkey` is (traveller_id, trip_id, city_id), so a second append
-// violates it and reaches the client as a 500 on a request that had already
-// succeeded — and the row it would have added is a second entry for a city
-// already on the itinerary.
+// A RE-put does not attach twice, which is what makes the route retriable.
 func TestReAttachingACityThatIsAlreadyOnTheItineraryChangesNothing(t *testing.T) {
 	store, db := cityStore(t)
 	ctx := context.Background()
@@ -159,11 +128,7 @@ func TestReAttachingACityThatIsAlreadyOnTheItineraryChangesNothing(t *testing.T)
 	}
 }
 
-// A WRITE THAT NAMES ONLY THE NAME LEAVES EVERYTHING ELSE ALONE (DEC-89).
-//
-// This is the body a rename sends, and it is the branch that breaks loudly if
-// the upsert proposes NULLs: the tuple is checked against five NOT NULL
-// columns and `cities_country_code_ck` BEFORE the conflict is resolved.
+// A write that names only the name leaves everything else alone.
 func TestRenamingACityLeavesItsCountryAndItsCentreAlone(t *testing.T) {
 	store, db := cityStore(t)
 
@@ -190,13 +155,8 @@ func TestRenamingACityLeavesItsCountryAndItsCentreAlone(t *testing.T) {
 	}
 }
 
-// AN UNKNOWN `attachTo` IS A 422 NAMING THE FIELD, AND THE CITY IS NOT WRITTEN
-// EITHER.
-//
-// It is a 422 rather than a 404 because of which thing the request is about:
-// the path names the CITY and the trip is a field of the body, which is how
-// the client's own `createCity` treats it — it answers null without writing
-// when `log.trip(attachTo) == null`.
+// an unknown `attachTo` is a 422 naming the field, and the city is not
+// written either.
 func TestACityAttachedToATripThatIsNotInTheLogIsRefusedAndWritesNothing(t *testing.T) {
 	store, db := cityStore(t)
 
@@ -235,9 +195,8 @@ func TestACityCreatedWithoutItsRequiredFieldsIsRefusedByName(t *testing.T) {
 	}
 }
 
-// A COVER THAT HAS NOT BEEN UPLOADED IS REFUSED BY NAME, which is R3's
-// `uploaded_at IS NOT NULL` rule reaching R6's entity: the four foreign keys
-// guarantee the ROW exists and say nothing about whether the bytes landed.
+// A cover that has not been uploaded is refused by name, which is R3's
+// `uploaded_at is not null` rule reaching R6's entity.
 func TestACityCoverMustNameACommittedObject(t *testing.T) {
 	store, db := cityStore(t)
 
@@ -259,22 +218,3 @@ func TestACityCoverMustNameACommittedObject(t *testing.T) {
 		t.Errorf("coverAsset = %v, want %s", written.City.CoverAsset, assetA)
 	}
 }
-
-// DEC-57 IS ALREADY GUARDED AND THIS STEP DOES NOT GUARD IT TWICE.
-//
-// R6 adds no `DELETE /v1/cities/{id}` route: the client has no delete-a-city
-// control, so no sheet copy authorises the cascade, and a cascade here would
-// be the largest destructive act in the application — every place in the city,
-// every photograph taken there across every trip, every walk.
-//
-// A LEG ASSERTING THAT THE DATABASE REFUSES IT WAS WRITTEN HERE AND DELETED,
-// and the reason is worth more than the leg would have been.
-// `TestDeletingACityIsRefusedByEveryChildThatPointsAtIt` in schema_test.go
-// already does it, and does it BETTER: it removes the other three children one
-// at a time so each of the four foreign keys is in turn the one that fires,
-// where a single DELETE against the whole fixture only ever proves whichever
-// key PostgreSQL happens to check first. Measured while writing the duplicate:
-// against `seeded`, the refusal names `trip_cities_city_fk` and NOT
-// `places_city_fk` — so a leg asserting the latter would have been red against
-// correct work. R6's own acceptance check asserts exactly that string, and the
-// discrepancy is reported there rather than papered over here.

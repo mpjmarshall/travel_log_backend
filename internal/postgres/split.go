@@ -2,35 +2,8 @@ package postgres
 
 import "strings"
 
-// splitStatements cuts a .sql file into top-level statements on unquoted
-// semicolons. It is a lexer, not a parser: it knows exactly enough of
-// PostgreSQL's lexical structure to tell a separator from a semicolon inside
-// something, and nothing at all about what any statement means.
-//
-// WHY IT EXISTS AT ALL. `-- migrate:no-transaction` is the escape hatch for
-// statements PostgreSQL refuses inside a transaction block, of which
-// `CREATE INDEX CONCURRENTLY` is the one that will actually be wanted. The
-// simple query protocol wraps MULTIPLE statements sent in one message in an
-// IMPLICIT transaction block, so a whole file handed to one Exec re-creates
-// the very condition the directive exists to escape. Executed one at a time,
-// nothing is wrapped.
-//
-// The five things it has to know, each of which is a real .sql construct and
-// four of which a naive `strings.Split(src, ";")` gets wrong:
-//
-//   - '...' with ” as the escape, and \ as an escape ONLY in an E'...' string
-//     (standard_conforming_strings has been on by default since 9.1, so '\'
-//     is a complete string holding a backslash);
-//   - "..." quoted identifiers;
-//   - $$...$$ and $tag$...$tag$ bodies, which is where a function's own
-//     semicolons live — and $1 is a parameter, not an opening tag;
-//   - -- to end of line;
-//   - /* */ which NESTS in PostgreSQL, unlike C's.
-//
-// Chunks holding only whitespace and comments are dropped, so a file's header
-// comment does not become an empty statement. Comments attached ABOVE a
-// statement stay with it, which keeps `each FK carries its comment` true of
-// what is executed rather than only of what is checked in.
+// splitStatements cuts a.sql file into top-level statements on unquoted
+// semicolons.
 func splitStatements(src string) []string {
 	var out []string
 	start := 0
@@ -135,9 +108,7 @@ func splitStatements(src string) []string {
 	return out
 }
 
-// dollarTag reports the opening delimiter at src[i] if one starts there —
-// "$$" or "$name$" — and false for a positional parameter such as $1 or $1$,
-// since a tag may not begin with a digit.
+// dollarTag reports the opening delimiter at src[i] if one starts there.
 func dollarTag(src string, i int) (string, bool) {
 	j := i + 1
 	for j < len(src) && isIdentByte(src[j]) {

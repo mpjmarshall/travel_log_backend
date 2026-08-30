@@ -1,10 +1,5 @@
-// The two auth routes, over the real mux and the real middleware chain, with a
-// fake store. Test-first.
-//
-// IT RUNS WITHOUT A DATABASE ON PURPOSE. The two legs that matter most here —
-// the byte-identical failure and the 429 ceiling — are about what leaves the
-// process, and putting them behind a TEST_DATABASE_URL skip is putting them
-// where legs go to stop being run.
+// The two auth routes, over the real mux and the real middleware chain, with
+// a fake store.
 package httpapi
 
 import (
@@ -27,8 +22,6 @@ import (
 	"travellog/internal/httpx"
 	"travellog/internal/media"
 )
-
-// === the fixture ===
 
 type fakeStore struct {
 	mu         sync.Mutex
@@ -64,13 +57,6 @@ func (f *fakeStore) CreateTraveller(_ context.Context, email, hash string) (auth
 		return auth.Traveller{}, auth.ErrEmailTaken
 	}
 	f.next++
-	// A UUID AND NOT `traveller-1`, AND IT IS NOT COSMETIC. `travellers.id` is
-	// a `uuid` column and internal/media refuses anything else outright —
-	// `media.Address` checks the shape because the traveller is a PATH SEGMENT
-	// in the bucket, so a value that could carry a `/`, a `.` or a `%` would
-	// let one traveller's key reach outside their own prefix. The old value
-	// made every media route answer 500 from inside the signer, which is how
-	// this was found.
 	tr := auth.Traveller{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", f.next), Email: email}
 	f.travellers[key] = stored{Traveller: tr, hash: hash}
 	return tr, nil
@@ -96,10 +82,6 @@ func (f *fakeStore) CreateSession(_ context.Context, travellerID string, tokenHa
 		return "", f.failWith
 	}
 	id := fmt.Sprintf("session-%d", len(f.sessions)+1)
-	// LastUsedAt MIRRORS `sessions.last_used_at NOT NULL DEFAULT now()`, and
-	// it is not decoration: DEC-100 decides whether to stamp the column by
-	// comparing the STORED value against the clock, so a fake whose sessions
-	// are born at the zero time reports every one of them as infinitely stale.
 	f.sessions[string(tokenHash)] = auth.Session{
 		ID: id, TravellerID: travellerID,
 		TokenHash:  append([]byte(nil), tokenHash...),
@@ -132,9 +114,8 @@ func (f *fakeStore) TouchSession(context.Context, string, string, time.Time) err
 	return f.failWith
 }
 
-// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at IS
-// NULL`. The fake honours the "already revoked moves nothing" half, because
-// that is what the bool and the count are for.
+// RevokeSession and RevokeEverySession mirror `UPDATE … WHERE revoked_at is
+// NULL`.
 func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -170,14 +151,8 @@ func (f *fakeStore) RevokeEverySession(_ context.Context, travellerID string) (i
 	return moved, nil
 }
 
-// TravellerExists is DEC-86's question, and the fake answers it the way the
-// table does: any row at all, whatever its address.
-//
-// THE FAKE HONOURS THE RULE RATHER THAN LEAVING IT TO POSTGRESQL, for the
-// reason fakeLogbook honours DEC-89's pointer contract: a fake that says yes
-// to everything makes every handler leg green against the contract the service
-// was just given. It is also what lets the 409 be asserted with no database,
-// which is where R4 measured a 164-leg gap.
+// TravellerExists is the question, and the fake answers it the way the table
+// does: any row at all, whatever its address.
 func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -187,8 +162,7 @@ func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
 	return len(f.travellers) > 0, nil
 }
 
-// now is the clock `sessions.last_used_at` defaults to. The harness sets it to
-// the same fixed instant the service reads.
+// now is the clock `sessions.last_used_at` defaults to.
 func (f *fakeStore) now() time.Time {
 	if f.clock == nil {
 		return time.Time{}
@@ -213,9 +187,6 @@ type harness struct {
 	public  *fakePublic
 	deps    Deps
 
-	// bearerToken is memoised because registration is CLOSED after the first
-	// traveller (DEC-86) and every sign-in spends a credential token — so a
-	// leg that needs the bearer twice must not pay for it twice.
 	bearerToken string
 	logs        *bytes.Buffer
 	client      *http.Client
@@ -224,14 +195,6 @@ type harness struct {
 
 // addressLog records the client address of every request that reaches the
 // chain.
-//
-// IT EXISTS SO THAT "two travellers, ONE address" IS MEASURED RATHER THAN
-// ASSUMED. That is the premise the whole per-traveller keying claim rests on:
-// a limiter keyed on the address, on a constant, or on the path passes every
-// leg written from loopback unless something asserts the addresses were the
-// same. httptest is expected to give both callers 127.0.0.1, and a leg whose
-// premise is an expectation about the test harness is a leg that stops meaning
-// what it says the day the harness changes.
 type addressLog struct {
 	mu   sync.Mutex
 	seen map[string]int
@@ -292,8 +255,6 @@ func newHarness(t *testing.T, opt options) *harness {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(logs, nil))
 	store := newStore()
-	// The same clock the service reads, so a session is born fresh — see
-	// fakeStore.TravellerExists's sibling comment on LastUsedAt.
 	store.clock = func() time.Time {
 		at, _ := time.Parse(time.RFC3339, fixedNow)
 		return at
@@ -313,34 +274,13 @@ func newHarness(t *testing.T, opt options) *harness {
 	}
 
 	books := &fakeLogbook{}
-	// THE GEOGRAPHY TWIN IS ONE STRUCT SATISFYING BOTH R6 PORTS, because a
-	// place write names a city and the two have to agree about what exists.
 	geography := &fakeGeography{books: books}
-	// THE MOMENTS TWIN IS ONE STRUCT SATISFYING BOTH R7 PORTS, over the same
-	// document — so a photograph written here is one a later re-file can name,
-	// and a walk written here is one N1's Discard can flag.
 	moments := &fakeMoments{books: books}
-	// THE MEDIA TWIN IS THE REAL ONE (media.Memory), NOT A STUB THAT SAYS YES.
-	// It enforces the digest, the exact length, the content type, the
-	// write-once and a bucket that has to exist — because a twin that accepts
-	// what MinIO refuses turns a handler leg into evidence about nothing. The
-	// bucket is created here so the ordinary path works; the leg that cares
-	// about a bucket that does not exist makes its own.
 	objects := media.NewMemory()
 	if err := objects.EnsureBucket(context.Background()); err != nil {
 		t.Fatalf("EnsureBucket: %v", err)
 	}
 	rows := newFakeMedia()
-	// THE PUBLIC TWIN READS THE SAME DOCUMENT EVERY OTHER TWIN WRITES, so a
-	// trip created through the harness is one a share link can publish, and
-	// the row rules it applies are the ones internal/postgres proves against
-	// real SQL. A twin that published rows the store would not would make
-	// every leg here evidence about nothing.
-	//
-	// THE MINTER IS COUNTED. `countingObjects` wraps the real media.Memory
-	// rather than replacing it, because "sharePhotos off mints nothing" is a
-	// claim about CALLS and no assertion on a response body can see a URL that
-	// was minted and dropped.
 	shared := &fakePublic{books: books}
 	counted := &countingObjects{Store: objects}
 	deps := Deps{
@@ -367,11 +307,6 @@ func newHarness(t *testing.T, opt options) *harness {
 	mux := http.NewServeMux()
 	Mount(mux, deps)
 
-	// THE PROTECTED ROUTE IS THE TEST'S, NOT THE PACKAGE'S. VS6 builds the
-	// middleware and VS7 builds the first route that wears it, so mounting one
-	// in lib/ here would be VS7's work arriving early and unasked for. What
-	// this proves is exactly what VS7 will rely on: RequireTraveller resolves
-	// the bearer and puts the traveller where a handler reads it.
 	mux.Handle("GET /probe", RequireTraveller(service, log)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			tr, ok := auth.TravellerFrom(r.Context())
@@ -457,13 +392,8 @@ func credentialsFor(email string) string {
 	return fmt.Sprintf(`{"email":%q,"passphrase":"a long enough passphrase"}`, email)
 }
 
-// === THE LEG WRITTEN FIRST ===
-
-// DEC-61 and the slice's own verified_by: a wrong passphrase and an unknown
-// address must produce an IDENTICAL body and status. The comparison is on the
-// BYTES rather than on a decoded map, because `{"code":"unauthenticated"}` and
-// `{"code":"unauthenticated","field":""}` decode to the same three fields'
-// worth of meaning and are two different answers on the wire.
+// The slice's own verified_by: a wrong passphrase and an unknown address
+// must produce an IDENTICAL body and status.
 func TestAWrongPassphraseAndAnUnknownAddressAreByteIdentical(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
@@ -490,9 +420,6 @@ func TestAWrongPassphraseAndAnUnknownAddressAreByteIdentical(t *testing.T) {
 		t.Errorf("the body is %q, want %q", wrong.body, `{"code":"unauthenticated"}`)
 	}
 
-	// The headers too: a Content-Length that differs by one is the same oracle
-	// wearing a different hat, and so is a header present on one and not the
-	// other. X-Request-Id is per-request by design and is the only exclusion.
 	for _, a := range []answer{wrong, unknown} {
 		a.header.Del(httpx.RequestIDHeader)
 		a.header.Del("Date")
@@ -502,8 +429,6 @@ func TestAWrongPassphraseAndAnUnknownAddressAreByteIdentical(t *testing.T) {
 			wrong.header, unknown.header)
 	}
 }
-
-// === register ===
 
 func TestRegisterAnswers201WithTheTravellerAndNoTokenAnywhere(t *testing.T) {
 	h := newHarness(t, options{})
@@ -541,17 +466,8 @@ func TestRegisterAnswers201WithTheTravellerAndNoTokenAnywhere(t *testing.T) {
 	}
 }
 
-// DEC-86, ON THE WIRE: ANY second registration is 409, and the three are BYTE
+// , on the wire: ANY second registration is 409, and's three are BYTE
 // IDENTICAL.
-//
-// It replaces TestRegisteringAnAddressTwiceInAnotherCasingIs409, whose name
-// promised the CASING was the reason and which would now pass against a build
-// that still handed a stranger an account. The byte comparison is the half
-// that matters: the security lens flagged the old 409-on-duplicate as an
-// enumeration surface, and what closes it is not the status but the response
-// being the same response — a caller cannot tell "that address is taken" from
-// "this instance is in use", because there is nothing left to tell them apart
-// with.
 func TestAnySecondRegistrationIs409AndTheThreeAreIndistinguishable(t *testing.T) {
 	answers := map[string]answer{}
 	for _, second := range []string{"a@b.com", "A@B.com", "a-total-stranger@example.com"} {
@@ -584,10 +500,7 @@ func TestAnySecondRegistrationIs409AndTheThreeAreIndistinguishable(t *testing.T)
 	}
 }
 
-// AND THE FIELD CHECKS STILL COME FIRST ON A CLOSED INSTANCE. A malformed
-// address is a 422 naming the field whether or not registration is open;
-// answering 409 to it would tell a client to stop trying when what it needs to
-// do is fix the body.
+// The field checks still come first on A closed instance.
 func TestAClosedRegistrationStillAnswers422ToABodyItCannotUse(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
@@ -603,15 +516,8 @@ func TestAClosedRegistrationStillAnswers422ToABodyItCannotUse(t *testing.T) {
 	}
 }
 
-// A SMOKE LEG, AND NAMED AS ONE AFTER A MUTATION SHOWED IT COULD NOT SEE WHAT
-// ITS FIRST NAME CLAIMED. It was called
-// TestSigningInResolvesTheAddressInAnyCasing, and it cannot: the fake store
-// folds case on lookup exactly as travellers_email_lower_key does, so a
-// handler that upper-cased the address before the lookup passes it —
-// measured, `strings.ToUpper(body.Email)` at the SignIn call site left this
-// leg green. DEC-65's casing rule is guarded where the index is, in
-// internal/postgres. What this proves is the wiring: two routes, one after the
-// other, over the real mux and the real chain.
+// A smoke leg, and named as one after A mutation showed it could not see what
+// its first name claimed.
 func TestRegisterThenSignInGoesThroughTheRealChain(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register",
@@ -689,8 +595,6 @@ func TestAStoreFailureIs500AndSaysNothingElse(t *testing.T) {
 	}
 }
 
-// === sign in ===
-
 func TestSignInAnswers201WithATokenAndItsExpiry(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
@@ -720,9 +624,8 @@ func TestSignInAnswers201WithATokenAndItsExpiry(t *testing.T) {
 	}
 }
 
-// The acceptance check DEC-08 and spec L24 share: the plaintext appears in ONE
-// response body, in no log line and in no column. The column half is
-// internal/postgres's; the other two are here.
+// The acceptance check and share: the plaintext appears in one response body,
+// in no log line and in no column.
 func TestThePlaintextTokenAppearsInOneBodyAndInNoLogLine(t *testing.T) {
 	h := newHarness(t, options{})
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
@@ -734,8 +637,6 @@ func TestThePlaintextTokenAppearsInOneBodyAndInNoLogLine(t *testing.T) {
 		t.Fatalf("no token in %s", issued.body)
 	}
 
-	// Use it, so an access log written for an AUTHENTICATED request is in the
-	// buffer too.
 	h.do(t, http.MethodGet, "/probe", "", "Bearer "+token)
 
 	if strings.Contains(h.logs.String(), token) {
@@ -752,8 +653,6 @@ func TestThePlaintextTokenAppearsInOneBodyAndInNoLogLine(t *testing.T) {
 		t.Errorf("two sign-ins answered the same token")
 	}
 }
-
-// === DEC-48 ===
 
 func TestBothAuthRoutesAreRateLimited(t *testing.T) {
 	for _, path := range []string{"/v1/auth/register", "/v1/auth/session"} {
@@ -772,10 +671,8 @@ func TestBothAuthRoutesAreRateLimited(t *testing.T) {
 	}
 }
 
-// DEC-48's own named leg, asserted ON THE RESPONSE and not on a timer: the
-// N+1th CONCURRENT login is REFUSED, not made to wait. Queueing converts
-// memory exhaustion into timeout exhaustion, which is the same outage wearing
-// a different error.
+// The own named leg, asserted on the response and not on a timer: the N+1th
+// CONCURRENT login is REFUSED, not made to wait.
 func TestTheNPlusOnethConcurrentLoginIsRefusedWith429(t *testing.T) {
 	const n = 2
 	inner := &parkingHasher{
@@ -821,9 +718,8 @@ func TestTheNPlusOnethConcurrentLoginIsRefusedWith429(t *testing.T) {
 	wg.Wait()
 }
 
-// parkingHasher holds every call open once `park` is set, so a test can have N
-// logins genuinely in flight at once. Two real Argon2 calls on a fast machine
-// may simply not overlap, which would make the ceiling leg pass for no reason.
+// parkingHasher holds every call open once `park` is set, so a test can have
+// N logins genuinely in flight at once.
 type parkingHasher struct {
 	real    auth.Hasher
 	entered chan struct{}
@@ -853,26 +749,13 @@ type atomicBool struct {
 func (a *atomicBool) Store(v bool) { a.mu.Lock(); a.v = v; a.mu.Unlock() }
 func (a *atomicBool) Load() bool   { a.mu.Lock(); defer a.mu.Unlock(); return a.v }
 
-// === the routes themselves ===
-
-// THE TWO CREDENTIAL PATHS TAKE THE VERBS THE TABLE GIVES THEM AND NOTHING
-// ELSE.
-//
-// `DELETE /v1/auth/session` IS NOW A REAL ROUTE, so it comes off the refused
-// list — and taking it off is not a weakening, because the leg's claim was
-// never "no other verb exists" but "no other verb is SERVED". A route that
-// arrives is a decision somebody made; a route that arrives and quietly
-// satisfies a leg written to refuse it is the shape this project keeps
-// finding. The whole table's coverage is asserted in routes_test.go, which
-// iterates rather than lists.
+// the two credential paths take the verbs the table gives them and nothing
+// else.
 func TestTheCredentialRoutesTakeTheVerbsTheTableGivesThem(t *testing.T) {
 	h := newHarness(t, options{})
 	refused := map[string][]string{
 		"/v1/auth/register": {http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch},
-		// DELETE is served here since R5. It is authenticated, so an
-		// unauthenticated DELETE is a 401 rather than a 405 — asserted below
-		// so the difference is stated rather than left as a gap in this list.
-		"/v1/auth/session": {http.MethodGet, http.MethodPut, http.MethodPatch},
+		"/v1/auth/session":  {http.MethodGet, http.MethodPut, http.MethodPatch},
 	}
 	for path, methods := range refused {
 		for _, method := range methods {
@@ -890,20 +773,7 @@ func TestTheCredentialRoutesTakeTheVerbsTheTableGivesThem(t *testing.T) {
 	}
 }
 
-// === the middleware ===
-
-// A SURVIVOR IS ARGUED HERE RATHER THAN LEFT UNMENTIONED. Deleting
-// RequireTraveller's `if !held` branch — reading the token with `_` and
-// letting Authenticate answer — leaves this leg GREEN, measured. The two
-// paths reach the same 401 by different roads: one refuses to READ a
-// credential, the other refuses to ACCEPT one, and an absent header arrives
-// at the second as the empty string, which HashToken rejects on length.
-//
-// The branch is kept anyway, and the reason is that the redundancy is between
-// FILES. Without it, "no Authorization header at all" is answered correctly
-// only because auth/token.go refuses a zero-length token — a property of
-// another package, guarded by another leg, that nothing here would notice the
-// loss of. One line, and it does not depend on somebody else's invariant.
+// A survivor is argued here rather than left unmentioned.
 func TestAnAuthenticatedRouteRefusesEveryShapeOfMissingCredential(t *testing.T) {
 	h := newHarness(t, options{})
 	for name, bearer := range map[string]string{
@@ -960,9 +830,7 @@ func TestAStoreFailureUnderTheMiddlewareIs500AndNot401(t *testing.T) {
 	}
 }
 
-// DEC-48 is a ruling, and a ruling like this regresses silently: an optional
-// dependency left unset reads as working software and removes the only bound
-// on unauthenticated Argon2 work. Mount refuses instead.
+// is a ruling, and a ruling like this regresses silently.
 func TestMountRefusesToRunWithoutARateLimiter(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -973,10 +841,7 @@ func TestMountRefusesToRunWithoutARateLimiter(t *testing.T) {
 	Mount(http.NewServeMux(), Deps{Auth: &auth.Service{}, Log: slog.Default()})
 }
 
-// The code methods, so this file's fake still satisfies auth.Store. They are
-// unreachable from the handlers tested here — the code routes arrive with
-// step 7 — and answering ErrNoCode is the honest stand-in until they do: a
-// fake that pretended to hold codes would be asserting itself.
+// The code methods, so this file's fake still satisfies auth.Store.
 func (f *fakeStore) IssueCode(context.Context, string, []byte, time.Time) error {
 	return nil
 }

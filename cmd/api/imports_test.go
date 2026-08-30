@@ -1,15 +1,4 @@
 // The pgx blank-import monopoly, as a mechanism.
-//
-// go_backend.md L20: "Use the standard `database/sql` package exclusively. Do
-// not use GORM, sqlc, or sqlx. Use `_ \"github.com/jackc/pgx/v5/stdlib\"`
-// solely as a blank import driver."
-//
-// Three claims live in that sentence and this file asserts all three: the
-// driver is imported EXACTLY ONCE, it is imported in cmd/api/main.go, and it is
-// imported BLANK. The third is the one a grep cannot make — `grep -rn
-// 'jackc/pgx'` returning one line is equally satisfied by `import pgx
-// "github.com/jackc/pgx/v5/stdlib"` followed by a direct call into it, which is
-// exactly what "solely as a blank import driver" forbids.
 package main
 
 import (
@@ -98,27 +87,15 @@ func pgxImports(t *testing.T) []pgxImport {
 	return found
 }
 
-// CORRECTED AT VS4, AND THE CORRECTION IS THE INTERESTING HALF. This leg was
-// `TestPgxIsImportedExactlyOnceBlankAndInMain` and it went red against correct
-// work the moment internal/postgres/testdb opened a pool — which it must, to
-// be the test seam onto a real database. "Exactly once" was never what
-// go_backend.md L20 says: it says the driver is used SOLELY AS A BLANK IMPORT
-// DRIVER, and that claim is about HOW it is imported, not how many times.
-//
-// So the count became a NAMED LIST, asserted by EQUALITY. A third importer has
-// to be added here and argue for itself, which is the property the count was
-// standing in for; and the blank-import assertion — the one a grep cannot make
-// — now applies to every entry rather than to the only entry.
+// corrected at, and the correction is the interesting half.
 var pgxImporters = map[string]string{
 	"cmd/api/main.go":                    "the binary: registers the driver for database/sql, and calls nothing in it",
 	"internal/postgres/testdb/testdb.go": "the test seam: opens the pool the store legs run against",
 	"cmd/seed/main.go":                   "the developer command: registers the driver for its own pool, and calls nothing in it",
 }
 
-// TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes THE CLAIM A GREP
-// CANNOT MAKE. One matching line is equally satisfied by
-// `import pgx "…/stdlib"` followed by a direct call into the package, which is
-// exactly what spec L20 forbids.
+// TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver makes the CLAIM A grep
+// cannot make.
 func TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver(t *testing.T) {
 	got := pgxImports(t)
 
@@ -149,19 +126,8 @@ func TestPgxIsImportedOnlyBlankAndOnlyWhereItIsTheDriver(t *testing.T) {
 	}
 }
 
-// cmd/api MUST NOT IMPORT internal/seed, and this is the mechanism rather than
-// the sentence.
-//
-// The rule is in the definition of done and in internal/seed's own package
-// comment — "it is a developer command and must never run in production or at
-// boot" — and until R4 there was no command at all, so nothing could have
-// broken it and nothing checked. `make seed` is a second main package now, and
-// the failure this guards against is not a wrong pixel: it is a fixture loader
-// linked into the binary that serves somebody's log.
-//
-// IT WALKS THE IMPORT GRAPH TRANSITIVELY rather than reading cmd/api's own
-// import block, because the way this rule actually breaks is a helper in
-// internal/postgres reaching for a seed constant.
+// cmd/api must not import internal/seed, and this is the mechanism rather
+// than the sentence.
 func TestNothingUnderCmdAPIReachesInternalSeed(t *testing.T) {
 	root := moduleRootFromHere(t)
 	pkgs := map[string][]string{}
@@ -204,9 +170,6 @@ func TestNothingUnderCmdAPIReachesInternalSeed(t *testing.T) {
 		t.Fatalf("walking %s: %v", root, err)
 	}
 
-	// A POSITIVE CONTROL IN THE SAME RUN. A graph walk that found nothing at
-	// all would pass this test just as well as a clean one, and cmd/seed IS
-	// supposed to reach internal/seed.
 	if !reaches(pkgs, "travellog/cmd/seed", "travellog/internal/seed", map[string]bool{}) {
 		t.Errorf("cmd/seed does not reach internal/seed — the walk found nothing, " +
 			"so the assertion below is proving nothing either")

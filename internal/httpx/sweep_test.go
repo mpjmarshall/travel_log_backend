@@ -1,30 +1,4 @@
 // The two monopolies, as MECHANISMS rather than as disciplines.
-//
-// VS3's acceptance check is `grep -rln 'encoding/json' internal/ cmd/`, and the
-// step's own record already says why a grep is not the guard: it matches its
-// own source, it matches comments, and it cannot tell an import from a
-// mention. That is not a theoretical objection here — the check was RED
-// against correct code when this file was written, because errors.go carried a
-// comment saying the encoder is confined to two functions. The comment was
-// reworded so the grep passes, and rewording a comment to satisfy a check is
-// exactly the evidence that the check is looking at the wrong thing.
-//
-// So the guards below walk the AST:
-//
-//  1. every non-test file that IMPORTS encoding/json is on a NAMED list with
-//     the reason it may — see jsonImporters
-//  2. inside json.go, exactly two FUNCTIONS use it: WriteJSON and DecodeJSON
-//  3. every Code handed to WriteError anywhere in lib code is a named constant
-//     from the block — not a string literal, not a conversion
-//  4. the const block and the runtime status map hold the same words
-//     (twelve at DEC-12, thirteen since DEC-103 — the number is derived from
-//     the decision list in errors_test.go rather than written here twice)
-//
-// TEST FILES ARE EXCLUDED FROM (3) AND THE EXCLUSION IS LOAD-BEARING, not
-// convenience: errors_test.go calls WriteError with `httpx.Code("banana")` ON
-// PURPOSE, to prove the runtime half rejects a word the AST half would have
-// caught. Including test files would make the deliberate proof of one guard
-// fail the other.
 package httpx_test
 
 import (
@@ -60,7 +34,7 @@ func moduleRootFromHttpx(t *testing.T) string {
 	}
 }
 
-// walkLibSource calls fn for every non-test .go file in the module.
+// walkLibSource calls fn for every non-test.go file in the module.
 func walkLibSource(t *testing.T, fn func(rel string, fset *token.FileSet, file *ast.File)) {
 	t.Helper()
 	root := moduleRootFromHttpx(t)
@@ -97,23 +71,6 @@ func walkLibSource(t *testing.T, fn func(rel string, fset *token.FileSet, file *
 }
 
 // jsonImporters is the named list, and it is EQUALITY rather than a count.
-//
-// CORRECTED AT R4, AND THE CORRECTION IS THE SAME ONE THIS REPOSITORY HAS
-// ALREADY MADE TWICE. internal/config's environment sweep was a count until
-// VS4 and cmd/api's pgx sweep was a count until VS4; both went red against
-// correct work, and both became a named list with a reason per entry, because
-// a count is satisfied by the wrong file and a list is not.
-//
-// It went red here the moment `make seed` needed to read the CAPTURED CLIENT
-// FIXTURE off disk (DEC-75). DecodeJSON cannot do it — it takes an
-// http.ResponseWriter and a *http.Request, because MaxBytesReader needs both —
-// and spec L19 says "exclusively use encoding/json for payload encoding and
-// decoding", which is a mandate to use that package rather than a confinement
-// to one file. The confinement is this project's own mechanism, and reading a
-// file a developer command was pointed at is not payload.
-//
-// A THIRD ENTRY HAS TO BE ADDED HERE AND ARGUE FOR ITSELF, which is the
-// property the count was standing in for.
 var jsonImporters = map[string]string{
 	"internal/httpx/json.go": "spec L19's payload encoder and decoder: WriteJSON and DecodeJSON, " +
 		"and the two-function half below is what keeps it to those two",
@@ -156,9 +113,7 @@ func TestOnlyNamedFilesImportTheJSONPackage(t *testing.T) {
 	}
 }
 
-// The two-FUNCTION half, which the file-level grep cannot express at all. A
-// third function in json.go reaching for the encoder is how "confined to two
-// functions" quietly becomes "confined to one file".
+// The two-FUNCTION half, which the file-level grep cannot express at all.
 func TestOnlyTwoFunctionsInJSONGoUseTheEncoder(t *testing.T) {
 	root := moduleRootFromHttpx(t)
 	fset := token.NewFileSet()
@@ -198,11 +153,7 @@ func TestOnlyTwoFunctionsInJSONGoUseTheEncoder(t *testing.T) {
 	}
 }
 
-// === The closed vocabulary, as a walk ===
-
-// constNamesInBlock reads the Code constants out of errors.go's source. The
-// count is DERIVED here and never carried: four counts in the client project's
-// record went wrong from somebody trusting memory over a command.
+// constNamesInBlock reads the Code constants out of errors.go's source.
 func constNamesInBlock(t *testing.T) map[string]string {
 	t.Helper()
 	root := moduleRootFromHttpx(t)
@@ -273,15 +224,6 @@ type wireCodeUse struct {
 
 // badWireCodes reports every WriteError argument that is not a named constant
 // from the block.
-//
-// It takes a parsed file rather than reading the tree itself, so the SAME
-// checker can be run over a synthetic source that violates it. Without that,
-// this guard is a function that has never been shown to reject anything —
-// which today, with few call sites, it would be.
-//
-// The call is matched in both of the shapes it has: a bare *ast.Ident, which is
-// WriteError(...) from inside the package, and an *ast.SelectorExpr, which is
-// httpx.WriteError(...) from outside it.
 func badWireCodes(rel string, fset *token.FileSet, file *ast.File, known map[string]bool) []wireCodeUse {
 	var bad []wireCodeUse
 
@@ -331,18 +273,7 @@ func badWireCodes(rel string, fset *token.FileSet, file *ast.File, known map[str
 	return bad
 }
 
-// THE ONE EXEMPTION, NAMED RATHER THAN ALLOWED FOR.
-//
-// WriteErrorFor is where DEC-62's mapping lands: it hands WriteError whatever
-// CodeFor returned, which is a variable and cannot be a named constant. That is
-// safe for exactly one reason — CodeFor answers from the block or answers
-// `internal`, and never echoes what it was given.
-//
-// The assertion is EQUALITY with this list rather than a skip, so a SECOND call
-// site passing a variable reddens this leg and has to argue for itself. It is
-// keyed on file and function and not on a line number: a line number moves
-// whenever an edit above it is longer than the one it replaced, which is a
-// check that fails against correct work.
+// the one exemption, named rather than allowed for.
 var wireCodeExemptions = []wireCodeUse{
 	{file: "internal/httpx/errors.go", fn: "WriteErrorFor", expr: "c"},
 }
@@ -372,14 +303,7 @@ func TestEveryWordOnTheWireIsANamedConstantFromTheBlock(t *testing.T) {
 	}
 }
 
-// What makes the guard above evidence rather than decoration. The checker is
-// run over source that breaks it in the two ways it exists to catch, and both
-// must be reported.
-//
-// THE SECOND CASE IS THE ONE THAT MATTERS, and it is measured rather than
-// argued: `Code` is a DEFINED STRING TYPE, so an untyped string constant
-// converts implicitly and `WriteError(w, r, "banana")` COMPILES. Typing the
-// parameter does not close the vocabulary. This file does.
+// What makes the guard above evidence rather than decoration.
 func TestTheCheckerRejectsALiteralAndAConversion(t *testing.T) {
 	const src = `package fake
 

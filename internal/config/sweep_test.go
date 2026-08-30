@@ -1,17 +1,4 @@
 // The os.Getenv monopoly, as a MECHANISM rather than a discipline.
-//
-// go_backend.md L30: "Read all configuration (DB DSN, ports) strictly via
-// os.Getenv(). No third-party config managers in the Go code." VS2's step text
-// makes internal/config the only package allowed to make that call.
-//
-// WHY THIS IS NOT THE STEP'S `grep -rn 'os.Getenv' --include='*.go' .`. That
-// grep matches its OWN source — the pattern is in the file doing the searching
-// the moment the check is written down — and it matches this comment, and a
-// comment mentioning os.Getenv in an unrelated file would fail it. It also
-// cannot see os.LookupEnv, which reads the same environment and is a one-word
-// bypass. This walks the AST instead: it sees calls, not text, and it asserts
-// the set of callers is EXACTLY internal/config/config.go — so it fails both
-// when a second file starts reading the environment AND when config.go stops.
 package config_test
 
 import (
@@ -25,9 +12,8 @@ import (
 	"testing"
 )
 
-// moduleRoot walks up from the test's working directory to the directory
-// holding go.mod. Relative "../.." would be a fact about where this file
-// happens to sit today.
+// moduleRoot walks up from the test the working directory to the directory
+// holding go.mod.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -46,13 +32,8 @@ func moduleRoot(t *testing.T) string {
 	}
 }
 
-// walkSource calls fn for every non-test .go file in the module, with its path
-// relative to the module root and its parsed AST.
-//
-// Test files are EXCLUDED, and that is a decision rather than convenience: a
-// test helper reading TEST_DATABASE_URL is not application configuration, and
-// VS5's internal/store/testdb does exactly that by design. Application code is
-// what L30 governs.
+// walkSource calls fn for every non-test.go file in the module, with its
+// path relative to the module root and its parsed AST.
 func walkSource(t *testing.T, fn func(rel string, file *ast.File)) {
 	t.Helper()
 	root := moduleRoot(t)
@@ -90,9 +71,6 @@ func walkSource(t *testing.T, fn func(rel string, file *ast.File)) {
 
 // environmentReaders returns every non-test file calling into the process
 // environment, by any of the four names that reach it.
-//
-// A file that renames the os package, or shadows it, is out of scope: the sweep
-// reads what a reviewer reads.
 func environmentReaders(t *testing.T) []string {
 	t.Helper()
 	readers := map[string]bool{}
@@ -127,26 +105,8 @@ func environmentReaders(t *testing.T) []string {
 	return out
 }
 
-// environmentExemptions is the one file outside internal/config that reads the
-// environment, with the reason it may.
-//
-// CORRECTED AT VS4. The comment on walkSource above says test files are
-// excluded "and VS5's internal/store/testdb does exactly that by design" —
-// but testdb.go is NOT a test file. It is an ordinary package, imported by
-// other packages' tests, and the exclusion its own comment cited never covered
-// it. The sweep therefore went red at VS4 against correct work:
-//
-//	files reading the environment = [internal/config/config.go
-//	internal/postgres/testdb/testdb.go], want exactly [internal/config/config.go]
-//
-// The premise, not the sweep, was what was wrong. The exemption is NAMED, and
-// the assertion below is EQUALITY, so a second exemption has to be added here
-// and argue for itself — the same shape internal/httpx's wireCodeExemptions
-// already uses, and keyed on the file path rather than on a line number.
-//
-// It is also NOT a hole in what L30 governs. TEST_DATABASE_URL is not
-// application configuration: no build reads it, the binary never sees it, and
-// the one function that does read it exists to SKIP a test when it is unset.
+// environmentExemptions is the one file outside internal/config that reads
+// the environment, with the reason it may.
 var environmentExemptions = map[string]string{
 	"internal/postgres/testdb/testdb.go": "TEST_DATABASE_URL: the test seam, not application configuration",
 }

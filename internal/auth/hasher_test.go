@@ -1,11 +1,4 @@
-// Argon2id (DEC-08), test-first.
-//
-// MOST LEGS RUN AT CHEAP PARAMETERS AND THAT IS A DECISION, NOT A SHORTCUT.
-// The shipped parameters are 64 MiB per call; a file that used them
-// everywhere would allocate a gigabyte to assert things about string parsing.
-// The legs that are ABOUT the parameters — that they are DEC-21's untuned
-// numbers, and that a hash carries its own — use the real ones, and they are
-// the only ones that could notice a change to them.
+// Argon2id, test-first.
 package auth
 
 import (
@@ -14,9 +7,7 @@ import (
 )
 
 // cheap is Argon2id at parameters chosen to be fast, and DELIBERATELY unlike
-// the defaults in all four fields: a leg that passes because the hasher
-// quietly used its own settings instead of the encoded ones must not be able
-// to pass by coincidence.
+// the defaults in all four fields.
 var cheap = Argon2id{Params: Params{Memory: 8 << 10, Time: 2, Threads: 1, KeyLen: 16, SaltLen: 8}}
 
 func TestTheDefaultParametersAreDEC21sUntunedOnes(t *testing.T) {
@@ -124,13 +115,7 @@ func TestVerifyAcceptsTheRightPassphraseAndRefusesEveryOther(t *testing.T) {
 	}
 }
 
-// THE LEG DEC-08's ENCODING EXISTS FOR. A hash written under one set of
-// parameters must still verify under a hasher configured with another — that
-// is the whole reason the parameters are in the string. `cheap` and the
-// default differ in all four fields, so a Verify that used its OWN settings
-// computes a different key and refuses a correct passphrase. Which is what
-// DEC-21's deferred tuning would do to every existing traveller on the day
-// somebody raises the memory cost.
+// the LEG's encoding exists for.
 func TestVerifyReadsTheParametersOutOfTheEncodingRatherThanUsingItsOwn(t *testing.T) {
 	written := Argon2id{Params: Params{Memory: 16 << 10, Time: 3, Threads: 2, KeyLen: 24, SaltLen: 12}}
 	encoded, err := written.Hash("shared secret")
@@ -189,12 +174,8 @@ func TestVerifyRefusesAnEncodingItCannotRead(t *testing.T) {
 	}
 }
 
-// A row in the database is not trusted input in the way a request body is, but
-// it is input all the same: a bad migration, a restore from the wrong dump, or
-// a hand-edited row reaches Verify. argon2.IDKey PANICS on t=0 and on p=0 —
-// measured, and the panic is `argon2: number of rounds too small` — so a
-// parameter check here is what stands between one malformed row and a 500 that
-// takes the goroutine's stack with it.
+// A row in the database is not trusted input in the way a request body is,
+// It is input all the same.
 func TestVerifyRefusesParametersThatWouldPanicTheKDF(t *testing.T) {
 	good, err := cheap.Hash("x")
 	if err != nil {
@@ -244,17 +225,7 @@ func TestHashRefusesParametersThatWouldPanicTheKDF(t *testing.T) {
 	}
 }
 
-// Argon2id satisfies Hasher. Stated as a leg rather than as a blank assignment
-// in the source, because DEC-08 asks for "an interface with ONE
-// implementation" and the interface is the half that is easy to let rot.
-//
-// ITS FAILURE MODE IS A BUILD ERROR, NOT A RED ASSERTION, and that is recorded
-// rather than glossed. Renaming Argon2id.Verify does not make this leg report
-// a wrong answer — it makes the package stop compiling, with
-// `Argon2id does not implement Hasher (missing method Verify)` among six
-// errors. That is still a reddening and still exit 1, and it is the right one:
-// an interface and its only implementation drifting apart is a fact about
-// types, so the type checker is the thing that should say so.
+// Argon2id satisfies Hasher.
 func TestArgon2idIsTheHasher(t *testing.T) {
 	var h Hasher = Argon2id{Params: cheap.Params}
 	encoded, err := h.Hash("x")

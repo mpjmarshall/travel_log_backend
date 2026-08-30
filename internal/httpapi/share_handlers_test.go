@@ -1,22 +1,5 @@
-// H1's three writes, over the real mux, the real middleware chain and the real
-// auth, with a fake store.
-//
-// THE FAILING TEST THIS STEP WAS WRITTEN AGAINST IS THE FIRST ONE BELOW, and
-// it is the plan's own leg carried over rather than invented here: the critic
-// called it at v1 and it is the one where a wrong answer is a PRIVACY LEAK
-// rather than a bug. It is spelled in this repository's harness idiom —
-// `newHarness`/`bearer`/`h.put` rather than the plan's sketch of
-// `newAPI`/`registerAndSignIn`/`putJSON` — because a leg written against
-// helpers that do not exist is a leg nobody runs.
-//
-// EXPECTED RED, and this is what it actually said before the routes existed:
-// `PUT share = 404, want 200: 404 page not found`. The plan's sketch expected
-// "the mux's 404 inside the envelope" and that is a fact about cmd/api rather
-// than about this harness: `internal/httpx/mux.go` is what brings an unmatched
-// route inside DEC-12's vocabulary, and it is wired in cmd/api. Here the
-// server is `httpx.Chain(http.NewServeMux(), …)`, so an unmatched route is
-// net/http's own plain-text 404. Recorded because a red quoted from a plan
-// rather than from a run is the class this project keeps finding.
+// H1's three writes, over the real mux, the real middleware chain and the
+// real auth, with a fake store.
 package httpapi
 
 import (
@@ -24,20 +7,8 @@ import (
 	"testing"
 )
 
-// THE CRITIC CALLED THIS LEG EXACTLY RIGHT AT v1 AND IT IS CARRIED VERBATIM IN
-// SUBSTANCE: turn coordinates ON, stop sharing, mint a NEW link, and assert
-// the new link does not carry coordinates. Removing the reset is a privacy
-// leak, not a tidiness issue — the next link hands out exact pins without
-// anybody having turned that on.
-//
-// AND THE RESET IS NOT "the column defaults". Migration 0002 moved the
-// DEFAULTs to the client's true/true/false, and an UPDATE that does not name a
-// column does not reach its default. The three values are asserted BY NAME.
-//
-// (The plan's own text overstated that as "a DEFAULT does not reach an
-// UPDATE", which is false of `SET col = DEFAULT` — see the mutation table in
-// CLAUDE.md, where the mutation the plan named goes GREEN and is replaced by
-// one that can redden.)
+// the critic called this leg exactly right at v1 and it is carried verbatim
+// in substance.
 func TestStoppingSharingDisarmsTheSwitchesForTheNextLink(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -64,8 +35,6 @@ func TestStoppingSharingDisarmsTheSwitchesForTheNextLink(t *testing.T) {
 			"a killed link must not leave a coordinate switch armed for the next one",
 			trip["shareCoordinates"])
 	}
-	// The other two go the OTHER way, and that asymmetry is the client's:
-	// stopSharing writes Trip.defaultSharePhotos and defaultShareNotes, both true.
 	if trip["sharePhotos"] != true {
 		t.Errorf("sharePhotos = %v, want true — stopSharing resets to the client's "+
 			"defaults, and a reset that touches only share_links leaves all three "+
@@ -84,11 +53,7 @@ func TestStoppingSharingDisarmsTheSwitchesForTheNextLink(t *testing.T) {
 	}
 }
 
-// ABSENT MEANS LEAVE ALONE, ON THE ROUTE THE CLIENT ACTUALLY CALLS THIS WAY
-// (DEC-89). H1 flicks ONE switch at a time — every writing control on the
-// screen goes inert while a write is in flight, because two changes inside one
-// save are both computed from the state as it was and the second puts the
-// first back — so a body naming one flag must not reset the other two.
+// absent means leave alone, on the route the client actually calls this way.
 func TestAShareWriteNamingOneSwitchLeavesTheOtherTwoAlone(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -96,7 +61,6 @@ func TestAShareWriteNamingOneSwitchLeavesTheOtherTwoAlone(t *testing.T) {
 		t.Fatalf("PUT /v1/trips/kyoto = %d %s", got.status, got.body)
 	}
 
-	// Two flicks, one at a time, exactly as H1 makes them.
 	if r := h.put(t, "/v1/trips/kyoto/share", `{"sharePhotos":false}`, token); r.status != 200 {
 		t.Fatalf("PUT share = %d %s", r.status, r.body)
 	}
@@ -120,10 +84,7 @@ func TestAShareWriteNamingOneSwitchLeavesTheOtherTwoAlone(t *testing.T) {
 	}
 }
 
-// A BODY NAMING NOTHING IS LEGAL AND WRITES NOTHING. It is the same request as
-// a re-send, and DEC-89's contract is that absence is not an error. The leg
-// exists because the obvious alternative — 422 on an empty body — would refuse
-// exactly the retry a client makes after a lost response.
+// A body naming nothing is legal and writes nothing.
 func TestAShareWriteNamingNothingIsAcceptedAndChangesNothing(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -143,17 +104,8 @@ func TestAShareWriteNamingNothingIsAcceptedAndChangesNothing(t *testing.T) {
 	}
 }
 
-// THE THREE SHARE ROUTES ARE SETTERS AND AN UNKNOWN TRIP IS A 404, which is
-// the OTHER half of the asymmetry D3's delete carries. The client's own
-// sentence: "An unknown id is a failure here, where it is a success for a
-// delete. A delete asks for something to be absent and an absent thing
-// satisfies it; a set asks for a value the log then has to hold."
-//
-// `DELETE /v1/trips/{id}/share` IS ON THIS SIDE OF THE LINE DESPITE ITS VERB,
-// and that is worth one assertion rather than an argument: it is
-// `stopSharing`, which goes through the client's `_replaceTrip` and answers
-// false for an unknown id, and its response is a whole Trip — which cannot be
-// produced for a trip that is not there.
+// the three share routes are setters and an unknown trip is a 404, which is
+// the OTHER half of the asymmetry D3's delete carries.
 func TestTheShareRoutesAre404OnATripThatIsNotInTheLog(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -178,12 +130,7 @@ func TestTheShareRoutesAre404OnATripThatIsNotInTheLog(t *testing.T) {
 	}
 }
 
-// THE MINT REFUSES A CAPABILITY SOMEBODY CAN GUESS, and it names the field.
-//
-// The token is the CLIENT's — the server cannot mint it, because DEC-85 means
-// the server can never hand a plaintext back on any later read — so this is
-// the only place a short one can be stopped. Twelve characters of the client's
-// 31-character alphabet is 59.5 bits; the schema's own check is `token <> ”`.
+// the mint refuses A capability somebody can guess, and it names the field.
 func TestMintingALinkRefusesAGuessableToken(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

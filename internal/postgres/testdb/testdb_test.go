@@ -1,13 +1,5 @@
-// The two things testdb has to get right when there is NO database, plus the
+// The two things testdb has to get right when there is no database, plus the
 // version floor.
-//
-// A SILENT SKIP IS A PASS THAT LIES. Under a plain `go test ./...` a package
-// whose tests all skip prints one line, `ok <pkg>`, and t.Skip's message is
-// suppressed — so the reason has to be worth reading when somebody does look,
-// and it has to name the command that fixes it. That message is asserted here
-// rather than trusted, and so is the SKIPPING ITSELF: `Open` takes a narrow
-// interface so a fake can record which method was called. Asserting only the
-// string would leave "does it actually skip?" proven by nothing.
 package testdb
 
 import (
@@ -32,12 +24,6 @@ func (r *recorder) Fatalf(format string, args ...any) {
 func (r *recorder) Cleanup(func()) {}
 
 func TestOpenFailsWhenThereIsNoDatabaseAndNobodySaidSo(t *testing.T) {
-	// THIS LEG USED TO ASSERT THE OPPOSITE, and it was right until the cost
-	// was measured: an unset TEST_DATABASE_URL skipped the whole of
-	// internal/postgres — every cascade, snapshot, advisory-lock and schema
-	// leg — and `make check` went green anyway. A default green that says
-	// nothing about the layer most likely to break is worse than a red one,
-	// because it is believed.
 	t.Setenv(urlVar, "")
 	t.Setenv(skipVar, "")
 	r := &recorder{}
@@ -51,8 +37,6 @@ func TestOpenFailsWhenThereIsNoDatabaseAndNobodySaidSo(t *testing.T) {
 	if len(r.skips) != 0 {
 		t.Errorf("Open skipped rather than failing: %v", r.skips)
 	}
-	// The message has to carry both ways out, or the developer it stops is
-	// left guessing which one they wanted.
 	for _, want := range []string{urlVar, "make test-db", skipVar} {
 		if !strings.Contains(r.fatals[0], want) {
 			t.Errorf("the failure %q does not name %q", r.fatals[0], want)
@@ -61,16 +45,11 @@ func TestOpenFailsWhenThereIsNoDatabaseAndNobodySaidSo(t *testing.T) {
 }
 
 func TestTheOptOutReadsTheUsualSpellings(t *testing.T) {
-	// EXACTLY "1" IS A GUARD THAT LOOKS BROKEN. A developer reads the failure,
-	// exports TRAVELLOG_SKIP_DB=true, and gets the identical failure back
-	// telling them to set the variable they have just set.
 	for _, yes := range []string{"1", "true", "TRUE", "yes", "y", "on", " true "} {
 		if !optedOut(yes) {
 			t.Errorf("optedOut(%q) = false, want true", yes)
 		}
 	}
-	// And still strict where it matters: an unset or empty variable is not an
-	// opt-out, because unset is equally "I have no Docker" and "I forgot".
 	for _, no := range []string{"", "  ", "0", "false", "no", "maybe"} {
 		if optedOut(no) {
 			t.Errorf("optedOut(%q) = true, want false", no)
@@ -79,10 +58,6 @@ func TestTheOptOutReadsTheUsualSpellings(t *testing.T) {
 }
 
 func TestOpenSkipsWhenSomebodyOptedOutInWriting(t *testing.T) {
-	// The other half, and it is why the opt-out is a SECOND variable rather
-	// than a looser reading of the first: an unset TEST_DATABASE_URL is
-	// equally "I have no Docker" and "I forgot", and only one of those should
-	// pass.
 	t.Setenv(urlVar, "")
 	t.Setenv(skipVar, "1")
 	r := &recorder{}
@@ -96,8 +71,6 @@ func TestOpenSkipsWhenSomebodyOptedOutInWriting(t *testing.T) {
 	if len(r.fatals) != 0 {
 		t.Errorf("Open failed despite the opt-out: %v", r.fatals)
 	}
-	// It must say that nothing below was checked. A skip that reads like a
-	// pass is the thing this whole change is about.
 	if !strings.Contains(r.skips[0], "ON PURPOSE") {
 		t.Errorf("the skip %q does not say it was deliberate", r.skips[0])
 	}
@@ -124,8 +97,7 @@ func TestTheServerVersionFloorIsFifteen(t *testing.T) {
 }
 
 // Without these words the failure is "syntax error at or near (" in a file
-// nobody is reading, which is exactly how the blocker hid for three review
-// passes.
+// nobody is reading.
 func TestTheVersionRefusalSaysWhatBreaksOnAnOlderServer(t *testing.T) {
 	err := checkServerVersion(140012)
 	if err == nil {

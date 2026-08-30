@@ -1,28 +1,4 @@
 // D3's cascade, row for row, against the client's own log.
-//
-// THE SHEET IS THE SPEC AND THIS FILE IS THE SHEET IN COUNTS. D3 itemises four
-// consequences beside the words 'deleted' and 'kept', and then makes the user
-// type the trip's name out before the action arms. Every leg below is named
-// for the line it defends, and EVERY ONE ASSERTS ON A SURVIVING ROW COUNT
-// rather than on error/no-error (DBA F2) — because the failure that matters
-// here is a cascade that succeeds and takes one thing too many.
-//
-// WHY IT IS AT FIXTURE SCALE AND NOT ON A THREE-ROW FIXTURE. The numbers are
-// the ones the safety lens executed against the real 0001 and the real
-// document, and a purpose-built fixture would be a fixture built to agree with
-// the implementation. `autumn-crossing` is the trip the sheet was measured on:
-// 96 photographs, 1 walk, 5 pins across three cities, one live link. All eight
-// figures below were re-derived at this working tree, against postgres:17.11,
-// by counting before and after — they are not copied from the report.
-//
-// THE ONE SHAPE THE FIXTURE DOES NOT HOLD IS THE ONE THAT ONCE WENT WRONG, and
-// it is deliberately not synthesised here. "Deleting a trip left twenty-two of
-// ANOTHER trip's photographs naming a visit that had gone" — in this document
-// no photograph of another trip names an autumn-crossing visit (measured: 0),
-// so the fixture cannot express it. That leg lives in
-// internal/postgres/logbook_store_test.go on a log built to hold it, which is
-// the same arrangement `to_file_test.dart` uses in the client for the window
-// filter the sample log no longer exercises.
 package seed_test
 
 import (
@@ -34,13 +10,7 @@ import (
 )
 
 // deletedAutumnCrossing seeds the client's own log, deletes the trip D3's
-// sheet was measured on THROUGH THE STORE, and answers the row counts before
-// and after.
-//
-// IT GOES THROUGH LogbookStore.DeleteTrip AND NOT THROUGH `DELETE FROM trips`.
-// The raw statement is what the safety lens ran and it proves the SCHEMA; what
-// these legs are about is the route, which has a version bump, a whole-log
-// answer and a Go-side order of statements the schema cannot see.
+// sheet was measured on through the store.
 func deletedAutumnCrossing(t *testing.T) (before, after map[string]int, db *sql.DB) {
 	t.Helper()
 	db, _, _ = loaded(t)
@@ -59,10 +29,7 @@ func deletedAutumnCrossing(t *testing.T) (before, after map[string]int, db *sql.
 	return before, after, db
 }
 
-// SHEET LINE 1 — "N photos and their notes", DELETED.
-//
-// The trip's photographs go, and no other trip's do. Both halves: a cascade
-// that deleted everything would pass the first assertion on its own.
+// sheet line 1 — "N photos and their notes", DELETED.
 func TestD3DeletesTheTripsPhotographsAndTheirNotes(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -73,11 +40,7 @@ func TestD3DeletesTheTripsPhotographsAndTheirNotes(t *testing.T) {
 	}
 }
 
-// SHEET LINE 2 — "N recorded walks", DELETED.
-//
-// One of the two walks in the log is autumn-crossing's, and the other is not.
-// A cascade that took both would still leave the trip gone and nothing else
-// would notice.
+// sheet line 2 — "N recorded walks", DELETED.
 func TestD3DeletesTheTripsWalksAndLeavesTheOtherTripsAlone(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -88,13 +51,7 @@ func TestD3DeletesTheTripsWalksAndLeavesTheOtherTripsAlone(t *testing.T) {
 	}
 }
 
-// SHEET LINE 3 — "N pins in Busan, Kyoto and Seoul", KEPT. THIS IS THE ROW
-// THAT IS EASIEST TO GET WRONG AND THE ONLY ONE WHOSE FAILURE IS SILENT.
-//
-// The subtitle says it in words: "The pins stay in those cities — a trip owns
-// its visits, not its places". So `places` must not move at all, and the CRUD
-// reflex — `DELETE FROM places WHERE id IN (SELECT place_id FROM visits WHERE
-// trip_id = $1)` — takes five of them, with no error anywhere.
+// sheet line 3 — "N pins in Busan, Kyoto and Seoul", KEPT.
 func TestD3KeepsEveryPinAndTakesOnlyTheTripsOwnVisits(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -110,15 +67,7 @@ func TestD3KeepsEveryPinAndTakesOnlyTheTripsOwnVisits(t *testing.T) {
 	}
 }
 
-// SHEET LINE 3, THE HARD HALF — A PIN LEFT WITH NO VISITS AT ALL SURVIVES.
-//
-// `gamcheon` is the fixture's one place whose every visit is on
-// autumn-crossing (measured: it is the only one). After the cascade it is a
-// WISHLIST PLACE — a pin with no visits — which is exactly what the client's
-// own model says: "A place whose only visits were on the deleted trip survives
-// with none, which is a wishlist place". A count of `places` alone cannot see
-// this go wrong if some other place were deleted in its stead, so the row is
-// named.
+// sheet line 3, the hard half — A pin left with no visits at all survives.
 func TestD3KeepsThePinWhoseOnlyVisitsWereOnTheDeletedTrip(t *testing.T) {
 	_, _, db := deletedAutumnCrossing(t)
 	ctx := context.Background()
@@ -152,15 +101,7 @@ func TestD3KeepsThePinWhoseOnlyVisitsWereOnTheDeletedTrip(t *testing.T) {
 	}
 }
 
-// SHEET LINE 4 — "The shared link stops working", DEAD.
-//
-// The link is on the trip, so it goes with the trip. THE ROW GOES ENTIRELY AND
-// NOT ONLY ITS `revoked_at`, and that is SAF-MIN-9 accepted in writing: DEC-67
-// chose its primary key to KEEP revocation history, and
-// `share_links_trip_fk ON DELETE CASCADE` destroys that trip's history along
-// with the live row. The argument is in 0004's own comment beside DEC-67's,
-// and this leg is what makes the accepted behaviour a measured one rather than
-// a silence.
+// sheet line 4 — "The shared link stops working", DEAD.
 func TestD3TakesTheSharedLinkAndItsWholeHistoryWithTheTrip(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -171,14 +112,7 @@ func TestD3TakesTheSharedLinkAndItsWholeHistoryWithTheTrip(t *testing.T) {
 	}
 }
 
-// THE ROWS THE SHEET DOES NOT ITEMISE, BECAUSE IT DOES NOT HAVE TO.
-//
-// The trip goes and its itinerary goes with it — `trip_cities` is the join
-// table behind `cityIds`, so five rows leave with the trip and the OTHER
-// trips' thirteen stay. And the CITIES ARE UNTOUCHED: nothing in this app
-// authorises destroying a city (DEC-57), `trip_cities_city_fk` is RESTRICT,
-// and a cascade that reached them would be the largest destructive act in the
-// application behind a sheet that never mentions it.
+// the rows the sheet does not itemise, because it does not have to.
 func TestD3TakesTheItineraryAndNeverACity(t *testing.T) {
 	before, after, _ := deletedAutumnCrossing(t)
 
@@ -200,21 +134,7 @@ func TestD3TakesTheItineraryAndNeverACity(t *testing.T) {
 	}
 }
 
-// THE SERVER-SIDE `_repointed`, AND ITS SECOND ASSERTION IS THE WHOLE POINT.
-//
-// After the cascade no surviving photograph names a visit that has gone. The
-// schema does that through `photos_visit_fk … ON DELETE SET NULL (visit_id)`,
-// which exists only because the DBA found it, and this leg ASSERTS it rather
-// than trusting it.
-//
-// A DANGLING-REFERENCE CHECK IS NOT A FILING CHECK, and zero has to be zero
-// for the right reason. If the photographs had been DELETED instead of
-// repointed, the dangling query would answer 0 as well — the reference is gone
-// rather than dangling. So the count of photographs that are still FILED is
-// asserted beside it: 95 photographs carried a place and an occasion before,
-// 64 do afterwards, and the 31 that left are autumn-crossing's own, deleted
-// with the trip. That is a count that must not fall further, which is the one
-// assertion the three standing guards cannot make (SAF-MAJ-5).
+// the SERVER-SIDE `_repointed`, and its second assertion is the whole point.
 func TestAfterTheCascadeNoPhotographNamesAVisitThatIsGone(t *testing.T) {
 	before, after, db := deletedAutumnCrossing(t)
 	ctx := context.Background()
@@ -240,9 +160,6 @@ func TestAfterTheCascadeNoPhotographNamesAVisitThatIsGone(t *testing.T) {
 		}
 		return n
 	}
-	// The positive control, and it is what makes the zero above mean
-	// something. Both counts move by exactly the photographs the trip took
-	// with it; neither falls further.
 	if got := filed("filed", `SELECT count(*) FROM photos WHERE place_id IS NOT NULL`); got != 64 {
 		t.Errorf("%d surviving photographs still name a place, want 64. Before the "+
 			"cascade 95 did, and the 31 that left are autumn-crossing's own. A "+
@@ -252,9 +169,6 @@ func TestAfterTheCascadeNoPhotographNamesAVisitThatIsGone(t *testing.T) {
 	if got := filed("occasioned", `SELECT count(*) FROM photos WHERE visit_id IS NOT NULL`); got != 64 {
 		t.Errorf("%d surviving photographs still name a visit, want 64", got)
 	}
-	// PD-06's standing assertion, in both directions. A photograph naming a
-	// place but no occasion is half a record, and it is the half a count
-	// cannot see.
 	if got := filed("half-filed",
 		`SELECT count(*) FROM photos WHERE place_id IS NOT NULL AND visit_id IS NULL`); got != 0 {
 		t.Errorf("%d photographs name a place with no occasion, want 0", got)

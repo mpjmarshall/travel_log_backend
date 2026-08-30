@@ -14,17 +14,15 @@ func TestRequestIDRoundTripsThroughTheContext(t *testing.T) {
 	}
 }
 
-// Every logging call site reads the id unconditionally, so "no id" has to be a
-// string rather than a panic — a log line is not worth a 500.
+// Every logging call site reads the id unconditionally, so "no id" has to be
+// a string rather than a panic — a log line is not worth a 500.
 func TestRequestIDFromAContextThatHasNoneIsEmpty(t *testing.T) {
 	if got := httpx.RequestIDFrom(context.Background()); got != "" {
 		t.Errorf("RequestIDFrom(a bare context) = %q, want the empty string", got)
 	}
 }
 
-// The key is an unexported type, so nothing outside this package can collide
-// with it — including a string key with the same text, which is the collision
-// the context documentation warns about and which no test would otherwise see.
+// The key is an unexported type.
 func TestAStringKeyWithTheSameTextDoesNotCollide(t *testing.T) {
 	ctx := context.WithValue(context.Background(), "requestId", "planted") //nolint:staticcheck // the point of the leg
 	if got := httpx.RequestIDFrom(ctx); got != "" {

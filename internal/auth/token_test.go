@@ -1,15 +1,4 @@
-// Opaque session tokens, spec L24, test-first.
-//
-// L24: "Session tokens are opaque: 32 bytes from crypto/rand, base64url on the
-// wire, SHA-256 of the RAW bytes stored, compared with
-// crypto/subtle.ConstantTimeCompare."
-//
-// THE WORD "RAW" IS THE WHOLE OF THIS FILE. Hashing the base64 TEXT instead of
-// the bytes it encodes produces a hash that is stable, 32 bytes long, unique
-// per token and wrong — every leg but one below stays green under that
-// mutation, the column CHECK still passes, and sign-in still works. It is a
-// defect nothing observable would ever reveal, and it only matters the day
-// somebody re-implements the client half against the spec's sentence.
+// Opaque session tokens,, test-first.
 package auth
 
 import (
@@ -155,14 +144,8 @@ func TestSameHashAnswersTrueOnlyForTheSameBytes(t *testing.T) {
 	}
 }
 
-// AN ARTEFACT CHECK, labelled as one: it walks token.go's source and can only
+// an artefact check, labelled as one: it walks token.go's source and can only
 // fail when somebody edits that file, never because a token behaves wrongly.
-//
-// It is here because spec L24 names three packages BY NAME — crypto/rand,
-// crypto/sha256 and crypto/subtle — and every one of them has a substitute
-// that passes every behavioural leg above. math/rand/v2 mints unique tokens.
-// bytes.Equal compares them correctly. Neither is what the spec asked for, and
-// no test of behaviour can tell.
 func TestTokenGoUsesThePackagesTheSpecNamesByName(t *testing.T) {
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, "token.go", nil, parser.SkipObjectResolution)

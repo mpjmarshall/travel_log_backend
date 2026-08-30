@@ -21,9 +21,7 @@ func text(s string) **string {
 	return &p
 }
 
-// ptr is the one-line helper DEC-89's pointer contract costs every caller. It
-// is here rather than in a shared package because a test helper that crosses
-// packages is a test helper somebody changes for one caller.
+// ptr is the one-line helper's pointer contract costs every caller.
 func ptr[T any](v T) *T { return &v }
 
 func validTrip() logbook.TripWrite {
@@ -52,9 +50,7 @@ func TestAWholeValidTripIsAccepted(t *testing.T) {
 	}
 }
 
-// The dateless trip is not an edge case: T4's "Add dates" is a control the
-// user may never press, and T3 creates a trip with no cities at all before T5
-// adds one.
+// The dateless trip is not an edge case.
 func TestATripWithNoDatesAndNoCitiesIsAccepted(t *testing.T) {
 	trip := validTrip()
 	trip.Start, trip.End, trip.CityIDs, trip.Summary = nil, nil, nil, nil
@@ -97,11 +93,7 @@ func TestEachRefusalNamesTheFieldTheClientCanShow(t *testing.T) {
 	}
 }
 
-// The DUPLICATE leg above is not fastidiousness, and this says why in a leg:
-// trip_cities' primary key is (traveller_id, trip_id, city_id), so a repeated
-// city is a constraint violation on the second INSERT of a delete-then-insert
-// — which reaches the client as a 500 with nothing to act on rather than as a
-// named field.
+// The DUPLICATE leg above is not fastidiousness, and this says why in a leg.
 func TestATripEndingOnTheDayItStartsIsAccepted(t *testing.T) {
 	trip := validTrip()
 	trip.End = trip.Start
@@ -120,10 +112,8 @@ func TestAnEndWithNoStartIsAccepted(t *testing.T) {
 	}
 }
 
-// THE FOUR SHARING FIELDS HAVE NOWHERE TO LAND, and that is the strongest form
-// SF6 can take: not a rule the write remembers to apply, but a type with no
-// slot for them. DEC-13 keeps DisallowUnknownFields off, so a client sending
-// them is not refused — it is simply not heard.
+// the four sharing fields have nowhere to land, and that is the strongest
+// form SF6 can take.
 func TestTheWriteTypeCannotCarryTheSharingFields(t *testing.T) {
 	const body = `{"id":"kyoto","name":"Kyoto","cityIds":["kyoto"],
 		"shareLinkId":"kyoto-9f2a","sharePhotos":true,"shareNotes":true,"shareCoordinates":true}`
@@ -148,8 +138,6 @@ func TestTheWriteTypeCannotCarryTheSharingFields(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- MEDIA (R3)
-
 func TestTheAllowlistTakesTwoTypesAndRefusesTheRest(t *testing.T) {
 	for _, ok := range logbook.AllowedContentTypes() {
 		if !logbook.ContentTypeAllowed(ok) {
@@ -157,10 +145,6 @@ func TestTheAllowlistTakesTwoTypesAndRefusesTheRest(t *testing.T) {
 		}
 	}
 
-	// EACH REFUSAL IS A DIFFERENT WAY OF BEING WRONG, and the first two are
-	// the ones that matter: `image/heic` is the plausible image DEC-104 took
-	// out, and `text/html; <script>` is the payload 0001's own comment
-	// recorded as accepted.
 	for _, no := range []string{
 		"image/heic",
 		"text/html; <script>",
@@ -180,12 +164,7 @@ func TestTheAllowlistTakesTwoTypesAndRefusesTheRest(t *testing.T) {
 	}
 }
 
-// THE BOUND IS A REFUSAL TO MINT AND IT NAMES THE FIELD (PD-20).
-//
-// A `byteSize` over MEDIA_MAX_BYTES is refused BEFORE anything is signed,
-// which is the only place it can be refused: SigV4 signs an exact header
-// value, so what the signature pins is `== byteSize` and the bucket can never
-// enforce `<= maxBytes`.
+// the bound is a refusal to mint and it names the field.
 func TestValidateMediaBeginRefusesTheFirstWrongFieldByName(t *testing.T) {
 	const max = int64(26214400)
 	digest := strings.Repeat("a", 64)
@@ -210,9 +189,6 @@ func TestValidateMediaBeginRefusesTheFirstWrongFieldByName(t *testing.T) {
 		{"no contentType at all", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10)}, "contentType"},
 		{"text/html", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10), ContentType: str("text/html")}, "contentType"},
 		{"image/heic", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(10), ContentType: str("image/heic")}, "contentType"},
-		// AN ABSENT byteSize AND `"byteSize": 0` MUST NOT BE THE SAME VALUE.
-		// With a bare int64 they are, and a client that forgot the key is told
-		// its photograph is too small.
 		{"no byteSize at all", logbook.MediaBegin{SHA256: str(digest), ContentType: str("image/png")}, "byteSize"},
 		{"zero bytes", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(0), ContentType: str("image/png")}, "byteSize"},
 		{"negative bytes", logbook.MediaBegin{SHA256: str(digest), ByteSize: num(-1), ContentType: str("image/png")}, "byteSize"},
@@ -233,8 +209,6 @@ func TestValidateMediaBeginRefusesTheFirstWrongFieldByName(t *testing.T) {
 		})
 	}
 
-	// EXACTLY THE BOUND IS ALLOWED. An off-by-one here is a photograph the
-	// client sized against the documented ceiling and cannot upload.
 	atTheBound := logbook.MediaBegin{SHA256: str(digest), ByteSize: num(max), ContentType: str("image/png")}
 	if err := logbook.ValidateMediaBegin(atTheBound, max); err != nil {
 		t.Errorf("a photograph of exactly MEDIA_MAX_BYTES was refused: %v", err)
@@ -262,8 +236,6 @@ func TestValidateMediaMintBoundsTheListAndNamesTheField(t *testing.T) {
 		name string
 		body logbook.MediaMint
 	}{
-		// AN ABSENT `ids` AND `"ids": []` ARE DIFFERENT REQUESTS and both are
-		// refused, which is why the field is a pointer.
 		{"no ids key at all", logbook.MediaMint{}},
 		{"an empty list", logbook.MediaMint{IDs: list()}},
 		{"one id over the bound", logbook.MediaMint{IDs: &over}},

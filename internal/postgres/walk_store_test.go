@@ -1,18 +1,4 @@
-// N1's 'Name it' and N1's 'Discard' against a real PostgreSQL. Test-first.
-//
-// This file needs a database and SKIPS, saying so, when there is none.
-//
-// WHAT ONLY THIS FILE CAN SAY, and it is why the handler legs run against a
-// fake rather than duplicating any of it:
-//
-//  1. A `{dismissed:true}` BODY LEAVES THE TRACK ALONE. Under a whole-state
-//     upsert it writes `points='[]'`, which `walks_points_array_ck` does not
-//     refuse because an empty array IS an array. No twin executes that column.
-//  2. A CREATE THAT NAMES NO TRACK IS REFUSED BY NAME, and a create is what
-//     `PUT /v1/walks/{id}` is on an id the log has never held.
-//  3. THE TRACK ROUND-TRIPS THROUGH jsonb UNCHANGED, float for float. It is
-//     written as two float8 arrays and read back through `->>` and a cast,
-//     which is three conversions the types alone cannot vouch for.
+// N1's 'Name it' and N1's 'Discard' against a real PostgreSQL.
 package postgres
 
 import (
@@ -56,19 +42,7 @@ func walkPoints(t *testing.T, db *sql.DB, id string) []logbook.LatLng {
 	return out
 }
 
-// N1's DISCARD SENDS `{dismissed:true}` AND THE TRACK SURVIVES (DEC-89,
-// SAF-MAJ-6).
-//
-// THE BODY IS THE ONE THE CONTROL ACTUALLY SENDS, which is the whole of the
-// finding. The plan's own leg — "a dismissed walk still comes back from the
-// read with its points intact" — goes GREEN against a test that sends a
-// synthesised whole walk, because a whole walk carries the track it is about
-// to overwrite with itself. Only a partial body reaches the defect.
-//
-// AND IT ASSERTS THE POINTS FLOAT FOR FLOAT rather than counting them. A count
-// of three is satisfied by three points that are not the ones recorded, and a
-// GPS track is a recording of a day that has passed: nothing anywhere holds a
-// second copy.
+// N1's discard sends `{dismissed:true}` and the track survives.
 func TestADismissedOnlyBodyLeavesTheTrackExactlyWhereItWas(t *testing.T) {
 	store, db := walkStore(t)
 	before := walkPoints(t, db, "w-may")
@@ -102,8 +76,6 @@ func TestADismissedOnlyBodyLeavesTheTrackExactlyWhereItWas(t *testing.T) {
 		}
 	}
 
-	// AND THE ANSWER CARRIES THE TRACK TOO, which a response assembled from
-	// the request would not: the body never mentioned the points.
 	if len(got.Points) != len(before) {
 		t.Errorf("the ANSWER carries %d points and the row holds %d — a response built "+
 			"from the input would have the client splice an empty track into its "+
@@ -111,12 +83,7 @@ func TestADismissedOnlyBodyLeavesTheTrackExactlyWhereItWas(t *testing.T) {
 	}
 }
 
-// AND SO DOES N1's 'NAME IT', WHICH SENDS `{name}` AND NOTHING ELSE.
-//
-// The second control on the same route, asserted separately because the two
-// take different branches of the same statement and a leg over one is not a
-// leg over the other — the class R6 recorded as "apply the fix to every widget
-// with the shape, not the one in the report".
+// So does N1's 'NAME it', which sends `{name}` and nothing else.
 func TestANameOnlyBodyLeavesTheTrackAndTheDismissedFlagAlone(t *testing.T) {
 	store, db := walkStore(t)
 	before := walkPoints(t, db, "w-may")
@@ -143,12 +110,7 @@ func TestANameOnlyBodyLeavesTheTrackAndTheDismissedFlagAlone(t *testing.T) {
 	}
 }
 
-// A CREATE NAMES EVERY NOT NULL COLUMN OR IS REFUSED BY THE ONE IT MISSED.
-//
-// `PUT /v1/walks/{id}` is an upsert on a client-minted key (DEC-33), so an id
-// the log has never held is a CREATE — and the INSERT tuple is checked against
-// five NOT NULL columns and `walks_points_present_ck` BEFORE ON CONFLICT
-// resolves it. Without this the client gets a 500 carrying a constraint name.
+// A create names every not null column or is refused by the one it missed.
 func TestACreateWithoutATrackIsRefusedNamingPoints(t *testing.T) {
 	store, _ := walkStore(t)
 	ctx := context.Background()
@@ -181,8 +143,6 @@ func TestACreateWithoutATrackIsRefusedNamingPoints(t *testing.T) {
 		}
 	}
 
-	// THE POSITIVE CONTROL. Without it every row above passes against a store
-	// that refuses every create.
 	created, _, err := store.PutWalk(ctx, tid, full())
 	if err != nil {
 		t.Fatalf("a complete create: %v", err)
@@ -196,17 +156,7 @@ func TestACreateWithoutATrackIsRefusedNamingPoints(t *testing.T) {
 	}
 }
 
-// A TRACK ROUND-TRIPS THROUGH jsonb FLOAT FOR FLOAT.
-//
-// THREE CONVERSIONS ARE INVOLVED AND NONE OF THEM IS THE TYPE SYSTEM'S:
-// float8 -> jsonb numeric on the way in (through `jsonb_build_object`),
-// numeric -> text -> float8 on the way out (through `->>` and a cast). A
-// coordinate that lost its last digit would move a pin by about a centimetre
-// and nothing else in this repository would notice.
-//
-// THE INPUT IS UNROUNDED, which is the case that can actually fail: seven
-// decimal places survive almost any float path and seventeen significant
-// digits do not.
+// A track round-trips through jsonb float for float.
 func TestATrackRoundTripsThroughJSONBFloatForFloat(t *testing.T) {
 	store, db := walkStore(t)
 	random := rand.New(rand.NewSource(11))
@@ -236,12 +186,7 @@ func TestATrackRoundTripsThroughJSONBFloatForFloat(t *testing.T) {
 	}
 }
 
-// AND THE ORDER OF A TRACK IS THE ORDER IT WAS RECORDED IN.
-//
-// A polyline drawn in a different order is a different walk. The write pairs
-// two arrays through `unnest … WITH ORDINALITY` and aggregates `ORDER BY ord`;
-// the read unnests `ORDER BY pt.ord`. Neither is inherited from anything, and
-// a leg that only compared SETS of points would pass against a reversal.
+// The order of A track is the order it was recorded in.
 func TestATrackKeepsTheOrderItWasRecordedIn(t *testing.T) {
 	store, _ := walkStore(t)
 	points := []logbook.LatLng{
@@ -261,11 +206,7 @@ func TestATrackKeepsTheOrderItWasRecordedIn(t *testing.T) {
 	}
 }
 
-// AN UNKNOWN CITY OR TRIP NAMES THE FIELD RATHER THAN RAISING A FOREIGN KEY.
-//
-// `walks_city_fk` is RESTRICT (DEC-57) and `walks_trip_fk` is CASCADE; both
-// reach the client as a 500 with nothing on it. The client can only act on
-// which of ITS OWN fields is wrong.
+// an unknown city or trip names the field rather than raising A foreign key.
 func TestAWalkNamingAnUnknownTripOrCityNamesTheField(t *testing.T) {
 	store, _ := walkStore(t)
 	ctx := context.Background()
@@ -288,9 +229,6 @@ func walkWriteError(ctx context.Context, store WalkStore, w logbook.WalkWrite) e
 }
 
 // fieldNamed is `asInvalidField` with the answer a leg actually asserts on.
-// It answers "" for anything that is not an InvalidFieldError, so a leg
-// comparing against a field name reddens on a 500 as well as on the wrong
-// field — which a bare `err != nil` would not.
 func fieldNamed(err error) string {
 	var invalid logbook.InvalidFieldError
 	if !asInvalidField(err, &invalid) {
@@ -300,7 +238,7 @@ func fieldNamed(err error) string {
 }
 
 // mustDay is a date column's value, parsed once so a leg reads as a date
-// rather than as a time.Date call.
+// Than as a time.Date call.
 func mustDay(t *testing.T, day string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse("2006-01-02", day)

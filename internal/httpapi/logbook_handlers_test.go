@@ -1,12 +1,5 @@
-// The one read and the one write, over the real mux, the real middleware chain
-// and the real auth, with a fake store. Test-first.
-//
-// IT RUNS WITHOUT A DATABASE ON PURPOSE, for the reason auth_handlers_test.go
-// gives: the legs that matter here are about what leaves the process — an
-// empty 304 body, a tag with both halves, a document that was never assembled
-// — and putting them behind a TEST_DATABASE_URL skip is putting them where
-// legs go to stop being run. What only a real PostgreSQL can say is in
-// internal/postgres/logbook_store_test.go and is not repeated here.
+// The one read and the one write, over the real mux, the real middleware
+// chain and the real auth, with a fake store.
 package httpapi
 
 import (
@@ -25,11 +18,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// === the fake ===
-
-// fakeLogbook is a whole little store rather than a stub, and it earns that:
-// THE SPLICE LEG (V4-B1) needs a PUT to change what a following GET returns,
-// which a stub answering constants cannot do.
+// fakeLogbook is a whole little store rather than a stub, and it earns that.
 type fakeLogbook struct {
 	mu        sync.Mutex
 	version   int64
@@ -39,16 +28,11 @@ type fakeLogbook struct {
 	lastWrite logbook.TripWrite
 	failWith  error
 
-	// links is `share_links` beside the log rather than inside it, which is
-	// where the real table sits: a share link is a capability and the log is a
-	// record. It REVOKES AND KEEPS (DEC-67), so a revoked row is still here —
-	// which is the whole reason `GET /l/{token}` can tell a revoked token from
-	// an unknown one and must not.
 	links []fakeLink
 }
 
-// fakeLink is one row of share_links, holding the DIGEST (DEC-85) exactly as
-// the column does.
+// fakeLink is one row of share_links, holding the DIGEST exactly as the
+// column does.
 type fakeLink struct {
 	hash        string
 	travellerID string
@@ -79,20 +63,10 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 	}
 	f.lastWrite = w
 
-	// THE FAKE HONOURS DEC-89 TOO, and it has to: a fake that applies every
-	// field regardless would make every handler leg green against the contract
-	// the store was just fixed to keep. `leave` is the one-line spelling of
-	// "absent means leave alone".
 	id := ""
 	if w.ID != nil {
 		id = *w.ID
 	}
-	// A TRIP CREATED THROUGH THIS FAKE CARRIES THE CLIENT'S OWN SHARING
-	// DEFAULTS, WHICH ARE NOT GO'S ZERO VALUES. Migration 0002 gave
-	// `share_photos` and `share_notes` a DEFAULT of true, so a trip created on
-	// the server is born with photo and note sharing on; a fake born at
-	// false/false/false makes every "the other two switches were left alone"
-	// assertion pass against an implementation that reset them.
 	next := logbook.Trip{ID: id, SharePhotos: true, ShareNotes: true}
 	replaced := false
 	for i, existing := range f.doc.Trips {
@@ -100,8 +74,6 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 			continue
 		}
 		next = existing
-		// The sharing group survives a write that does not name it, exactly as
-		// the upsert's column list makes it survive in PostgreSQL.
 		next.ShareLinkID = existing.ShareLinkID
 		next.SharePhotos, next.ShareNotes, next.ShareCoordinates =
 			existing.SharePhotos, existing.ShareNotes, existing.ShareCoordinates
@@ -122,8 +94,8 @@ func (f *fakeLogbook) PutTrip(_ context.Context, _ string, w logbook.TripWrite) 
 	return next, f.version, nil
 }
 
-// applyTripWrite is the fake's half of DEC-89: only the fields the body
-// carried are written over the trip as it stands.
+// applyTripWrite is the fake's half of: only the fields the body carried are
+// written over the trip as it stands.
 func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
 	if w.Name != nil {
 		t.Name = *w.Name
@@ -145,14 +117,7 @@ func applyTripWrite(t *logbook.Trip, w logbook.TripWrite) {
 	}
 }
 
-// DeleteTrip is the fake's D3: it removes the trip and the rows the schema's
-// cascades would remove, and it KEEPS every place — which is the sheet's own
-// promise and the one thing a fake that "just deletes the trip" would get
-// right by accident and a fake that deletes too much would get wrong.
-//
-// A MISS MOVES NO VERSION HERE EITHER. The store's contract says so, and a
-// fake that bumped anyway would make TestARepeatedDeleteAnswersTheSameTag
-// green against a store that did.
+// DeleteTrip is the fake's D3.
 func (f *fakeLogbook) DeleteTrip(_ context.Context, _ string, tripID string) (logbook.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -201,9 +166,7 @@ func (f *fakeLogbook) DeleteTrip(_ context.Context, _ string, tripID string) (lo
 	return logbook.Snapshot{Version: f.version, Document: &doc}, nil
 }
 
-// SetTravellerName honours the trim and the refusal, because those are the
-// store's contract rather than the handler's — a fake that accepted "   "
-// would make the 422 leg green against a store that wrote it.
+// SetTravellerName honours the trim and the refusal.
 func (f *fakeLogbook) SetTravellerName(_ context.Context, _ string, name string) (logbook.Traveller, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -220,12 +183,8 @@ func (f *fakeLogbook) SetTravellerName(_ context.Context, _ string, name string)
 	return *f.doc.Traveller, f.version, nil
 }
 
-// === the share twin ===
-
-// fakeShare is logbook.ShareStore, and it honours DEC-89's pointer contract
-// and the reset for the reason fakeLogbook honours the trip one: a twin that
-// applies every field regardless makes every handler leg green against the
-// contract the store was written to keep.
+// fakeShare is logbook.ShareStore, and it honours the pointer contract and the
+// reset for the reason fakeLogbook honours the trip one.
 type fakeShare struct {
 	mu    sync.Mutex
 	books *fakeLogbook
@@ -253,12 +212,6 @@ func (f *fakeShare) NewShareLink(_ context.Context, travellerID, tripID, token s
 	if err != nil {
 		return trip, version, err
 	}
-	// REVOKE THEN INSERT, IN THE ORDER THE STORE DOES IT AND FOR ITS REASON:
-	// `share_links_one_live` is a partial unique index, so a mint that forgot
-	// its revoke RAISES against real PostgreSQL. Here it would simply leave
-	// two live rows, which is why the leg that holds this is in
-	// internal/postgres — this twin only has to be a faithful enough
-	// `share_links` for the public read to be tested against.
 	f.books.mu.Lock()
 	defer f.books.mu.Unlock()
 	f.books.revokeLive(tripID)
@@ -275,14 +228,12 @@ func (f *fakeShare) StopSharing(_ context.Context, _, tripID string) (logbook.Tr
 	return f.change(tripID, func(t *logbook.Trip) {
 		t.ShareLinkID = nil
 		t.Shared = false
-		// The client's own three defaults, written by name — see
-		// resetShareFlagsSQL.
 		t.SharePhotos, t.ShareNotes, t.ShareCoordinates = true, true, false
 	})
 }
 
-// revokeLive is `UPDATE share_links SET revoked_at = now() WHERE … revoked_at
-// IS NULL`, and it KEEPS THE ROW. The caller holds books.mu.
+// revokeLive is `UPDATE share_links SET revoked_at = now WHERE … revoked_at
+// is NULL`, and it keeps the row.
 func (f *fakeLogbook) revokeLive(tripID string) {
 	for i := range f.links {
 		if f.links[i].tripID == tripID {
@@ -325,8 +276,6 @@ func (f *fakeLogbook) assembleCount() int {
 	return f.assembles
 }
 
-// === the fixture ===
-
 const aTrip = `{"id":"kyoto","name":"Kyoto in May","cityIds":["kyoto"],
 	"start":"2027-05-12T00:00:00.000Z","end":"2027-05-15T00:00:00.000Z",
 	"summary":null,"coverAsset":null}`
@@ -349,8 +298,8 @@ func bearer(t *testing.T, h *harness) string {
 	return "Bearer " + token
 }
 
-// bearerFor is `bearer` for any address: register, sign in, answer the header.
-// A leg about two travellers needs two of these and one of `bearer`'s email.
+// bearerFor is `bearer` for any address: register, sign in, answer the
+// header.
 func bearerFor(t *testing.T, h *harness, email string) string {
 	t.Helper()
 	body := credentialsFor(email)
@@ -360,9 +309,8 @@ func bearerFor(t *testing.T, h *harness, email string) string {
 	return signInAs(t, h, email)
 }
 
-// signInAs signs a traveller who ALREADY EXISTS in again, so a leg can hold two
-// live tokens for one traveller. VS6 mints a new token per sign-in and asserts
-// it; this is what a second device looks like from the server's side.
+// signInAs signs a traveller who already exists in again, so a leg can hold
+// two live tokens for one traveller.
 func signInAs(t *testing.T, h *harness, email string) string {
 	t.Helper()
 	issued := h.post(t, "/v1/auth/session", credentialsFor(email))
@@ -380,8 +328,6 @@ func (h *harness) get(t *testing.T, path, bearer string, headers map[string]stri
 	t.Helper()
 	return h.doWithHeaders(t, http.MethodGet, path, "", bearer, headers)
 }
-
-// === the read ===
 
 func TestTheLogbookComesBackAsTheClientsOwnEnvelope(t *testing.T) {
 	h := newHarness(t, options{})
@@ -416,9 +362,7 @@ func TestTheLogbookComesBackAsTheClientsOwnEnvelope(t *testing.T) {
 	}
 }
 
-// DEC-49's first half, asserted ON THE CONSTANT so it cannot be quietly
-// dropped: a tag naming only the data validates the data and not the code that
-// rendered it.
+// The first half, asserted on the constant so it cannot be quietly dropped.
 func TestA200CarriesATagWithBothHalves(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -461,9 +405,7 @@ func TestAMatchingIfNoneMatchAnswers304WithAnEmptyBody(t *testing.T) {
 	}
 }
 
-// THE LEG THE SLICE NAMES: the 304 must not assemble the document. A body
-// built and then thrown away saves bandwidth and no server work at all, which
-// is half the point of DEC-31.
+// the leg the slice names: the 304 must not assemble the document.
 func TestA304NeverAssemblesTheDocument(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -482,8 +424,8 @@ func TestA304NeverAssemblesTheDocument(t *testing.T) {
 	}
 }
 
-// The other direction, and it is what stops the leg above being satisfied by a
-// handler that answers 304 to everything.
+// The other direction, and it is what stops the leg above being satisfied by
+// a handler that answers 304 to everything.
 func TestAStaleIfNoneMatchAnswers200(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -495,10 +437,8 @@ func TestAStaleIfNoneMatchAnswers200(t *testing.T) {
 	}
 }
 
-// DEC-49(a), AND IT IS THE DEFECT THE FIRST HALF OF THE TAG EXISTS FOR: a
-// deploy that changes the emitted document moves no data. A client holding a
-// tag minted by a DIFFERENT emitter must be answered 200, not 304, or it keeps
-// serving the old shape until somebody happens to write.
+// (a), and it is the defect's first half of the tag exists for: a deploy
+// that changes the emitted document moves no data.
 func TestATagFromAnotherEmitterDoesNotRevalidate(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -535,10 +475,8 @@ func TestAWriteBetweenTwoReadsYieldsANewTag(t *testing.T) {
 	}
 }
 
-// A traveller who has never written has logbook_version 0, and DEC-49's tag
-// needs BOTH halves — FormatETag panics on a zero. The read answers 200 with
-// no tag rather than a tag with a half missing, which is the shape a cache
-// cannot act on and would rather not be given.
+// A traveller who has never written has logbook_version 0, and the tag needs
+// both halves — FormatETag panics on a zero.
 func TestAnUnwrittenLogIsServedWithNoTagAtAll(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -556,8 +494,8 @@ func TestAnUnwrittenLogIsServedWithNoTagAtAll(t *testing.T) {
 	}
 }
 
-// DEC-30 disclaims byte stability across serialisations; within one build it
-// must hold, or the tag is a claim the server cannot keep.
+// disclaims byte stability across serialisations; within one build it must
+// hold, or the tag is a claim the server cannot keep.
 func TestTwoReadsWithNoWriteBetweenThemAreByteIdentical(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -575,7 +513,7 @@ func TestTwoReadsWithNoWriteBetweenThemAreByteIdentical(t *testing.T) {
 }
 
 // A presigned URL changes on every mint, so a body carrying one differs every
-// request and 304 never fires. Deterministic here because the slice mints none.
+// request and 304 never fires.
 func TestNoValueOnTheWireIsAURL(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -590,8 +528,6 @@ func TestNoValueOnTheWireIsAURL(t *testing.T) {
 		}
 	}
 }
-
-// === DEC-53 ===
 
 func TestAFormatThisBuildCannotEmitAnswers406AndNamesWhatItCan(t *testing.T) {
 	h := newHarness(t, options{})
@@ -613,12 +549,7 @@ func TestAFormatThisBuildCannotEmitAnswers406AndNamesWhatItCan(t *testing.T) {
 	}
 }
 
-// AND A 406 MUST NOT ASSEMBLE IT EITHER. This leg exists because the mutation
-// that removed the handler's early gate SURVIVED: Emit refuses the version on
-// its own and writeLogbookFailure maps that to the same 406 with the same
-// header, so the two paths agree on every byte the client sees. What they do
-// not agree on is the work: without the gate the read opens a snapshot and
-// builds the whole document before refusing it.
+// A 406 must not assemble it either.
 func TestA406NeverAssemblesTheDocument(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -633,7 +564,7 @@ func TestA406NeverAssemblesTheDocument(t *testing.T) {
 	}
 }
 
-// DEC-53: a missing header is treated as the current version, so the header is
+// : a missing header is treated as the current version, so the header is
 // additive and a client that never learned to send it is no worse off.
 func TestAMissingFormatHeaderIsTheCurrentVersion(t *testing.T) {
 	h := newHarness(t, options{})
@@ -645,16 +576,10 @@ func TestAMissingFormatHeaderIsTheCurrentVersion(t *testing.T) {
 	if got := h.get(t, "/v1/logbook", token, map[string]string{formatHeader: "2"}); got.status != http.StatusOK {
 		t.Errorf("a read asking for 2 = %d, want 200", got.status)
 	}
-	// AN EMPTY VALUE TAKES THE SAME BRANCH, and that is a decision rather than
-	// an accident: `Header.Get` cannot tell `X-Logbook-Format:` with nothing
-	// after it from a header that was never sent, and a 406 for a client that
-	// declared nothing would refuse a request DEC-53 says to serve.
 	if got := h.get(t, "/v1/logbook", token, map[string]string{formatHeader: ""}); got.status != http.StatusOK {
 		t.Errorf("a read whose format header is empty = %d, want 200", got.status)
 	}
 }
-
-// === the write ===
 
 func TestAPutAnswers200WithTheTripAndTheNewTag(t *testing.T) {
 	h := newHarness(t, options{})
@@ -678,20 +603,11 @@ func TestAPutAnswers200WithTheTripAndTheNewTag(t *testing.T) {
 	}
 }
 
-// FOUND BY RUNNING IT, NOT BY A TEST. Against the real server a PUT with an
-// empty cityIds answered `"cityIds":null`, because the write path answers a
-// bare entity and does not go through Emit — which is where the nil-slice
-// normalisation lived. The client reads cityIds as `as List<dynamic>`, with no
-// null branch, so it throws. The splice leg could not see it: it appends the
-// returned trip to a document and re-emits, and Emit normalised it on the way.
+// found by running it, not by A TEST.
 func TestATripWrittenWithNoCitiesComesBackWithAnEmptyList(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
 
-	// The body OMITS cityIds, which is what makes the slice nil. A body
-	// carrying `"cityIds":[]` decodes to an empty non-nil slice and marshals as
-	// `[]` with or without the normalisation, so a leg written that way cannot
-	// fail — measured: it survived the mutation that removed EmitTrip.
 	got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","name":"Kyoto"}`, token)
 	if got.status != http.StatusOK {
 		t.Fatalf("PUT = %d %s", got.status, got.body)
@@ -702,9 +618,8 @@ func TestATripWrittenWithNoCitiesComesBackWithAnEmptyList(t *testing.T) {
 	}
 }
 
-// THE ACCEPTANCE CHECK: a PUT body carrying shareCoordinates leaves the stored
-// flag UNCHANGED. Two halves, and the second is the one a status assertion
-// cannot see — the request must not even reach the store carrying it.
+// the acceptance check: a PUT body carrying shareCoordinates leaves the
+// stored flag UNCHANGED.
 func TestAPutCarryingShareCoordinatesLeavesTheFlagAlone(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -738,15 +653,7 @@ func TestAPutCarryingShareCoordinatesLeavesTheFlagAlone(t *testing.T) {
 	}
 }
 
-// THE SPLICE LEG (V4-B1). A phone that PUTs a trip splices the returned entity
-// into its cached document rather than re-fetching the whole log — 95,586 bytes
-// at fixture scale through this build, measured, and NOT the 85,422 of the
-// client's own file (DEC-32, DEC-102). If the two
-// disagree, the cache is wrong and nothing on either side finds out.
-//
-// It compares DECODED DOCUMENTS rather than bytes, because DEC-30 disclaims
-// byte stability — and the splice is put through the SAME emitter, so a
-// difference is a difference in the log rather than in the rendering.
+// the splice leg (V4-B1).
 func TestTheSplicedDocumentEqualsTheOneTheServerEmits(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -822,9 +729,7 @@ func TestAPutRefusesAFieldAndNamesIt(t *testing.T) {
 	}
 }
 
-// A slug id, not a twelve-character generated one (DEC-02). The arc PUTs
-// `/v1/trips/kyoto` and this is the leg that says the route table's pattern
-// does not quietly constrain it.
+// A slug id, not a twelve-character generated one.
 func TestThePathIdIsASlug(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -850,8 +755,6 @@ func TestAPutWithARubbishBodyIsRefusedAsInvalidBody(t *testing.T) {
 		t.Errorf("code = %v, want invalid_body", code)
 	}
 }
-
-// === what both routes share ===
 
 func TestBothLogbookRoutesRefuseAMissingCredential(t *testing.T) {
 	h := newHarness(t, options{})
@@ -899,8 +802,7 @@ func TestAStoreFailureIsA500ThatSaysNothingAboutIt(t *testing.T) {
 }
 
 // A traveller deleted between the credential being accepted and the query
-// running is a credential that is not live: a 401, and the phone signs in
-// again. Reporting it as a 500 would have it wait for a server that is fine.
+// running is a credential that is not live.
 func TestATravellerWhoHasGoneIsA401(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -910,8 +812,6 @@ func TestATravellerWhoHasGoneIsA401(t *testing.T) {
 		t.Errorf("GET for a traveller who has gone = %d %s, want 401", got.status, got.body)
 	}
 }
-
-// === helpers ===
 
 func parseTag(t *testing.T, tag string) (emitter, data int64, ok bool) {
 	t.Helper()
@@ -927,10 +827,7 @@ func decodeEnvelope(t *testing.T, raw []byte) logbook.Envelope {
 	return out
 }
 
-// DEC-89 AT THE WIRE, AND THE BODY IS THE ONE THE CLIENT SENDS. The store
-// legs prove the statement; this proves the DECODE — that a key the client
-// left out arrives at the store as nil rather than as a zero value, which is
-// the half a store test written against a Go literal cannot see.
+// at the wire, and the body is the one the client sends.
 func TestATwoKeyRenameArrivesAtTheStoreAsAbsenceAndNotAsEmptiness(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -938,7 +835,6 @@ func TestATwoKeyRenameArrivesAtTheStoreAsAbsenceAndNotAsEmptiness(t *testing.T) 
 	if got := h.put(t, "/v1/trips/kyoto", aTrip, token); got.status != http.StatusOK {
 		t.Fatalf("the create answered %d", got.status)
 	}
-	// T4's pencil. Two keys, and nothing else is in the body at all.
 	if got := h.put(t, "/v1/trips/kyoto", `{"id":"kyoto","name":"Kyoto in May, renamed"}`, token); got.status != http.StatusOK {
 		t.Fatalf("the rename answered %d: %s", got.status, got.body)
 	}
@@ -965,10 +861,7 @@ func TestATwoKeyRenameArrivesAtTheStoreAsAbsenceAndNotAsEmptiness(t *testing.T) 
 	}
 }
 
-// AND THE ONE SHAPE THAT MUST STILL BE HEARD: an EMPTY list is a client saying
-// "this trip visits nowhere", which T5 can produce by removing the last city.
-// It is not the same as omitting the key, and a contract that conflated them
-// would make the itinerary un-emptyable — the mirror of the defect.
+// The one shape that must still be heard.
 func TestAnEmptyCityListIsHeardWhileAnAbsentOneIsNot(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -988,19 +881,8 @@ func TestAnEmptyCityListIsHeardWhileAnAbsentOneIsNot(t *testing.T) {
 	}
 }
 
-// === DEC-96: an outage is a 503 with Retry-After, not a 500 ===
-
 // MEASURED by the operations lens with Postgres killed: every route answered
-// `500 {"code":"internal"}` with no Retry-After. A 500 tells a client the
-// server has a bug and the request is poison; the truth is "the dependency is
-// down, try again shortly", and the difference decides whether a phone retries
-// or gives up. It is also unanswerable afterwards, because a 500 count then
-// conflates handler bugs with outages.
-//
-// THE LEG COVERS BOTH HALVES OF THE API. The store failure reaches the read and
-// the write through writeLogbookFailure, and it reaches the auth middleware
-// through a separate switch — three `default: CodeInternal` branches, and a fix
-// applied to one of them is the shape of miss this table exists to prevent.
+// `500 {"code":"internal"}` with no Retry-After.
 func TestAnUnreachableDatabaseIs503WithRetryAfterAndNot500(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1037,8 +919,7 @@ func TestAnUnreachableDatabaseIs503WithRetryAfterAndNot500(t *testing.T) {
 	}
 }
 
-// AND THE CONTROL. A genuine handler fault is still a 500 with no Retry-After,
-// or the classification above is a classifier that calls everything an outage.
+// The control.
 func TestAGenuineFaultIsStill500WithNoRetryAfter(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -1054,18 +935,8 @@ func TestAGenuineFaultIsStill500WithNoRetryAfter(t *testing.T) {
 	}
 }
 
-// === DEC-101, and it is a rule for R5-R8 rather than a fact about this file ===
-
-// EVERY 500 EMITS EXACTLY ONE ERROR LINE CARRYING THE requestId AND THE
-// UNDERLYING ERROR, AND THE LEG COUNTS LINES RATHER THAN GREPPING FOR ONE.
-//
-// A grep passes against a handler that logs the same failure three times from
-// three layers, which is how a 3am log becomes unreadable; and it passes
-// against a handler that logs nothing, if any OTHER line happens to match. So
-// the assertion is a count. `auth_handlers.go` already did this and it was
-// observed working under a killed Postgres, joined by requestId; R5-R8 write
-// fourteen more handlers, and a 500 whose only line is the access line is a
-// dead end.
+// every 500 emits exactly one error line carrying the requestId and the
+// underlying error, and the leg counts lines rather than grepping for one.
 func TestEvery500EmitsExactlyOneErrorLine(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -1086,12 +957,6 @@ func TestEvery500EmitsExactlyOneErrorLine(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
 			t.Fatalf("a log line is not JSON: %q", line)
 		}
-		// THE ACCESS LINE IS NOT ONE OF THEM, and excluding it is a
-		// definition rather than a convenience: a 500's access line is
-		// already at ERROR (accessLevel), and it carries no `err` — DEC-101
-		// asks for the line that carries the requestId AND THE UNDERLYING
-		// ERROR, which is the diagnostic one. Counting both would make the
-		// answer two for a correct handler and the leg meaningless.
 		if _, isAccess := decoded["durationUs"]; isAccess {
 			continue
 		}
@@ -1115,11 +980,7 @@ func TestEvery500EmitsExactlyOneErrorLine(t *testing.T) {
 	}
 }
 
-// AND THE ACCESS LINE NAMES THE ROUTE PATTERN AND THE TRAVELLER, through the
-// real Mount and the real auth middleware rather than through a hand-recorded
-// slot. The httpx legs prove the mechanism; this proves the WIRING, which is
-// the half that was missing — `route` comes from the table in Mount and
-// `travellerId` from RequireTraveller, and neither is reachable from httpx.
+// The access line names the route pattern and the traveller, never the id.
 func TestTheAccessLineForARealRouteNamesThePatternAndTheTraveller(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)

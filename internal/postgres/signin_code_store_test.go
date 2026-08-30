@@ -1,15 +1,4 @@
-// Sign-in codes against a real PostgreSQL. Test-first.
-//
-// Skips, saying so, when there is no database — internal/postgres/testdb
-// decides that. Run `make test-db` and export what it prints.
-//
-// THE ONE-ROW-PER-TRAVELLER RULE IS THE WHOLE SECURITY ARGUMENT AND IT LIVES
-// IN THE SCHEMA. A six-digit code survives five wrong guesses; that is a bound
-// only if a traveller can hold ONE live code at a time. With many, an attacker
-// requests two hundred codes and has a thousand guesses against a million —
-// and every one of those codes is valid. The primary key is what makes
-// requesting a code REPLACE rather than accumulate, so this is asserted here
-// rather than in the service, where a fake would be asserting itself.
+// Sign-in codes against a real PostgreSQL.
 package postgres
 
 import (
@@ -63,9 +52,6 @@ func TestACodeIsIssuedAndFoundByItsDigest(t *testing.T) {
 }
 
 func TestIssuingASecondCodeREPLACESTheFirst(t *testing.T) {
-	// The security argument. Without this, five attempts per code is not a
-	// bound on anything: an attacker requests codes until the budget is as
-	// large as they like.
 	store, db, _ := codeStore(t)
 	ctx := context.Background()
 	id := aTraveller(t, db)
@@ -99,8 +85,6 @@ func TestIssuingASecondCodeREPLACESTheFirst(t *testing.T) {
 }
 
 func TestIssuingResetsTheAttemptCount(t *testing.T) {
-	// The converse of the rule above, and it has to be true or a traveller
-	// who mistypes five times can never sign in again.
 	store, db, _ := codeStore(t)
 	ctx := context.Background()
 	id := aTraveller(t, db)
@@ -150,9 +134,6 @@ func TestCountAttemptAnswersTheNewTotal(t *testing.T) {
 }
 
 func TestBurningACodeLeavesNothing(t *testing.T) {
-	// Single use. The row goes rather than being marked, so a replay is
-	// indistinguishable from a code that never existed — which is the same
-	// call Authenticate makes about an unknown token.
 	store, db, _ := codeStore(t)
 	ctx := context.Background()
 	id := aTraveller(t, db)
@@ -178,9 +159,6 @@ func TestCodeForAnswersErrNoCodeWhenThereIsNone(t *testing.T) {
 }
 
 func TestDeletingATravellerTakesTheirCodeWithThem(t *testing.T) {
-	// The deletion decision is immediate and total, and a sign-in code is one
-	// of the things that has to go with the traveller. A foreign key is what
-	// makes that true without anybody remembering it.
 	store, db, _ := codeStore(t)
 	ctx := context.Background()
 	id := aTraveller(t, db)
@@ -203,10 +181,6 @@ func TestDeletingATravellerTakesTheirCodeWithThem(t *testing.T) {
 }
 
 func TestACodeWriteDoesNotMoveTheLogbookVersion(t *testing.T) {
-	// DEC-50's split, which every store here is held to: signing in is not a
-	// change to the log, so it must move logbook_version by zero. A bump
-	// would make every device re-fetch the whole log because somebody typed
-	// a code.
 	store, db, _ := codeStore(t)
 	ctx := context.Background()
 	id := aTraveller(t, db)

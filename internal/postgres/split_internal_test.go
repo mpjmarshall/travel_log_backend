@@ -1,13 +1,4 @@
 // The statement splitter, tested without a database.
-//
-// WHY THE RUNNER SPLITS AT ALL, rather than handing a whole file to one Exec.
-// `-- migrate:no-transaction` exists so `CREATE INDEX CONCURRENTLY` can run,
-// and the simple query protocol wraps MULTIPLE statements sent in one message
-// in an IMPLICIT transaction block — which is the exact thing CONCURRENTLY
-// refuses. A file executed statement by statement is not wrapped. Splitting is
-// therefore load-bearing for the escape hatch, and once it exists the
-// transactional path uses it too, so the splitter is exercised by the real
-// migration on every run and an error names the statement that failed.
 package postgres
 
 import "testing"
@@ -38,25 +29,14 @@ func TestSplitStatementsIgnoresASemicolonInsideASingleQuotedString(t *testing.T)
 	assertStatements(t, got, []string{"INSERT INTO t VALUES ('a;b')", "SELECT 2"})
 }
 
-// NO MUTATION OF THE DOUBLED-QUOTE BRANCH CAN REDDEN THIS, and the reason is
-// arithmetic rather than accidental: over WELL-FORMED input the naive pairing
-// (1,2)(3,4)… and the escape-aware pairing (open at 1, ” at 2-3, close at 4)
-// consume exactly the same quotes and put exactly the same characters inside a
-// string. Disabling the branch makes the lexer see two adjacent strings instead
-// of one, and the semicolon is inside the second either way — measured: the
-// mutation ran, changed the file, and the suite stayed green.
-//
-// The leg is still reddened, by the mutation that stops single quotes opening a
-// string at all, so it is coverage rather than decoration. The branch stays
-// because the lexer's state should be honest about what it is reading.
+// no mutation of the doubled-quote branch can redden this, and the reason is
+// arithmetic rather than accidental.
 func TestSplitStatementsHandlesADoubledQuoteInsideAString(t *testing.T) {
 	got := splitStatements("SELECT 'it''s; fine'; SELECT 2;")
 	assertStatements(t, got, []string{"SELECT 'it''s; fine'", "SELECT 2"})
 }
 
-// E'\” is one string in Postgres. '\' is a COMPLETE string holding a
-// backslash — standard_conforming_strings has been on by default since 9.1 —
-// so the ';' after it is a real separator.
+// E'\” is one string in Postgres.
 func TestSplitStatementsHandlesABackslashEscapeOnlyInsideAnEString(t *testing.T) {
 	got := splitStatements(`SELECT E'\';'; SELECT 2;`)
 	assertStatements(t, got, []string{`SELECT E'\';'`, "SELECT 2"})
@@ -101,9 +81,7 @@ func TestSplitStatementsIgnoresASemicolonInANestedBlockComment(t *testing.T) {
 	assertStatements(t, got, []string{"SELECT 1 /* outer /* inner ; */ still ; */", "SELECT 2"})
 }
 
-// The shape the escape hatch actually has to survive: the CONCURRENTLY
-// statement must come out on its own and byte-clean, because it is executed by
-// itself precisely so PostgreSQL does not wrap it in an implicit transaction.
+// The shape the escape hatch actually has to survive.
 func TestTheConcurrentlyStatementComesOutOnItsOwnAndUntouched(t *testing.T) {
 	got := splitStatements("CREATE TABLE one (x int);\nCREATE INDEX CONCURRENTLY one_x_idx ON one (x);\n")
 	assertStatements(t, got, []string{

@@ -1,23 +1,5 @@
-// D2's two branches and the visits contract, at FIXTURE SCALE against the
+// D2's two branches and the visits contract, at fixture scale against the
 // client's own log.
-//
-// THE SHEET IS THE SPEC AND THIS FILE IS THE SHEET IN COUNTS, which is
-// cascade_test.go's arrangement for D3 and is here for its reason. Every leg
-// asserts on a SURVIVING ROW COUNT rather than on error/no-error (DBA F2),
-// because the failure that matters is a removal that succeeds and takes one
-// thing too many — or one thing too few.
-//
-// WHY IT IS AT FIXTURE SCALE AND NOT ON A THREE-ROW FIXTURE. The numbers are
-// the ones the safety lens and the database lens executed against the real
-// 0001 and the real document, and a purpose-built fixture would be a fixture
-// built to agree with the implementation. `fushimi-inari` is the place both
-// lenses measured on: 28 occasions and 30 photographs, spanning THREE trips.
-// Every figure below was re-derived at this working tree by counting before
-// and after; none is copied from a report.
-//
-// AND THE ONE THE MECHANISM LEGS CANNOT REACH IS HERE: a place with 28
-// occasions. internal/postgres/place_store_test.go works on a two-row fixture
-// where an off-by-one in the ordinal offset still happens to fit.
 package seed_test
 
 import (
@@ -30,8 +12,7 @@ import (
 )
 
 // theFushimiNumbers is the shape both lenses measured, asserted before every
-// leg that depends on it — because a leg run against a fixture that has moved
-// is a leg asserting about a world nobody described.
+// leg that depends on it.
 const (
 	fushimiVisits = 28
 	fushimiFiled  = 30
@@ -65,8 +46,7 @@ func loadedWithFushimiChecked(t *testing.T) (*sql.DB, postgres.PlaceStore) {
 }
 
 // filings answers photograph id -> visit id for everything filed anywhere, so
-// a leg can compare the WHOLE map rather than a count. A count is satisfied by
-// two photographs swapping occasions.
+// a leg can compare the whole map rather than a count.
 func filings(t *testing.T, db *sql.DB) map[string]string {
 	t.Helper()
 	got, err := db.QueryContext(context.Background(),
@@ -86,18 +66,7 @@ func filings(t *testing.T, db *sql.DB) map[string]string {
 	return out
 }
 
-// === THE VISITS CONTRACT, ON THE PLACE THE LENSES MEASURED ===
-
-// AN OMITTED `visits` KEY LEAVES ALL 28 AND ALL 30 (DEC-89, SAF-MAJ-4).
-//
-// This is the leg PD-06's fix does not cover and SAF-MAJ-4 asked for. The
-// mandated shape ends "DELETE only the ids absent from the incoming array",
-// and when the key is ABSENT every id is absent — so without the contract this
-// body does exactly what delete-then-insert did, with the fix in place.
-//
-// THE BODY IS THE ONE A CLIENT ACTUALLY SENDS. C1's pin creates a wishlist
-// place with no visits at all, and every later write to a place — a rename, a
-// plan, a cover — names its own field and nothing else.
+// an omitted `visits` key leaves all 28 and all 30.
 func TestAPlaceWriteWithTheVisitsKeyOmittedLeavesAll28AndAll30(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 	before := filings(t, db)
@@ -121,10 +90,6 @@ func TestAPlaceWriteWithTheVisitsKeyOmittedLeavesAll28AndAll30(t *testing.T) {
 			t.Errorf("photograph %s: %q -> %q", id, want, got)
 		}
 	}
-	// The count that must not fall, whole-log (DEC-89, SAF-MAJ-5). The three
-	// standing guards are all blind here: the reference would be gone rather
-	// than dangling, there would still be a place, and both columns being NULL
-	// is a pair that agrees.
 	if got := rows(t, db, `SELECT count(*) FROM photos WHERE place_id IS NOT NULL`); got != 95 {
 		t.Errorf("%d photographs still name a place whole-log, want 95", got)
 	}
@@ -139,11 +104,7 @@ func TestAPlaceWriteWithTheVisitsKeyOmittedLeavesAll28AndAll30(t *testing.T) {
 	}
 }
 
-// A NO-OP RE-SEND OF ALL 28, BYTE FOR BYTE, IS A NO-OP (PD-06, DB-BLO-1).
-//
-// Delete-then-insert of an IDENTICAL array leaves `visits` at 28 and every one
-// of the 30 photographs with `visit_id` NULL — measured on this project's own
-// postgres:17.11, and the only trace is `DELETE 28 / INSERT 0 28`.
+// a no-op re-send of all 28, byte for byte, is a no-op.
 func TestReSendingAllTwentyEightOccasionsUnchangedUnfilesNothing(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 	ctx := context.Background()
@@ -185,32 +146,17 @@ func TestReSendingAllTwentyEightOccasionsUnchangedUnfilesNothing(t *testing.T) {
 	}
 }
 
-// AND `visits: []` IS REFUSED ONLY WHERE THERE IS SOMETHING TO DESTROY.
-//
-// BOTH HALVES ARE IN ONE LEG ON PURPOSE. The rule is a single sentence —
-// refuse the destruction, not the shape — and a leg that asserted only the
-// refusal is what shipped first: it passed against a build that refused every
-// empty array, including the nine wishlist places in the client's own log for
-// which `Emit` writes exactly this. A guard that cannot tell the two apart
-// looks identical to a correct one from the refusing side.
-//
-// The refusal is asserted on the ROW COUNT and not on the status alone,
-// because a route that answered 422 AFTER running the DELETE would satisfy a
-// status assertion perfectly.
+// `visits: []` is refused only where there is something to destroy.
 func TestAnEmptyVisitsArrayIsRefusedWhereItWouldDestroyAndIsANoOpWhereItWouldNot(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 	ctx := context.Background()
 	empty := []logbook.Visit{}
 
-	// VALIDATION MUST NOT DECIDE THIS. It is handed an array and cannot see
-	// the occasions, so it is the store's question — and this line is what
-	// stops the refusal drifting back up to the shape check.
 	if err := logbook.ValidatePlace(logbook.PlaceWrite{ID: ptrTo("fushimi-inari"), Visits: &empty}); err != nil {
 		t.Errorf("the validator refused `visits: []` = %v. Whether clearing destroys "+
 			"anything is a fact about the place, not about the body", err)
 	}
 
-	// The destructive half: 28 occasions, 30 filings, 3 trips.
 	if _, _, err := store.PutPlace(ctx, travellerUUID, logbook.PlaceWrite{
 		ID: ptrTo("fushimi-inari"), Visits: &empty,
 	}); err == nil {
@@ -226,11 +172,6 @@ func TestAnEmptyVisitsArrayIsRefusedWhereItWouldDestroyAndIsANoOpWhereItWouldNot
 		t.Errorf("%d photographs are still filed, want %d", got, fushimiFiled)
 	}
 
-	// The half the shape-level refusal got wrong. A wishlist place holds no
-	// occasions, `Emit` writes `"visits": []` for it, and C1's pin — the only
-	// control that creates a place — sends the same shape through the client's
-	// generated toJson(). Refusing it made the server's own output something
-	// the server would not accept back.
 	var wishlist string
 	if err := db.QueryRow(`SELECT p.id FROM places p
 		WHERE NOT EXISTS (SELECT 1 FROM visits v WHERE v.place_id = p.id AND v.traveller_id = p.traveller_id)
@@ -253,7 +194,7 @@ func TestAnEmptyVisitsArrayIsRefusedWhereItWouldDestroyAndIsANoOpWhereItWouldNot
 	}
 }
 
-// REORDERING ALL 28 KEEPS ALL 30 FILINGS, and it is the first time the
+// REORDERING all 28 KEEPS all 30 FILINGS, and it is's first time the
 // non-deferrable UNIQUE on visit ordinals is exercised at this width.
 func TestReversingAllTwentyEightOccasionsKeepsEveryFiling(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
@@ -292,10 +233,7 @@ func TestReversingAllTwentyEightOccasionsKeepsEveryFiling(t *testing.T) {
 	}
 }
 
-// === D2's TWO BRANCHES ===
-
-// THE DELETE BRANCH, ROW BY ROW. The sheet says "all N, and the notes you
-// wrote on them", and the count is what the sheet itself computes from the log.
+// the delete branch, row by row.
 func TestD2DeletesTheThirtyPhotographsAndTheNotesWrittenOnThem(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 
@@ -328,11 +266,6 @@ func TestD2DeletesTheThirtyPhotographsAndTheNotesWrittenOnThem(t *testing.T) {
 		}
 	}
 
-	// THE COUNT THAT MUST NOT FALL, AND HERE IT FALLS BY A KNOWN AMOUNT
-	// (DEC-89, SAF-MAJ-5). 95 photographs carried a place before and 65 do
-	// after; the 30 that left are the ones the user asked to destroy. "Known,
-	// not merely non-zero" is the whole difference between this and a guard
-	// that passes while a route unfiles the log.
 	if got := rows(t, db, `SELECT count(*) FROM photos WHERE place_id IS NOT NULL`); got != 65 {
 		t.Errorf("%d photographs still name a place, want 65 — 95 before, and the 30 that "+
 			"left are fushimi-inari's own", got)
@@ -342,14 +275,8 @@ func TestD2DeletesTheThirtyPhotographsAndTheNotesWrittenOnThem(t *testing.T) {
 	}
 }
 
-// THE KEEP BRANCH, ROW BY ROW, AND THE CAPTION IS THE ROW THAT SEPARATES THE
-// TWO BRANCHES.
-//
-// "They lose the pin but keep their date and city" is
-// `Photo.copyWith(clearPlace: true)`, which clears BOTH columns. The caption is
-// asserted with them because the sheet names "the notes you wrote on them" on
-// the DESTRUCTIVE branch only — 2 captions before, 1 after a delete, 2 after a
-// keep, and that single row is the whole of the difference in the fixture.
+// the keep branch, row by row, and the caption is the row that separates the
+// two branches.
 func TestD2KeepsTheThirtyPhotographsWithTheirDateCityAndCaption(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 	ctx := context.Background()
@@ -426,9 +353,8 @@ func TestD2KeepsTheThirtyPhotographsWithTheirDateCityAndCaption(t *testing.T) {
 	}
 }
 
-// THE WALKS ARE NOT TOUCHED ON EITHER BRANCH, and that is `walks` having no
-// `place_id` at all rather than anything Go does. D2 says "the track stays
-// with the day it was recorded either way", and the absence IS the promise.
+// the walks are not touched on either branch, and that is `walks` having no
+// `place_id` at all rather than anything Go does.
 func TestD2LeavesTheWalksAloneOnBothBranches(t *testing.T) {
 	for _, deletePhotos := range []bool{true, false} {
 		db, store := loadedWithFushimiChecked(t)
@@ -445,12 +371,7 @@ func TestD2LeavesTheWalksAloneOnBothBranches(t *testing.T) {
 	}
 }
 
-// AND THE TWO WRITES MOVE NO FILING AT ALL (DEC-89, SAF-MAJ-5).
-//
-// `SELECT count(*) FROM photos WHERE place_id IS NOT NULL` is UNCHANGED across
-// `PUT /v1/cities/{id}` and `PUT /v1/places/{id}`, and falls by a known amount
-// only on the delete. This is the assertion the three standing guards cannot
-// make, run across this step's two non-destructive routes.
+// The two writes move no filing at all.
 func TestNeitherOfThisStepsTwoWritesLowersTheFilingCount(t *testing.T) {
 	db, store := loadedWithFushimiChecked(t)
 	ctx := context.Background()

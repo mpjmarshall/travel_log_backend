@@ -1,33 +1,4 @@
 // The wire shape of the log, and the one place a date becomes a string.
-//
-// THESE STRUCTS ARE THE CLIENT'S OWN DOCUMENT, FIELD FOR FIELD AND KEY FOR
-// KEY. `internal/logbook/testdata/client_sample_log.json` is the 85,422-byte
-// log the Flutter app encoded before its fixture was deleted (DEC-75), and
-// emit_test.go decodes it INTO these types and emits it back, asserting the
-// two documents are equal value for value. That is what makes the shape a
-// measurement rather than a transcription.
-//
-// NOTHING HERE IS `omitempty`, AND THAT IS THE RULE RATHER THAN AN OVERSIGHT.
-// The client's codec reads a missing key and a null key as the same thing in
-// some places and not in others — `trips[].summary` is `as String?` and
-// tolerates both, `traveller` is a whole object it null-checks, and
-// `logbook.trips` is `as List<dynamic>` with no null branch at all. A key that
-// disappears when a value is empty is a shape that changes under the client,
-// so every key is always present and an absent value is `null`.
-//
-// AND A NIL SLICE MARSHALS TO `null`, NOT `[]`. That is the specific trap
-// behind "the four unimplemented lists are EMPTY rather than ABSENT": four
-// `nil` fields would emit `"cities": null`, which is not an absent key and is
-// not an empty list either — it is the one shape the client's
-// `as List<dynamic>` throws on. Emit normalises; TestEveryListIsEmptyRatherThanNull
-// is the leg.
-//
-// WHAT THE CLIENT DOES WITH NUMBERS, MEASURED RATHER THAN GUESSED:
-// `city.g.dart:18` reads a coordinate as `(json['lat'] as num).toDouble()` and
-// `distanceKm` the same way, so a whole-numbered latitude emitted by Go as
-// `35` rather than `35.0` decodes correctly. A bare `as double` would not have,
-// and it is worth having checked before relying on encoding/json's shortest
-// round-tripping form.
 package logbook
 
 import (
@@ -36,7 +7,8 @@ import (
 	"time"
 )
 
-// Document is the six keys, in the order the client's own encoder writes them.
+// Document is the six keys, in the order the client's own encoder writes
+// them.
 type Document struct {
 	Trips     []Trip     `json:"trips"`
 	Cities    []City     `json:"cities"`
@@ -46,38 +18,13 @@ type Document struct {
 	Traveller *Traveller `json:"traveller"`
 }
 
-// Traveller is a pointer everywhere it appears, because the client casts
-// `json['name'] as String` — non-nullable — so `{}` throws where `null` is
-// read as "a log nobody has named yet".
+// Traveller is a pointer everywhere it appears.
 type Traveller struct {
 	Name string `json:"name"`
 }
 
 // Trip carries the four sharing fields OUT and the write does not take them
-// back IN (SF6). The client has a dedicated `copyWithShare` precisely because
-// the sharing group is written alone; see logbook.TripWrite.
-//
-// `shared` IS THE ONE KEY IN THIS DOCUMENT THE CLIENT'S ENCODER NEVER WROTE,
-// and it is last for that reason (DEC-91). It is DERIVED — `EXISTS (… WHERE
-// revoked_at IS NULL)` — and never stored, because a stored copy is a second
-// place for the same fact.
-//
-// IT EXISTS BECAUSE DEC-85 TOOK SOMETHING AWAY. Share tokens are hashed at
-// rest now, so the server can no longer emit `shareLinkId`, and DEC-32's write
-// response is a whole Trip the phone SPLICES into its cached log — so an
-// ordinary rename overwrote the local plaintext token with null, H1 rendered
-// no URL, and both 'Copy link' and 'Stop sharing' went inert while the row was
-// un-revoked and `GET /l/{token}` still served it. The user lost the
-// capability AND the only control that revokes it, from an action that has
-// nothing to do with sharing. `shared` restores 'Stop sharing' from any
-// device; it leaks no capability, because a boolean is not a token.
-//
-// TWO THINGS THE CLIENT HAS TO DO WITH IT, and both are in
-// docs/CLIENT-PREREQUISITES.md: `Trip.isShared` becomes `shared` rather than
-// `shareLinkId != null`, and the splice must be a MERGE that preserves
-// `shareLinkId` rather than a replacement. H1 then gains a third state it does
-// not have today — shared, but this device does not hold the link — with 'New
-// link' as the way back, which H1 already offers.
+// back IN.
 type Trip struct {
 	ID               string   `json:"id"`
 	Name             string   `json:"name"`
@@ -101,8 +48,7 @@ type City struct {
 	CoverAsset *string `json:"coverAsset"`
 }
 
-// Country is DEC-59's two flattened columns wearing the client's nested shape.
-// There is no countries table and the client has no country input anywhere.
+// Country is's two flattened columns wearing the client the nested shape.
 type Country struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
@@ -124,8 +70,7 @@ type Place struct {
 }
 
 // Visit is nested inside its place on the wire and is its own table in
-// storage. `at` is timestamptz (DEC-68) because the wire carries a real time
-// of day and a date column truncates it silently.
+// storage.
 type Visit struct {
 	ID      string  `json:"id"`
 	PlaceID string  `json:"placeId"`
@@ -159,28 +104,11 @@ type Walk struct {
 	Dismissed  bool     `json:"dismissed"`
 }
 
-// instantLayout is what the client's own encoder produces, and the three
+// instantLayout is what the client's own encoder produces, and's three
 // zeroes are the whole reason this type exists.
-//
-// Dart's `DateTime.toIso8601String()` writes millisecond precision
-// unconditionally — `2027-12-06T07:05:00.000Z` — and Go's time.Time marshals
-// as RFC 3339 with trailing zeroes REMOVED, which would be
-// `2027-12-06T07:05:00Z`. Both parse; only one is byte-identical to what the
-// client sent, and DEC-68 asks for exactly that per date-bearing field.
-//
-// The trailing Z is appended rather than written as `Z07:00`, because the
-// value is converted to UTC first and a layout offset would render `+00:00` on
-// some inputs and `Z` on others.
 const instantLayout = "2006-01-02T15:04:05.000"
 
-// Instant is a time.Time that renders the way the client's encoder does.
-//
-// EVERY DATE-BEARING FIELD IN THE LOG USES IT, INCLUDING THE THREE STORED AS
-// `date`. DEC-68 keeps trips.started_on, trips.ended_on and walks.recorded_on
-// as date columns because those genuinely are midnight UTC on the wire — and
-// says in the same breath that THE EMITTER MUST RE-RENDER THEM as
-// `T00:00:00.000Z`, or `DateTime.parse` hands the client a non-UTC local time
-// for those three fields and a UTC one for every other date in the log.
+// Instant is a time.Time that renders the way the client the encoder does.
 type Instant time.Time
 
 func (i Instant) MarshalJSON() ([]byte, error) {

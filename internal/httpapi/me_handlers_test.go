@@ -10,13 +10,7 @@ import (
 	"travellog/internal/logbook"
 )
 
-// PATCH /v1/me ANSWERS THE TRAVELLER AND A TAG.
-//
-// It answers a whole object rather than a bare string because the phone
-// splices it into the `traveller` slot of its cached document, exactly as
-// DEC-32's Trip goes into `trips`. And the tag moves, because the name is IN
-// that document — a write that left the ETag alone would leave every phone
-// answering 304 to a log whose owner has been renamed.
+// PATCH /v1/me answers the traveller and A TAG.
 func TestNamingTheTravellerAnswersTheTravellerAndMovesTheTag(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -36,8 +30,6 @@ func TestNamingTheTravellerAnswersTheTravellerAndMovesTheTag(t *testing.T) {
 			"the tag is a rename no phone ever sees", tag, before)
 	}
 
-	// AND THE WHOLE LOG AGREES WITH THE WRITE. The splice the client makes is
-	// only safe if the next full read says the same thing.
 	body := h.get(t, "/v1/logbook", token, nil).decode(t)
 	inner := body["logbook"].(map[string]any)
 	traveller, held := inner["traveller"].(map[string]any)
@@ -46,16 +38,7 @@ func TestNamingTheTravellerAnswersTheTravellerAndMovesTheTag(t *testing.T) {
 	}
 }
 
-// AN EMPTY NAME IS 422 AND DOES NOT CLEAR IT, matching the client exactly.
-//
-// `setTravellerName` returns false on a trimmed-empty name, and the client's
-// own reason is the one that decides the server's answer too: "a log with an
-// owner keeps one, and 'no traveller' is a state a log arrives in and never
-// returns to". So there is no way to clear a traveller's name over this API,
-// deliberately.
-//
-// THE SECOND HALF IS THE ONE THAT MATTERS. A 422 that had already written NULL
-// would be a refusal in the response and a clear in the database.
+// an empty name is 422 and does not clear it, matching the client exactly.
 func TestAnEmptyNameIsRefusedAndDoesNotClearTheOne(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -84,13 +67,7 @@ func TestAnEmptyNameIsRefusedAndDoesNotClearTheOne(t *testing.T) {
 	}
 }
 
-// GET /v1/me IS DELETED AND STAYS DELETED (OE-7).
-//
-// A leg rather than an absence, because a route with no caller is exactly the
-// kind of thing that gets added back by somebody who assumes PATCH implies
-// GET. The name is in `GET /v1/logbook`'s `traveller` object, the client's
-// Traveller type has one field and no id, and register already answers 201
-// with the traveller.
+// GET /v1/me is deleted and stays deleted.
 func TestThereIsNoGetOnMe(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -102,15 +79,8 @@ func TestThereIsNoGetOnMe(t *testing.T) {
 	}
 }
 
-// === the revocation surface ===
-
-// A REVOKED TOKEN IS A 401 ON THE NEXT REQUEST, which is the whole of what the
-// route is for.
-//
-// Against a thirty-day untuned TTL this is the only bound on a token that has
-// left the device. The leg is the pair — the token works, then it does not —
-// because either half alone passes against a build that answers 204 and does
-// nothing.
+// A revoked token is a 401 on the next request, which is the whole of what
+// the route is for.
 func TestRevokingASessionMakesTheNextRequestA401(t *testing.T) {
 	h := newHarness(t, options{})
 	token := bearer(t, h)
@@ -136,18 +106,8 @@ func TestRevokingASessionMakesTheNextRequestA401(t *testing.T) {
 	}
 }
 
-// `?scope=all` REVOKES THE OTHER DEVICE TOO, AND THE CALLER'S OWN TOKEN WITH
-// IT.
-//
-// The security lens's argument: a stolen token is precisely the case where you
-// do not know which row to delete, and 'this token' is the one the thief will
-// not use. THE TWO-SESSION SETUP IS THE POINT — with one session, `all` and
-// `this` are indistinguishable, so a leg written on one token proves nothing
-// about the parameter.
-//
-// AND IT SIGNS THE CALLER OUT TOO, deliberately: "sign out everywhere" that
-// leaves the device you pressed it on signed in is a control that has not done
-// what it says.
+// `?scope=all` revokes the other device too, and the caller's own token with
+// it.
 func TestRevokingEverySessionReachesTheOtherDeviceAndThisOne(t *testing.T) {
 	h := newHarness(t, options{})
 	phone := bearer(t, h)
@@ -176,10 +136,8 @@ func TestRevokingEverySessionReachesTheOtherDeviceAndThisOne(t *testing.T) {
 	}
 }
 
-// AND `?scope=this` LEAVES THE OTHER DEVICE ALONE, which is the other
-// direction and the one that makes the parameter mean anything. Without it,
-// `all` could be the only behaviour and every assertion above would still
-// pass.
+// `?scope=this` leaves the other device alone, which is the other
+// direction and the one that makes the parameter mean anything.
 func TestTheDefaultScopeLeavesTheOtherDeviceSignedIn(t *testing.T) {
 	h := newHarness(t, options{})
 	phone := bearer(t, h)
@@ -195,12 +153,7 @@ func TestTheDefaultScopeLeavesTheOtherDeviceSignedIn(t *testing.T) {
 	}
 }
 
-// A SCOPE NOBODY RECOGNISES IS A 422 NAMING THE FIELD, NOT A FALLBACK.
-//
-// `?scope=al` — a typo — must not quietly sign one device out while the user
-// believes every device is out. That is the one failure mode this parameter
-// has, and it is the whole reason an unknown value is refused rather than
-// defaulted.
+// A scope nobody recognises is a 422 naming the field, not A FALLBACK.
 func TestAnUnknownRevocationScopeIsRefusedRatherThanDefaulted(t *testing.T) {
 	h := newHarness(t, options{})
 	phone := bearer(t, h)
@@ -213,8 +166,6 @@ func TestAnUnknownRevocationScopeIsRefusedRatherThanDefaulted(t *testing.T) {
 	if field := got.decode(t)["field"]; field != "scope" {
 		t.Errorf("the 422 names %v, want \"scope\"", field)
 	}
-	// AND IT REVOKED NOTHING. A 422 that had already signed one device out is
-	// a refusal in the response and an act in the database.
 	for name, token := range map[string]string{"the caller": phone, "the other device": tablet} {
 		if got := h.get(t, "/v1/logbook", token, nil); got.status != http.StatusOK {
 			t.Errorf("%s was signed out by a refused request: %d %s", name, got.status, got.body)
@@ -222,11 +173,8 @@ func TestAnUnknownRevocationScopeIsRefusedRatherThanDefaulted(t *testing.T) {
 	}
 }
 
-// THE REVOCATION MOVES NO logbook_version, and that is DEC-50's list rather
-// than an accident: a session is not in the emitted document, so revoking one
-// must not invalidate the phone's whole cached log.
-//
-// It is asserted through the TAG, which is the only thing the phone can see.
+// the revocation moves no logbook_version, and that is the list rather than an
+// accident.
 func TestRevokingASessionDoesNotInvalidateTheCachedLog(t *testing.T) {
 	h := newHarness(t, options{})
 	phone := bearer(t, h)

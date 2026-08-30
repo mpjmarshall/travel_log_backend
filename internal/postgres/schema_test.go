@@ -1,11 +1,4 @@
 // migrations/0001_init.up.sql, exercised rather than inspected.
-//
-// EVERY LEG HERE RUNS AGAINST A REAL POSTGRESQL and skips, saying so, when
-// there is none. Two kinds of leg live in this file and they are labelled
-// where they sit: CATALOG legs, which read pg_constraint and pg_index and are
-// true at any size, and BEHAVIOUR legs, which delete something and count what
-// survived. The catalog legs are cheap and they cannot see a wrong cascade;
-// the behaviour legs are the ones named for the sheet line they defend.
 package postgres
 
 import (
@@ -41,11 +34,6 @@ const (
 	assetB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	noSuch = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-	// THE THREE SHARE TOKENS ARE PLAINTEXT HERE AND A DIGEST IN THE TABLE
-	// (DEC-85). They are twelve characters of the client's own alphabet
-	// rather than `tok-may`, which is what they were until 0004: the hyphen
-	// and the four-character length are both outside `shareTokenPattern`, so
-	// a fixture carrying them would be a fixture no route could produce.
 	tokenMay   = "kyotomay9f2a"
 	tokenTwo   = "secondtoken2"
 	tokenThree = "thirdtoken33"
@@ -63,10 +51,6 @@ func migrated(t *testing.T) *sql.DB {
 }
 
 // seeded is `migrated` plus the shape every cascade leg is written against.
-// It mirrors the client's own fixture where the fixture has an opinion:
-// `fushimi-inari` is visited on one trip only, `wishlist-pin` has no visits at
-// all, and one photograph on `autumn-crossing` points at a visit that belongs
-// to `kyoto-in-may` — which is the `_repointed` shape.
 func seeded(t *testing.T) *sql.DB {
 	t.Helper()
 	db := migrated(t)
@@ -93,11 +77,6 @@ func seeded(t *testing.T) *sql.DB {
 		VALUES ($1,'p-may','kyoto-in-may','kyoto','fushimi-inari','v-fushimi-may','2027-05-03T07:06:00Z',$2)`, tid, assetA)
 	mustExec(t, db, `INSERT INTO photos (traveller_id, id, trip_id, city_id, place_id, visit_id, taken_at, asset)
 		VALUES ($1,'p-autumn','autumn-crossing','kyoto','fushimi-inari','v-fushimi-may','2027-09-20T07:06:00Z',$2)`, tid, assetB)
-	// THE TRACK IS NOT `[]` SINCE 0003. `walks_points_present_ck` refuses an
-	// empty array, which is DEC-89's pointer contract making `points: []`
-	// expressible and PD-21 closing it — a GPS track is a recording of a day
-	// that has passed. Two points rather than one, so a leg that ever asks
-	// about a polyline has one to draw.
 	mustExec(t, db, `INSERT INTO walks (traveller_id, id, trip_id, city_id, recorded_on, distance_km, points)
 		VALUES ($1,'w-may','kyoto-in-may','kyoto','2027-05-03',3.2,
 		        '[{"lat":34.96,"lng":135.77},{"lat":34.97,"lng":135.78}]'::jsonb)`, tid)
@@ -131,13 +110,7 @@ func count(t *testing.T, db *sql.DB, q string, args ...any) int {
 	return n
 }
 
-// ---------------------------------------------------------------- THE BLOCKER
-
-// THE LEG THE DEFECT HID FROM. Three review passes missed the composite
-// SET NULL blocker because the only cascade leg anyone had written deleted a
-// TRIP, and on that path the photograph is cascade-deleted through
-// photos.trip_id before the broken FK ever fires. Deleting a PLACE is what
-// reaches it.
+// the leg the defect hid from.
 func TestDeletingAPlaceClearsThePinAndLeavesThePhotographStanding(t *testing.T) {
 	db := seeded(t)
 
@@ -185,8 +158,8 @@ func TestDeletingAPlaceClearsThePinAndLeavesThePhotographStanding(t *testing.T) 
 	}
 }
 
-// D2: "the track stays with the day it was recorded either way" — which is why
-// walks carries no place_id at all.
+// D2: "the track stays with the day it was recorded either way" — which is
+// why walks carries no place_id at all.
 func TestDeletingAPlaceLeavesEveryWalkUntouched(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `DELETE FROM places WHERE traveller_id=$1 AND id='fushimi-inari'`, tid)
@@ -196,8 +169,7 @@ func TestDeletingAPlaceLeavesEveryWalkUntouched(t *testing.T) {
 }
 
 // D2's DELETE branch is an ORDER of statements in Go, not a foreign key, and
-// the order silently inverts the promise. Asserted on the SURVIVING ROW COUNT
-// rather than on error/no-error, so the leg cannot pass on an exception.
+// the order silently inverts the promise.
 func TestTheOrderOfD2sDeleteBranchDecidesWhetherThePhotographsSurvive(t *testing.T) {
 	t.Run("photographs first, which is what the sheet promises", func(t *testing.T) {
 		db := seeded(t)
@@ -224,8 +196,6 @@ func TestTheOrderOfD2sDeleteBranchDecidesWhetherThePhotographsSurvive(t *testing
 	})
 }
 
-// ------------------------------------------------------------------ D3 and _repointed
-
 func TestDeletingATripClearsVisitIdOnAnotherTripsPhotographAndClearsNothingElse(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `DELETE FROM trips WHERE traveller_id=$1 AND id='kyoto-in-may'`, tid)
@@ -251,8 +221,7 @@ func TestDeletingATripClearsVisitIdOnAnotherTripsPhotographAndClearsNothingElse(
 	}
 }
 
-// D3 itemises "N pins in …" as KEPT. There is deliberately no foreign key from
-// trips to places, and that absence is the whole mechanism.
+// D3 itemises "N pins in …" as KEPT.
 func TestDeletingATripKeepsItsPlacesIncludingOnesWithNoVisitsLeft(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `DELETE FROM trips WHERE traveller_id=$1 AND id='kyoto-in-may'`, tid)
@@ -280,13 +249,8 @@ func TestDeletingATripKeepsItsPlacesIncludingOnesWithNoVisitsLeft(t *testing.T) 
 	}
 }
 
-// ------------------------------------------------------------------ DEC-57 / DEC-69
-
-// Each case clears every OTHER child of kyoto, so the refusal it asserts is the
-// one it names. Without that, whichever constraint PostgreSQL happens to check
-// first answers for all four and three of the legs prove nothing — which is how
-// this was written first, and the run said so: trip_cities_city_fk fired for
-// every case.
+// Each case clears every OTHER child of kyoto, so the refusal it asserts is
+// the one it names.
 func TestDeletingACityIsRefusedByEveryChildThatPointsAtIt(t *testing.T) {
 	const (
 		noPhotos = `DELETE FROM photos WHERE traveller_id=$1`
@@ -321,11 +285,7 @@ func TestDeletingACityIsRefusedByEveryChildThatPointsAtIt(t *testing.T) {
 	}
 }
 
-// DEC-69's other half. DEC-64 claimed CASCADE here gave DEC-57's RESTRICT "a
-// real child to protect"; executed, CASCADE did the opposite — a city with no
-// places, photographs or walks deleted silently and vanished from every trip's
-// ordered list, leaving a gap in the ordinals.
-// seoul has never had a place, a photograph or a walk — only a trip_cities row.
+// The other half.
 func TestACityWithNoPlacesPhotosOrWalksIsStillProtectedByItsTrips(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `DELETE FROM photos WHERE traveller_id=$1`, tid)
@@ -340,10 +300,8 @@ func TestACityWithNoPlacesPhotosOrWalksIsStillProtectedByItsTrips(t *testing.T) 
 	}
 }
 
-// ------------------------------------------------------------------ DEC-58
-
-// The nullable-FK consequence DEC-58 asks to be stated rather than assumed: a
-// composite FK is MATCH SIMPLE, so a NULL cover needs no parent lookup.
+// The nullable-FK consequence asks to be stated rather than assumed: a
+// composite FK is match simple, so a NULL cover needs no parent lookup.
 func TestATripWithNoCoverIsAcceptedAndOneNamingNothingIsRefused(t *testing.T) {
 	db := seeded(t)
 
@@ -381,10 +339,8 @@ func TestAnObjectStillReferencedCannotBeDeleted(t *testing.T) {
 	}
 }
 
-// The non-obvious half, and the reason it is written down: account deletion is
-// NOT made impossible by seven RESTRICT foreign keys. RESTRICT checks are
-// AFTER-ROW triggers evaluated at end of statement, and the recursive CASCADE
-// removes every referencing row before they fire.
+// The non-obvious half, and the reason it is written down: account deletion
+// is not made impossible by seven RESTRICT foreign keys.
 func TestDeletingATravellerWorksDespiteEveryRestrict(t *testing.T) {
 	db := seeded(t)
 	res, err := db.Exec(`DELETE FROM travellers WHERE id=$1`, tid)
@@ -400,8 +356,6 @@ func TestDeletingATravellerWorksDespiteEveryRestrict(t *testing.T) {
 		}
 	}
 }
-
-// ------------------------------------------------------------------ DEC-65
 
 func TestTwoAddressesDifferingOnlyInCaseAreRefusedByTheDatabase(t *testing.T) {
 	db := seeded(t) // already holds Matt@Example.COM
@@ -425,8 +379,8 @@ func TestTheAddressIsStoredExactlyAsItWasTyped(t *testing.T) {
 	}
 }
 
-// The warning DEC-65 gives, made falsifiable: the wrong lookup does not error,
-// it silently reports an unknown address.
+// The warning gives, made falsifiable: the wrong lookup does not error, it
+// silently reports an unknown address.
 func TestTheWrongLookupMissesSilentlyAndTheRightOneUsesTheIndex(t *testing.T) {
 	db := seeded(t)
 
@@ -444,13 +398,7 @@ func TestTheWrongLookupMissesSilentlyAndTheRightOneUsesTheIndex(t *testing.T) {
 }
 
 // The functional index resolves `lower` through search_path, so this asserts
-// which function it actually bound to. Reading the index definition cannot
-// tell you: pg_get_indexdef prints `lower(email)` either way.
-// pg_depend cannot answer this: dependencies on PINNED system objects are not
-// recorded, so a functional index on a built-in has no pg_proc row — measured,
-// that query returns zero rows. And pg_get_indexdef prints `lower(email)`
-// whichever function it bound to. The stored expression tree carries the
-// resolved OID and is the only place the answer is.
+// Function it actually bound to.
 func TestTheEmailIndexBoundToPgCatalogsLower(t *testing.T) {
 	db := migrated(t)
 	var nsp, name string
@@ -468,15 +416,7 @@ func TestTheEmailIndexBoundToPgCatalogsLower(t *testing.T) {
 	}
 }
 
-// THE HAZARD ITSELF, reproduced rather than argued. A schema placed BEFORE
-// pg_catalog shadows `lower`, and the lookup then both misses the index and
-// returns the wrong answer — silently, with no error anywhere. This is a fact
-// about PostgreSQL, not about this schema, and it is the reason the runner
-// pins search_path and the reason the application role must never be given one
-// that puts a schema ahead of pg_catalog.
-// Both sides of the comparison go through the shadow, so they collapse to one
-// constant and the predicate matches EVERY row: an address nobody registered
-// resolves to a traveller, and nothing is raised.
+// the hazard itself, reproduced rather than argued.
 func TestAShadowedLowerBreaksTheLookupSilently(t *testing.T) {
 	db := seeded(t)
 	tx, err := db.Begin()
@@ -506,8 +446,6 @@ func TestAShadowedLowerBreaksTheLookupSilently(t *testing.T) {
 	t.Logf("a schema ahead of pg_catalog made `lower(email) = lower('nobody@example.com')` match %d traveller(s), "+
 		"with no error anywhere", n)
 }
-
-// ------------------------------------------------------------------ DEC-66 / DEC-67 / DEC-68
 
 func TestTwoVisitsOfOnePlaceCannotShareAnOrdinal(t *testing.T) {
 	db := seeded(t)
@@ -550,9 +488,8 @@ func TestAReorderWrittenAsDeleteThenInsertPassesTheNonDeferrableUnique(t *testin
 	}
 }
 
-// The counter-case, recorded because it is what a worker will reach for and it
-// is the one that fails: a UNIQUE index is checked per ROW during a statement,
-// so a set-based UPDATE collides even though its final state is unique.
+// The counter-case, recorded because it is what a worker will reach for and
+// it is the one that fails.
 func TestASetBasedUpdateOfTheOrdinalsCollidesAndThatIsWhyTheStrategyIsDeleteThenInsert(t *testing.T) {
 	db := seeded(t)
 	_, err := db.Exec(`UPDATE trip_cities SET ordinal = 1 - ordinal WHERE traveller_id=$1 AND trip_id='autumn-crossing'`, tid)
@@ -564,10 +501,7 @@ func TestASetBasedUpdateOfTheOrdinalsCollidesAndThatIsWhyTheStrategyIsDeleteThen
 	}
 }
 
-// Two halves. Two live links for one trip is what the class diagram forbids and
-// what nothing but the partial index enforces; and H1's Stop sharing followed
-// by New link is a duplicate-key error under PRIMARY KEY (traveller_id,
-// trip_id), which is the primary key DEC-67 rejected.
+// Two halves.
 func TestStopSharingThenNewLinkWorksAndOnlyOneLinkIsEverLive(t *testing.T) {
 	db := seeded(t)
 
@@ -604,14 +538,8 @@ func TestStopSharingThenNewLinkWorksAndOnlyOneLinkIsEverLive(t *testing.T) {
 	}
 }
 
-// A token has to be unique across the whole table: GET /l/{token} arrives with
-// no traveller in hand.
-//
-// SINCE 0004 IT IS THE DIGEST THAT IS UNIQUE, and that is the same claim
-// rather than a weaker one: sha256 is injective for every input this system
-// will ever see, so two travellers cannot hold one token without holding one
-// hash. The index keeps its name because the question it answers has not
-// changed — `share_links_token_key` is still what /l/{token} resolves through.
+// A token has to be unique across the whole table: GET /l/{token} arrives
+// with no traveller in hand.
 func TestATokenIsUniqueAcrossEveryTraveller(t *testing.T) {
 	db := seeded(t)
 	mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'other@example.com','x')`, otherT)
@@ -626,7 +554,7 @@ func TestATokenIsUniqueAcrossEveryTraveller(t *testing.T) {
 	}
 }
 
-// DEC-68: the wire carries 07:05 and `date` would throw it away.
+// : the wire carries 07:05 and `date` would throw it away.
 func TestAVisitKeepsItsTimeOfDay(t *testing.T) {
 	db := seeded(t)
 	var got string
@@ -646,9 +574,8 @@ func TestAVisitKeepsItsTimeOfDay(t *testing.T) {
 	}
 }
 
-// The other three date-bearing columns genuinely are midnight-UTC on the wire,
-// so `date` is lossless for them — asserted so nobody "fixes" them to match
-// visits.at.
+// The other three date-bearing columns genuinely are midnight-UTC on the
+// wire.
 func TestTheOtherThreeDateColumnsAreDates(t *testing.T) {
 	db := migrated(t)
 	for _, c := range []struct{ table, column string }{
@@ -664,8 +591,6 @@ func TestTheOtherThreeDateColumnsAreDates(t *testing.T) {
 		}
 	}
 }
-
-// ------------------------------------------------------------------ DEC-02 ids
 
 func TestATripWhoseIdIsKyotoRoundTrips(t *testing.T) {
 	db := seeded(t)
@@ -688,17 +613,8 @@ func TestAnIdOutsideTheSlugAlphabetIsRefused(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------------ CHECK constraints
-
-// EVERY ROW HERE WAS INSERTED SUCCESSFULLY on a real instance before its
-// constraint existed. The list is the review's, one leg per row, each naming
-// the constraint that must refuse it so a passing test cannot be satisfied by
-// the wrong refusal.
-//
-// `args` is appended AFTER the traveller id, which is $1 in every query except
-// the one that creates a traveller — hence ownArgs. Without it that row failed
-// with `could not determine data type of parameter $1`, a red for the wrong
-// reason.
+// every row here was inserted successfully on a real instance before its
+// constraint existed.
 func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -717,26 +633,12 @@ func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 			`INSERT INTO cities (traveller_id,id,name,country_code,country_name,centre_lat,centre_lng) VALUES ($1,'x','X','JP','Japan',1,-4000)`, nil, false},
 		{"a negative byte size", "media_objects_byte_size_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,-5,'image/jpeg')`, []any{noSuch}, false},
-		// THE CONSTRAINT IS RENAMED AT 0003 AND THE ROW BELOW IT IS NEW
-		// (DEC-51, PD-10, DEC-104). `_present_ck` stopped '' and nothing else,
-		// and 0001's own comment called it the weakest check in the file and
-		// said `text/html; <script>` was accepted. The name changes with the
-		// claim, and the catalog leg that asserted the old one is this line.
 		{"an empty content type", "media_objects_content_type_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,5,'')`, []any{noSuch}, false},
-		// THE PAYLOAD ITSELF, which is what the allowlist is FOR: an object
-		// stored as text/html is served AS HTML from the bucket origin, at a
-		// URL the public share envelope embeds.
 		{"the XSS payload 0001's own comment said was accepted", "media_objects_content_type_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,5,'text/html; <script>')`, []any{noSuch}, false},
-		// AND heic, WHICH IS OUT (DEC-104). It is a plausible image type and
-		// nothing in this system can produce one — the client's shutter is
-		// inert by decision — so an allowlist entry for it would be a claim
-		// the schema makes that no leg can check.
 		{"image/heic, which DEC-104 took out", "media_objects_content_type_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,$2,5,'image/heic')`, []any{noSuch}, false},
-		// A ROW COMMITTED BEFORE IT WAS CREATED. The sweep's grace window keys
-		// off exactly these two timestamps.
 		{"an object committed before it was created", "media_objects_uploaded_after_created_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type,created_at,uploaded_at)
 			 VALUES ($1,$2,5,'image/png','2027-01-02T00:00:00Z','2027-01-01T00:00:00Z')`, []any{noSuch}, false},
@@ -748,17 +650,10 @@ func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 			`INSERT INTO trips (traveller_id,id,name,summary) VALUES ($1,'blank','Blank','')`, nil, false},
 		{"an empty plan on a place", "places_plan_present_ck",
 			`INSERT INTO places (traveller_id,id,city_id,name,lat,lng,plan) VALUES ($1,'blank','kyoto','Blank',35.0,135.0,'')`, nil, false},
-		// THE LOWER BOUND `walks_points_array_ck` COULD NOT EXPRESS (PD-21).
-		// An empty array IS an array, so the row below passed both 0001
-		// constraints and destroyed a recording of a day that has passed.
 		{"a walk with an empty track", "walks_points_present_ck",
 			`INSERT INTO walks (traveller_id,id,trip_id,city_id,recorded_on,distance_km,points) VALUES ($1,'w','kyoto-in-may','kyoto','2027-05-03',1,'[]'::jsonb)`, nil, false},
 		{"an object id that is not hex sha256", "media_objects_id_sha256_ck",
 			`INSERT INTO media_objects (traveller_id,id,byte_size,content_type) VALUES ($1,'not-a-digest',5,'image/jpeg')`, nil, false},
-		// THE TRACK IS NON-EMPTY HERE ON PURPOSE. With `'[]'::jsonb` this row
-		// now violates TWO constraints, and PostgreSQL does not promise which
-		// of two failing CHECKs it names — so the leg would pass or fail on
-		// something other than the distance it is about.
 		{"a negative walk distance", "walks_distance_km_ck",
 			`INSERT INTO walks (traveller_id,id,trip_id,city_id,recorded_on,distance_km,points) VALUES ($1,'w','kyoto-in-may','kyoto','2027-05-03',-1,'[{"lat":1,"lng":2}]'::jsonb)`, nil, false},
 		{"a track that is not a list", "walks_points_array_ck",
@@ -797,28 +692,8 @@ func TestTheSchemaRefusesTheDataTheAppForbids(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------------ CATALOG legs
-
-// DEC-70, DERIVED FROM pg_index.indkey RATHER THAN FROM A HAND-KEPT LIST —
-// which is the whole correction. DEC-63's list MISSED trip_cities(traveller_id,
-// city_id), because DEC-64 created that table after the list was written; and
-// it DUPLICATED an index on share_links, because it did not know the primary
-// key already covered it. A list cannot see either. This can.
-//
-// Two details that decide correctness rather than tidiness:
-//   - The index must not be PARTIAL. share_links_one_live covers exactly the
-//     right columns and is `WHERE revoked_at IS NULL`, and an RI check needs an
-//     index over every row.
-//   - The match is on the SET of the leading N columns, not their order. A
-//     btree on (a,b) serves `a=$1 AND b=$2` whichever order the foreign key
-//     happens to declare them in, so requiring the order would fail correct
-//     work.
-//
-// The comparison runs in Go rather than in SQL because indkey is an int2vector
-// with a ZERO lower bound while conkey is a smallint[] with a one, and an
-// off-by-one between them reads as "covered" rather than as an error. The
-// closing total guards the vacuous direction: a query returning nothing would
-// pass the loop without asserting anything.
+// , derived from pg_index.indkey rather than from A HAND-kept list — which is
+// the whole correction.
 func TestEveryForeignKeyChildColumnSetLeadsSomeIndex(t *testing.T) {
 	db := migrated(t)
 
@@ -894,9 +769,8 @@ func TestEveryForeignKeyChildColumnSetLeadsSomeIndex(t *testing.T) {
 	t.Logf("foreign keys checked: %d, against %d non-partial indexes", total, len(indexes))
 }
 
-// leadsWith reports whether want is exactly the SET of the first len(want)
-// columns of have. Order within that prefix does not matter: a btree on (a,b)
-// serves `a=$1 AND b=$2` whichever order the foreign key declares them in.
+// leadsWith reports whether want is exactly the SET of's first len(want)
+// columns of have.
 func leadsWith(have, want []string) bool {
 	if len(have) < len(want) || len(want) == 0 {
 		return false
@@ -913,11 +787,7 @@ func leadsWith(have, want []string) bool {
 	return true
 }
 
-// The cascades, as a catalog fact. This cannot see a wrong ORDER of statements
-// in Go and it can see a wrong ON DELETE, which is the other half.
-//
-// It also carries THE BLOCKER AS A CATALOG FACT: an empty confdelsetcols on a
-// SET NULL means "null every column of the key", traveller_id included.
+// The cascades, as a catalog fact.
 func TestTheDeleteActionsAreWhatTheSheetsSay(t *testing.T) {
 	want := map[string]string{
 		"sessions_traveller_fk":      deleteCascade,
@@ -947,11 +817,6 @@ func TestTheDeleteActionsAreWhatTheSheetsSay(t *testing.T) {
 		"share_links_traveller_fk":   deleteCascade,
 		"share_links_trip_fk":        deleteCascade,
 
-		// No sheet says this one, because no sheet can: a sign-in code is not
-		// part of anybody's log and never appears on a screen. Its line is the
-		// deletion decision instead — deletion is immediate and total, and a
-		// live code is exactly what a hand-written delete forgets and a
-		// foreign key remembers.
 		"sign_in_codes_traveller_fk": deleteCascade,
 	}
 
@@ -997,10 +862,7 @@ func TestTheDeleteActionsAreWhatTheSheetsSay(t *testing.T) {
 	}
 }
 
-// THE MOST DANGEROUS LINE IN 0001 IS AN ABSENCE: there is no foreign key
-// anywhere from trips to places, and that absence is D3's "the pins stay in
-// those cities". An absence cannot be seen by the table above, which only
-// walks what exists.
+// the most dangerous line in 0001 is an absence.
 func TestThereIsNoForeignKeyFromTripsToPlaces(t *testing.T) {
 	db := migrated(t)
 	n := count(t, db, `
@@ -1016,9 +878,7 @@ func TestThereIsNoForeignKeyFromTripsToPlaces(t *testing.T) {
 	}
 }
 
-// DEC-69, generalised. The specific finding was `end`; the rule is that no
-// column in this schema may be a word PostgreSQL reserves, because a project
-// with no ORM writes every column list by hand.
+// , generalised.
 func TestNoColumnIsAReservedWord(t *testing.T) {
 	db := migrated(t)
 	rows, err := db.Query(`
@@ -1041,13 +901,7 @@ func TestNoColumnIsAReservedWord(t *testing.T) {
 	}
 }
 
-// Auto-generated constraint names are POSITIONAL: they are built from the
-// column names, so a rename or a re-add in a later migration moves them and
-// this file's catalog legs then redden for a reason unrelated to the schema.
-//
-// _fkey, _key and _check are PostgreSQL's three generated suffixes. _pkey is
-// generated too but is built from the table name alone, so it does not move
-// under a column rename and this schema uses it on purpose.
+// Auto-generated constraint names are POSITIONAL.
 func TestEveryConstraintWasNamedDeliberately(t *testing.T) {
 	db := migrated(t)
 	rows, err := db.Query(`
@@ -1082,10 +936,7 @@ func TestEveryConstraintWasNamedDeliberately(t *testing.T) {
 	}
 }
 
-// Sorted in Go, not by the server: `ORDER BY 1` uses the database's collation,
-// and under en_US.utf8 punctuation is ignored at the primary level — so
-// `trip_cities` and `trips` would sort in an order that is a fact about the
-// container's locale rather than about this schema.
+// Sorted in Go, not by the server.
 func TestTheMigrationCreatesExactlyTheTwelveTablesAndTheLedger(t *testing.T) {
 	db := migrated(t)
 	rows, err := db.Query(`SELECT table_name FROM information_schema.tables
@@ -1132,22 +983,7 @@ func explain(t *testing.T, db *sql.DB, q string) string {
 	return strings.Join(lines, "\n")
 }
 
-// === migration 0002: the share defaults, and the rows written before it ===
-
-// LEG SIX. A trip created through the store carries THE CLIENT'S OWN
-// DEFAULTS, which are not the schema's.
-//
-// The client ships `sharePhotos: true, shareNotes: true, shareCoordinates:
-// false` and 0001 defaulted all three to false, so a trip created by the
-// server was born with photo and note sharing off — a setting nobody chose,
-// differing from the same trip created on the phone. `share_coordinates`
-// stays false on both sides and for the client's own stated reason: a pin on
-// your accommodation is not something to hand out by link, so it has to be
-// actively turned on.
-//
-// EXPECTED RED BEFORE 0002: exactly TWO failures, with the third assertion
-// PASSING. Three failures would mean the upsert is writing the columns, which
-// is a different defect that 0002 would not fix.
+// leg six.
 func TestACreatedTripCarriesTheClientsOwnSharingDefaults(t *testing.T) {
 	db := migrated(t)
 	store := LogbookStore{DB: db}
@@ -1175,16 +1011,7 @@ func TestACreatedTripCarriesTheClientsOwnSharingDefaults(t *testing.T) {
 	}
 }
 
-// LEG SEVEN. 0002 BACKFILLS THE TRIPS THAT WERE ALREADY THERE (DEC-82).
-//
-// After the two ALTERs alone, pre-existing rows stay f|f|f while every new row
-// reads t|t|f, and NOTHING IN THE TABLE CAN DISTINGUISH "written before 0002"
-// from "the user turned sharing off". Those rows carry a default the client
-// never had, so they are wrong data rather than a choice.
-//
-// THE `[false false false]` ASSERTION IS A PRECONDITION AND IS A Fatalf. Without
-// it, a harness that silently migrated to head makes this leg pass while
-// proving nothing at all.
+// leg seven.
 func TestMigration0002BackfillsTheTripsThatWereAlreadyThere(t *testing.T) {
 	db, schema := testdb.Open(t)
 	m := Migrator{Schema: schema, Logger: quietLogger()}
@@ -1211,11 +1038,6 @@ func TestMigration0002BackfillsTheTripsThatWereAlreadyThere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applying 0002: %v", err)
 	}
-	// THE EXPECTATION IS DERIVED, NOT LISTED. This line read `want [0002]` and
-	// went red the moment 0003 landed — correctly, but for the wrong reason:
-	// the claim is that the second run applies EVERYTHING AFTER 0001, in
-	// order, and a literal turns it into "there are exactly two migrations".
-	// That is the same staleness R2 found three times in the arc.
 	want := everythingAfter(t, "0001")
 	if strings.Join(applied, ",") != strings.Join(want, ",") {
 		t.Fatalf("the second run applied %v, want %v", applied, want)
@@ -1231,11 +1053,7 @@ func TestMigration0002BackfillsTheTripsThatWereAlreadyThere(t *testing.T) {
 	}
 }
 
-// LEG EIGHT, CATALOG TIER. The defaults are read out of pg_attrdef BY NAME.
-//
-// It exists because leg six goes through the store and would go green if
-// somebody "fixed" the defaults in Go — which would leave every other writer,
-// including a psql session and R4's seed, still producing f|f|f.
+// leg eight, catalog tier.
 func TestTheShareDefaultsAreInTheCatalogAndNotInGo(t *testing.T) {
 	db := migrated(t)
 
@@ -1287,11 +1105,7 @@ func sharingOf(t *testing.T, db *sql.DB, travellerID, tripID string) [3]bool {
 }
 
 // onlyMigration is migrations.FS cut down to one version's pair, so a leg can
-// stand at an intermediate schema. It reads the REAL files rather than
-// restating them: a hand-written copy of 0001 would drift, and this leg's
-// whole point is what the real 0001 leaves behind.
-// everythingAfter is every migration version strictly after `version`, in the
-// order the runner applies them.
+// stand at an intermediate schema.
 func everythingAfter(t *testing.T, version string) []string {
 	t.Helper()
 	names, err := fs.Glob(migrations.FS, "*.up.sql")
@@ -1328,23 +1142,8 @@ func onlyMigration(t *testing.T, version string) fs.FS {
 	return out
 }
 
-// ------------------------------------------------------- 0003: THE CATALOG COMMENTS
-
-// DEC-83's rule lives in Go and the SCHEMA SAYS SO, in the catalog, where a
-// DBA's `\d+` will show it (PD-13).
-//
-// THE COMMENT IS THE DELIVERABLE AND THAT IS WHY IT HAS A LEG. It is the only
-// artefact in this repository whose whole job is to stop the next reader
-// spending an afternoon re-discovering that the obvious fix does not work: the
-// composite FK changes what a visit deletion does to place_id, and the cheap
-// `CHECK ((place_id IS NULL) = (visit_id IS NULL))` — the exact shape of
-// photos_coordinates_paired_ck, three columns away in the same table — ABORTS
-// D2's keep branch outright. Both facts were executed. A comment nobody
-// asserts is a comment a later migration drops.
-//
-// IT ASSERTS THE SUBSTANCE AND NOT ONLY THE PRESENCE. A leg checking
-// `IS NOT NULL` passes against `COMMENT ON COLUMN photos.place_id IS 'x'`,
-// which is the vacuous shape this project keeps finding.
+// The rule lives in Go and the schema says so, in the catalog, where a DBA's
+// `\d+` will show it.
 func TestTheTwoGoOnlyIntegrityColumnsCarryTheirRulingInTheCatalog(t *testing.T) {
 	db := migrated(t)
 
@@ -1380,16 +1179,8 @@ func TestTheTwoGoOnlyIntegrityColumnsCarryTheirRulingInTheCatalog(t *testing.T) 
 	}
 }
 
-// THE ALLOWLIST IS THE SAME SET IN BOTH PLACES, AND THE LEG READS BOTH RATHER
-// THAN RESTATING EITHER (PD-10, DEC-58's precedent).
-//
-// Enforced twice by decision: in Go for the 422 that names the field, and in
-// the schema as the guarantee, because a Go check can be bypassed by the next
-// route somebody adds and nothing notices. Two enforcement points is two
-// places for the set to be written, so this walks the CHECK's own predicate
-// out of pg_constraint and asks internal/logbook about each value it finds.
-//
-// MUTATION: add 'image/heic' to either side alone and this reddens.
+// the allowlist is the same set in both places, and the leg reads both rather
+// than restating either (the precedent).
 func TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet(t *testing.T) {
 	db := migrated(t)
 
@@ -1421,8 +1212,6 @@ func TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet(t *testing.T) {
 		}
 	}
 
-	// AND THE ROUND TRIP, because the two lists agreeing proves nothing about
-	// what the database does with them.
 	for _, mediaType := range logbook.AllowedContentTypes() {
 		id := strings.Repeat(fmt.Sprintf("%x", len(mediaType)%16), 64)
 		if _, err := db.ExecContext(context.Background(),
@@ -1439,7 +1228,7 @@ func TestTheSchemaAllowlistAndTheGoAllowlistAreTheSameSet(t *testing.T) {
 }
 
 // quotedLiterals is every single-quoted string in a constraint predicate,
-// which for an IN-list is exactly the set it permits.
+// For an IN-list is exactly the set it permits.
 func quotedLiterals(predicate string) []string {
 	var out []string
 	for i := 0; i < len(predicate); i++ {
@@ -1459,23 +1248,7 @@ func quotedLiterals(predicate string) []string {
 	return out
 }
 
-// ------------------------------------------------- 0004: THE TOKEN IS A DIGEST
-
-// DEC-85, AND THE PRECONDITION IS THE HALF THAT MAKES IT A MEASUREMENT.
-//
-// 0004 replaces `share_links.token text` with `token_hash bytea`, and the
-// interesting statement is not the ALTER — it is the backfill. A row written
-// under 0003 holds a plaintext capability; after 0004 it has to hold that same
-// capability's digest, or every link ever issued stops resolving and the
-// revocation history stops meaning anything. So the leg stands the schema at
-// 0003, writes a row through the OLD column, applies 0004, and asserts the new
-// column holds `sha256(<that plaintext>)` — computed in Go, by the same
-// function the server will use, rather than restated as a hex literal.
-//
-// THE `token` READ-BACK IS A Fatalf FOR THE REASON LEG SEVEN'S IS. Without it
-// a harness that silently migrated to head makes the rest of this leg pass
-// while proving nothing at all: `token_hash` would already be there, already
-// correct, and the backfill would never have run.
+// , and the precondition is the half that makes it A MEASUREMENT.
 func TestMigration0004HashesTheTokensThatWereAlreadyThere(t *testing.T) {
 	db, schema := testdb.Open(t)
 	m := Migrator{Schema: schema, Logger: quietLogger()}
@@ -1522,13 +1295,7 @@ func TestMigration0004HashesTheTokensThatWereAlreadyThere(t *testing.T) {
 	}
 }
 
-// THE PLAINTEXT COLUMN IS GONE, WHICH IS THE WHOLE OF DEC-85's SECURITY CLAIM.
-//
-// A migration that ADDED `token_hash` beside `token` would pass every other
-// leg in this file and leave the dump exactly as readable as it was. The
-// acceptance check for this step greps `\d share_links` for `token_hash`; that
-// is satisfied by both shapes, so the falsifiable half is here: `token` must
-// not be a column of this table at all.
+// the plaintext column is gone, which is the whole of the security claim.
 func TestThePlaintextShareTokenColumnIsGone(t *testing.T) {
 	db := migrated(t)
 
@@ -1563,9 +1330,7 @@ func TestThePlaintextShareTokenColumnIsGone(t *testing.T) {
 	}
 }
 
-// The same CHECK `sessions` carries, for the same reason: a one-byte token
-// hash inserted successfully before the constraint existed, and nothing
-// downstream can tell a truncated digest from a whole one.
+// The same CHECK `sessions` carries, for the same reason.
 func TestAShareTokenHashIsExactlyThirtyTwoBytes(t *testing.T) {
 	db := seeded(t)
 	_, err := db.Exec(
@@ -1579,9 +1344,7 @@ func TestAShareTokenHashIsExactlyThirtyTwoBytes(t *testing.T) {
 }
 
 // migrationsUpTo is migrations.FS cut down to every version at or below
-// `version`, so a leg can stand at an intermediate schema more than one
-// migration deep. `onlyMigration` cannot do it: the runner applies what it is
-// given, and 0004 alone has no share_links to alter.
+// `version`.
 func migrationsUpTo(t *testing.T, version string) fs.FS {
 	t.Helper()
 	names, err := fs.Glob(migrations.FS, "*.sql")
@@ -1605,23 +1368,8 @@ func migrationsUpTo(t *testing.T, version string) fs.FS {
 	return out
 }
 
-// 0004's DOWN FILE IS THE ONE IN THIS REPOSITORY THAT REFUSES, AND BOTH HALVES
-// OF THAT ARE EXERCISED HERE.
-//
-// DOWN FILES ARE NEVER RUN BY THE RUNNER — it applies .up.sql only — so
-// nothing else in the suite executes one at all, and a down file is checked in
-// precisely so a human can run it by hand. That makes "does it work?" a
-// question guarded by nothing unless a leg asks it, which is the tier
-// CLAUDE.md keeps naming.
-//
-// WHAT IT REFUSES AND WHY. sha256 is one-way, so no statement can put back
-// what 0004 replaced. Restoring `token` as NULLABLE leaves the table in a
-// shape 0001 never described (it is half the pre-0004 primary key); deleting
-// every row destroys the revocation history DEC-67's key exists to keep,
-// silently, inside a file called "down". So it stops, names the count, and
-// leaves the choice to somebody who can weigh it — and on an EMPTY table,
-// which is where a developer rolling back a migration they have just applied
-// actually stands, it is a complete and exact inverse.
+// 0004's down file is the one in this repository that refuses, and both
+// halves of that are exercised here.
 func TestTheDownOf0004RefusesWhileALinkExistsAndIsExactWhenNoneDoes(t *testing.T) {
 	down := downFile(t, "0004")
 
@@ -1638,8 +1386,6 @@ func TestTheDownOf0004RefusesWhileALinkExistsAndIsExactWhenNoneDoes(t *testing.T
 				t.Errorf("the refusal does not say %q:\n%v", want, err)
 			}
 		}
-		// AND IT CHANGED NOTHING. A refusal that has already dropped a column
-		// is not a refusal.
 		if n := count(t, db, `SELECT count(*) FROM share_links WHERE traveller_id=$1`, tid); n != 1 {
 			t.Errorf("share_links holds %d rows after the refusal, want 1", n)
 		}
@@ -1657,8 +1403,6 @@ func TestTheDownOf0004RefusesWhileALinkExistsAndIsExactWhenNoneDoes(t *testing.T
 		}
 		mustExec(t, db, `INSERT INTO travellers (id, email, passphrase_hash) VALUES ($1,'m@e.com','x')`, tid)
 		mustExec(t, db, `INSERT INTO trips (traveller_id, id, name) VALUES ($1,'t','T')`, tid)
-		// The pre-0004 shape, asserted by USING it: a plaintext column that is
-		// NOT NULL and unique, and no token_hash anywhere.
 		mustExec(t, db, `INSERT INTO share_links (traveller_id, trip_id, token) VALUES ($1,'t',$2)`, tid, tokenMay)
 		if _, err := db.Exec(`SELECT token_hash FROM share_links`); err == nil {
 			t.Error("token_hash is still a column after the down of 0004")
@@ -1671,7 +1415,7 @@ func TestTheDownOf0004RefusesWhileALinkExistsAndIsExactWhenNoneDoes(t *testing.T
 	})
 }
 
-// downFile reads one version's .down.sql out of the embedded FS.
+// downFile reads one version's.down.sql out of the embedded FS.
 func downFile(t *testing.T, version string) string {
 	t.Helper()
 	matches, err := fs.Glob(migrations.FS, version+"_*.down.sql")
@@ -1685,11 +1429,8 @@ func downFile(t *testing.T, version string) string {
 	return string(body)
 }
 
-// applySQL runs a .sql file statement by statement, through the SAME splitter
-// the migration runner uses — so a down file with a `$$ … $$` block in it is
-// cut where the runner would cut it and not on the semicolons inside the
-// block. It is NOT a transaction: what is being exercised is what a human
-// running the file by hand would see.
+// applySQL runs a.sql file statement by statement, through the same splitter
+// the migration runner uses.
 func applySQL(ctx context.Context, db *sql.DB, body string) error {
 	for _, statement := range splitStatements(body) {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

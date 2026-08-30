@@ -7,12 +7,7 @@ import (
 )
 
 // Unbounded map growth is the one failure this type can have that no external
-// behaviour reveals until the process is killed: an attacker with a large
-// address space adds a bucket per address and never comes back for it.
-//
-// The sweep is safe because a FULL bucket and an ABSENT bucket are the same
-// thing — Allow creates an absent one full — so this leg also asserts the
-// answers do not change across a prune.
+// behaviour reveals until the process is killed.
 func TestIdleBucketsArePrunedRatherThanKeptForever(t *testing.T) {
 	original := limiterPruneAbove
 	limiterPruneAbove = 8
@@ -46,11 +41,7 @@ func TestIdleBucketsArePrunedRatherThanKeptForever(t *testing.T) {
 	}
 }
 
-// A bucket that is still spending is not swept. Pruning one would hand a client
-// back an allowance it had spent, which is the limiter failing open.
-//
-// The one second the clock advances is chosen: it buys the busy bucket one
-// token back, and leaves the idle four full.
+// A bucket that is still spending is not swept.
 func TestABusyBucketSurvivesTheSweep(t *testing.T) {
 	original := limiterPruneAbove
 	limiterPruneAbove = 4

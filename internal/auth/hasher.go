@@ -1,31 +1,4 @@
-// Argon2id, behind an interface with one implementation (DEC-08).
-//
-// THE PARAMETERS ARE UNTUNED — 64 MiB, t=1, p=4 — AND EVERY OCCURRENCE SAYS
-// SO. DEC-21 defers tuning to a real box, because the only honest way to pick
-// them is to measure the machine that will run them against the memory it has
-// and the login rate it must sustain. The numbers below are OWASP's published
-// starting point and nothing more; they are not a measurement of anything in
-// this project. What sizes the risk in the meantime is not the parameters, it
-// is the concurrency cap in gate.go: 64 MiB per call is only a ceiling if
-// something counts the calls.
-//
-// THE ENCODING IS PHC — `$argon2id$v=19$m=,t=,p=$salt$hash` — SO THE
-// PARAMETERS TRAVEL WITH THE HASH. Without that, DEC-21's deferred tuning is
-// not deferrable: raising the memory cost would recompute a different key for
-// every traveller already registered and lock all of them out at once, with
-// nothing in any log to say why. Verify reads its cost from the string it is
-// checking and never from the struct it is a method on, and
-// hasher_test.go's `written`/`cheap`/`DefaultParams` triangle is what proves
-// it rather than asserts it.
-//
-// AND VERIFY VALIDATES BEFORE IT COMPUTES, because argon2.IDKey PANICS on
-// parameters no caller would choose but a corrupt row can hold. Measured, on
-// x/crypto v0.55.0: t=0 panics `argon2: number of rounds too small`, p=0
-// panics `argon2: parallelism degree too low`, and a ZERO-LENGTH key does
-// something worse than either — `blake2b.New(0, nil)` fails, argon2 does not
-// check it, and the call dies on a nil pointer dereference inside
-// blake2b.(*digest).Write. One hand-edited row would otherwise take the
-// goroutine's stack out through a 500.
+// Argon2id, behind an interface with one implementation.
 package auth
 
 import (
@@ -48,27 +21,19 @@ type Params struct {
 	SaltLen uint32 // bytes of per-user salt
 }
 
-// DefaultParams is DEC-08's 64 MiB / t=1 / p=4, with a 16-byte per-user salt.
-// UNTUNED (DEC-21): nothing in this project has measured them against
-// anything. Change them and every existing hash keeps verifying, because the
-// old cost is in the old string.
+// DefaultParams is the 64 MiB / t=1 / p=4, with a 16-byte per-user salt.
 var DefaultParams = Params{Memory: 64 * 1024, Time: 1, Threads: 4, KeyLen: 32, SaltLen: 16}
 
-// The floors below are what keeps a bad row out of the KDF. They are lower
-// than anything this build would ever choose on purpose: they exist to refuse
-// a panic, not to enforce a policy.
+// The floors below are what keeps a bad row out of the KDF.
 const (
 	minSaltLen = 8
 	minKeyLen  = 16
 )
 
-// ErrHashEncoding is a stored hash this build cannot read. It is separated
-// from a wrong passphrase because the answers differ: a wrong passphrase is a
-// 401 the traveller can act on, and this is a 500 an operator must.
+// ErrHashEncoding is a stored hash this build cannot read.
 var ErrHashEncoding = errors.New("auth: that is not an argon2id hash this build can read")
 
-// Hasher is DEC-08's seam. One implementation, and gate.go's cap wraps it
-// rather than reaching past it.
+// Hasher is the seam.
 type Hasher interface {
 	Hash(passphrase string) (string, error)
 	Verify(encoded, passphrase string) (bool, error)
@@ -94,7 +59,8 @@ func (h Argon2id) Hash(passphrase string) (string, error) {
 		"$" + base64.RawStdEncoding.EncodeToString(key), nil
 }
 
-// Verify recomputes at the cost the ENCODING names, never at this hasher's own.
+// Verify recomputes at the cost the ENCODING names, never at this hasher's
+// own.
 func (h Argon2id) Verify(encoded, passphrase string) (bool, error) {
 	p, salt, key, err := parseHash(encoded)
 	if err != nil {
@@ -127,11 +93,6 @@ func (p Params) check() error {
 }
 
 // parseHash reads the whole encoding, strictly.
-//
-// EVERY FIELD IS RE-RENDERED AND COMPARED RATHER THAN SCANNED AND TRUSTED.
-// fmt.Sscanf("m=8192,t=2,p=1,evil=1", "m=%d,t=%d,p=%d", …) answers n=3 and no
-// error, silently discarding the tail — so a string that is not exactly what
-// Hash writes would otherwise be accepted as though it were.
 func parseHash(encoded string) (Params, []byte, []byte, error) {
 	f := strings.Split(encoded, "$")
 	if len(f) != 6 || f[0] != "" {
@@ -176,8 +137,7 @@ func parseHash(encoded string) (Params, []byte, []byte, error) {
 	return p, salt, key, nil
 }
 
-// saltAndKeyOf decodes the last two fields. It is separate so a test can read
-// back what Hash wrote without re-deriving the encoding.
+// saltAndKeyOf decodes the last two fields.
 func saltAndKeyOf(encoded string) (salt, key []byte, err error) {
 	f := strings.Split(encoded, "$")
 	if len(f) != 6 {

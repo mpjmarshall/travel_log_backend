@@ -1,28 +1,5 @@
 // The middleware chain, outermost first: recover, request id, access log,
 // timeout — and then auth, which slots in below these four.
-//
-// THE ORDER IS THE DESIGN, and each position is load-bearing:
-//
-//   - RECOVER IS OUTERMOST so it catches a panic raised by any of the other
-//     middlewares, not only by the handler. http.TimeoutHandler re-panics its
-//     handler's panic on the serving goroutine, so a panic underneath the
-//     timeout still arrives here.
-//   - REQUEST ID IS ABOVE THE ACCESS LOG, or the access line has nothing to be
-//     correlated by.
-//   - THE ACCESS LOG IS ABOVE THE TIMEOUT, or a timed-out request is never
-//     logged at all: TimeoutHandler returns while the handler is still
-//     running, and a log line written below it belongs to a goroutine whose
-//     response was discarded.
-//   - AUTH IS INNERMOST OF THE FIVE, because a 401 is a request that happened
-//     and should be logged, timed and recovered like any other.
-//
-// ONE MEASURED CONSEQUENCE OF RECOVER BEING OUTERMOST, recorded because it
-// looks like a defect and is not: the access log's deferred line runs as the
-// panic unwinds, which is BEFORE the outer recover has written anything, so
-// that line records the status the HANDLER wrote — none, i.e. 0. The 500 is
-// real and the client gets it; the two log lines are joined by the request id
-// rather than by one line carrying both facts. Moving recover inside the
-// access log would fix the number and lose everything recover is for.
 package httpx
 
 import (
@@ -36,20 +13,13 @@ import (
 	"time"
 )
 
-// Middleware wraps a handler. The type exists so Chain's variadic argument
-// reads as a list of middlewares rather than a list of functions.
+// Middleware wraps a handler.
 type Middleware func(http.Handler) http.Handler
 
 // RequestIDHeader is both what is read back in tests and what a client sees.
 const RequestIDHeader = "X-Request-Id"
 
 // Chain applies mw[0] OUTERMOST.
-//
-// The fold direction is the whole of this function and it is invisible by
-// inspection: reverse the loop and the chain still compiles, still runs every
-// middleware exactly once, and runs them inside out — recover innermost, where
-// it catches nothing that happens above it, and the timeout outermost, where it
-// cuts off the access log it is supposed to be inside.
 func Chain(h http.Handler, mw ...Middleware) http.Handler {
 	for i := len(mw) - 1; i >= 0; i-- {
 		h = mw[i](h)
@@ -57,16 +27,7 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 	return h
 }
 
-// Base is the four, plus DEC-96's Retry-After, in order. Auth appends to it:
-//
-//	httpx.Chain(mux, append(httpx.Base(log, d), auth.Require(store))...)
-//
-// RETRY-AFTER SITS ABOVE TIMEOUT AND THAT POSITION IS THE WHOLE OF IT.
-// http.TimeoutHandler writes its own 503 from inside net/http, so a header set
-// anywhere BELOW it never reaches the 503 a client is most likely to meet.
-// Above it, one wrapper covers that response and every handler-written 503 as
-// well — which is why the header is set here rather than at the call sites
-// that produce the status.
+// Base is the four, plus the Retry-After, in order.
 func Base(log *slog.Logger, timeout time.Duration) []Middleware {
 	return []Middleware{
 		Recover(log),
@@ -79,18 +40,6 @@ func Base(log *slog.Logger, timeout time.Duration) []Middleware {
 
 // Recover turns a panic into a 500 carrying the envelope, and puts the panic
 // value and a stack in the log where the detail is allowed to go.
-//
-// TWO THINGS IT REFUSES TO DO:
-//
-//   - It does not swallow http.ErrAbortHandler. That value is the stdlib's own
-//     signal that a handler is abandoning the response deliberately; net/http
-//     suppresses its log and closes the connection. Catching it would turn a
-//     deliberate abort into a 500 with a body, on a connection the handler has
-//     already given up on.
-//   - It does not write over a response that has started. A handler that sent
-//     200 and then panicked has already had its status go out; appending the
-//     envelope to a half-written document produces something the client cannot
-//     parse at all, and the second WriteHeader is a no-op with a warning.
 func Recover(log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,11 +73,6 @@ func Recover(log *slog.Logger) Middleware {
 }
 
 // requestIDForRecover reads the header first and the context second.
-//
-// Recover is outermost, so the request it holds predates the id. The id is on
-// the response header, which the request-id middleware has already set on the
-// shared ResponseWriter — without this the one log line that matters most is
-// the one line that cannot be correlated.
 func requestIDForRecover(w http.ResponseWriter, r *http.Request) string {
 	if id := w.Header().Get(RequestIDHeader); id != "" {
 		return id
@@ -137,13 +81,6 @@ func requestIDForRecover(w http.ResponseWriter, r *http.Request) string {
 }
 
 // RequestID mints an id, puts it on the response and in the context.
-//
-// AN INBOUND X-Request-Id IS NOT TRUSTED, and that is a decision rather than an
-// omission. The id lands in every log line for the request, so adopting one a
-// stranger chose hands anyone on the internet a way to forge an id, collide
-// with somebody else's, or inject into the log. There is no proxy in front of
-// this server whose header could be trusted instead — Caddy is deferred, and
-// the question of trusting what it sets is deferred with it.
 func RequestID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,11 +92,6 @@ func RequestID() Middleware {
 }
 
 // newRequestID is 16 random bytes as 32 hex characters.
-//
-// crypto/rand rather than math/rand, and the reason is not secrecy: it is that
-// since Go 1.24 crypto/rand.Read never fails — it panics internally on an
-// unrecoverable source failure — so there is no error branch here to get
-// wrong, and no seeding to forget.
 func newRequestID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
@@ -168,28 +100,6 @@ func newRequestID() string {
 
 // AccessLog writes one line per request: what was asked, what was answered,
 // how long it took, and the id that joins it to everything else.
-//
-// THE QUERY STRING IS NOT LOGGED. DEC-10 and DEC-11 put a capability in the
-// public share URL, and a logger that records query strings records
-// capabilities, in plain text, for as long as the logs are kept.
-//
-// `durationUs` AND NOT `durationMs`, WHICH IS ONE WORD AND THE DIFFERENCE
-// BETWEEN HAVING LATENCY DATA AND NOT (DEC-101). Measured over 21.35 hours of
-// the live stack, 15,960 lines: `durationMs` was an int64 of MILLISECONDS, so
-// 15,151 of them read `durationMs:0` and no latency question was answerable
-// from those logs at all. The only non-zero values in the whole sample were 4
-// and 9.
-//
-// TWO MORE FIELDS COME FROM BELOW AND ARE READ OFF A SLOT. `travellerId` is
-// resolved by auth and `route` by the route table, both of which sit UNDER
-// this middleware and hand their work to a new request this one never sees —
-// see requestFacts in context.go for why a pointer is the mechanism.
-//
-// `quiet` NAMES PATHS WHOSE HEALTHY LINES ARE DEMOTED TO Debug, and it is a
-// parameter rather than a literal because the path belongs to whoever mounted
-// the route. cmd/api passes "/healthz": the container probes every five
-// seconds for ever, and the cost is not disk, it is a 20:1 dilution of the one
-// file you read at 3am.
 func AccessLog(log *slog.Logger, quiet ...string) Middleware {
 	demote := make(map[string]bool, len(quiet))
 	for _, path := range quiet {
@@ -212,10 +122,6 @@ func AccessLog(log *slog.Logger, quiet ...string) Middleware {
 					slog.Int64("durationUs", time.Since(start).Microseconds()),
 					slog.String("requestId", RequestIDFrom(r.Context())),
 				}
-				// ABSENT RATHER THAN EMPTY. `travellerId:""` on every
-				// unauthenticated line is a field every query has to
-				// special-case, and it reads as "a traveller with no id"
-				// rather than "no traveller".
 				if travellerID != "" {
 					attrs = append(attrs, slog.String("travellerId", travellerID))
 				}
@@ -231,14 +137,6 @@ func AccessLog(log *slog.Logger, quiet ...string) Middleware {
 }
 
 // accessLevel is the level one access line is written at.
-//
-// A status of 0 means the handler wrote nothing — a panic on its way up, or a
-// timeout that discarded the response. Both are worth the same attention as a
-// 500.
-//
-// A QUIET PATH IS DEMOTED ONLY WHILE IT IS HEALTHY, and that ordering is the
-// whole of it: a probe that FAILS is the most interesting line in the file, so
-// the 500-or-nothing branch is checked first and `quiet` can never hide one.
 func accessLevel(status int, quiet bool) slog.Level {
 	if status == 0 || status >= http.StatusInternalServerError {
 		return slog.LevelError
@@ -250,18 +148,7 @@ func accessLevel(status int, quiet bool) slog.Level {
 }
 
 // Timeout is http.TimeoutHandler, constructed with the JSON envelope as its
-// message — the one response in this application that DEC-12's AST sweep
-// structurally cannot see, because the stdlib writes it and no call to
-// WriteError is involved.
-//
-// AND IT DOES NOT SET Content-Type, WHICH IS MEASURED RATHER THAN ASSUMED.
-// TimeoutHandler's timeout branch is exactly `w.WriteHeader(503)` followed by
-// `io.WriteString(w, h.errorBody())`; it touches no header. With no
-// Content-Type set, net/http SNIFFS the body, and `{"code":"timeout"}` sniffs
-// as text/plain — so a client selecting on the header would refuse to parse
-// the one error it is most likely to meet. jsonByDefault fills it in at
-// WriteHeader time, which is late enough that a handler with its own type
-// keeps it.
+// message.
 func Timeout(d time.Duration) Middleware {
 	return func(next http.Handler) http.Handler {
 		timed := http.TimeoutHandler(next, d, bodyTimeout)
@@ -271,10 +158,7 @@ func Timeout(d time.Duration) Middleware {
 	}
 }
 
-// statusWriter records what went out. Unwrap is what keeps
-// http.ResponseController working through the wrapper — without it, a future
-// handler that needs a flush or a deadline finds a ResponseWriter with none of
-// the optional interfaces it expects.
+// statusWriter records what went out.
 type statusWriter struct {
 	http.ResponseWriter
 	status      int
@@ -290,9 +174,7 @@ func (w *statusWriter) WriteHeader(status int) {
 	w.ResponseWriter.WriteHeader(status)
 }
 
-// A handler that writes a body without calling WriteHeader has sent 200, and a
-// recorder that reported 0 for it would make every ordinary success look like
-// a request that answered nothing.
+// A handler that writes a body without calling WriteHeader has sent 200.
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
@@ -305,7 +187,7 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // jsonByDefault fills in Content-Type at WriteHeader time if nothing has set
-// one. See Timeout for why it exists.
+// one.
 type jsonByDefault struct{ http.ResponseWriter }
 
 func (w *jsonByDefault) WriteHeader(status int) {
@@ -317,38 +199,8 @@ func (w *jsonByDefault) WriteHeader(status int) {
 
 func (w *jsonByDefault) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// CapabilityHeaders is DEC-51's response policy for a body that carries a
-// bearer capability: `Cache-Control: no-store, private` and `Referrer-Policy:
-// no-referrer`.
-//
-// WHAT IT IS PROTECTING, AND WHY IT IS NOT HYGIENE. A presigned URL is a PURE
-// BEARER CAPABILITY — unlimited replay, unsigned request headers such as
-// `Range` accepted, and no way to revoke it before it expires. Two places it
-// leaks from and each header closes one:
-//
-//   - AN INTERMEDIARY CACHE. Measured on the live server: NO response set
-//     Cache-Control at all. That is survivable while every route carries an
-//     Authorization header, because RFC 9111 §3.5 forbids a shared cache from
-//     storing such a response — and `GET /l/{token}` carries none, so a
-//     200 with an ETag is heuristically cacheable by anything in front of it,
-//     and a cached envelope keeps serving live capabilities after "Stop
-//     sharing" for as long as it survives. `private` is belt and braces for a
-//     browser's own store; `no-store` is the half that binds.
-//   - THE NEXT SITE'S LOGS. A share page fetches these URLs and then links
-//     somewhere; without `no-referrer` the capability travels in a `Referer`
-//     header to whatever origin the page reaches next, and sits in that
-//     server's access log.
-//
-// IT IS APPLIED FROM THE ROUTE TABLE AND NOT FROM A PATH PREFIX (PD-09). A
-// prefix guess in middleware is a rule the next route inherits by silence,
-// which is how `/v1/media/{id}/commit` — which answers a row and no capability
-// — would have got a policy nobody chose, and how `/l/{token}` would have
-// missed one.
-//
-// IT SETS THE HEADERS BEFORE THE HANDLER RUNS, so they are on the 4xx and the
-// 5xx as well as on the 200. A refusal carries no capability, but a policy that
-// applies only on success is a policy whose absence is invisible until the one
-// response that needed it.
+// CapabilityHeaders is the response policy for a body that carries a bearer
+// capability.
 func CapabilityHeaders() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,51 +1,4 @@
 // The storage half of logbook.Store, and the TEN queries one read is made of.
-//
-// TEN STATEMENTS, AND SIX IS THE COUNT OF LISTS IN THE DOCUMENT RATHER THAN
-// OF STATEMENTS (DEC-102). read_tx.go's "six lists" describes the payload, and
-// the two numbers are easy to conflate — this one is a count of queries.
-// Measured with pg_stat_statements reset around exactly one
-// whole-log read, each `calls = 1`: photos, visits, trip_cities, places,
-// cities, trips, walk_points, walks, logbook_version, traveller name. It is
-// also what makes the ~3ms 304 legible — nine round trips at roughly 0.3ms
-// against 0.176ms of server work, so the cost is round trips and not work.
-//
-// AND THE SPLIT, SO NOBODY OPTIMISES THE WRONG HALF: at 100x fixture scale,
-// 37.06ms of a 61.20ms read is Postgres and 24.1ms is row-to-struct scanning
-// through database/sql. The query plans are already sane and the planner is
-// right to decline indexes on the small tables.
-//
-// EVERY ONE OF THEM RUNS INSIDE ONE REPEATABLE-READ SNAPSHOT, and the version
-// was read inside it before any of them (read_tx.go). Under READ COMMITTED
-// each statement sees a newer database than the last, so a write landing
-// mid-read is in the photographs and not in the trips — and the phone stores
-// that torn document under a number describing a different moment, believes
-// it, and stops asking.
-//
-// TWO CHILD LISTS ARE THEIR OWN QUERY RATHER THAN A JOIN, AND THE REASON IS
-// THE SAME BOTH TIMES. A trip's cities and a place's visits are ordered lists
-// nested inside their parent on the wire; joining would multiply the parent's
-// row by its children and every scan would have to de-duplicate a trip's name
-// against itself. Two queries and a map from parent id to children is smaller,
-// and it is what keeps `ORDER BY ordinal` legible — which is load-bearing
-// (DEC-64, DEC-26) rather than tidy.
-//
-// WALKS' POINTS ARE UNNESTED IN SQL, NOT DECODED IN GO, AND THAT IS NOT A
-// PREFERENCE. `walks.points` is jsonb, and the obvious Go answer —
-// json.Unmarshal into []LatLng — would make this the SECOND non-test file in
-// the module importing encoding/json, which internal/httpx's AST sweep asserts
-// against (spec L19). `jsonb_array_elements … WITH ORDINALITY` answers the same
-// question in SQL, and Postgres decoding its own jsonb is not payload
-// encoding. It also keeps the ORDER explicit: `ORDER BY w.id, pt.ord`, where a
-// Go decode would have inherited it silently from the array.
-//
-// EVERY LIST IS ORDERED BY ITS ID, AND THAT IS ABOUT DETERMINISM RATHER THAN
-// DISPLAY. Two reads with no write between them must be byte-identical or the
-// ETag is a claim the server cannot keep; the client sorts for display itself
-// and always has. The two exceptions are the ordered lists the schema
-// mandates: trip_cities by `ordinal`, and visits by `ordinal, id` — the second
-// key so that a pre-existing duplicate degrades to stable rather than random,
-// because emitting visits in a different order silently rebinds a photograph
-// to a different occasion (DEC-26).
 package postgres
 
 import (
@@ -62,10 +15,7 @@ import (
 // LogbookStore is logbook.Store over *sql.DB.
 type LogbookStore struct{ DB *sql.DB }
 
-// sharedSQL is DEC-91's derived flag, spelled once and used by both trip
-// reads. `revoked_at IS NULL` is the whole of it: DEC-67 revokes and KEEPS, so
-// a bare EXISTS would report every trip that was ever shared as still shared,
-// and 'Stop sharing' would appear to do nothing.
+// sharedSQL is the derived flag, spelled once and used by both trip reads.
 const sharedSQL = `EXISTS (SELECT 1 FROM share_links s
 		WHERE s.traveller_id = t.traveller_id AND s.trip_id = t.id AND s.revoked_at IS NULL)`
 
@@ -102,10 +52,7 @@ const readWalkPointsSQL = `SELECT w.id,
 
 const readTravellerNameSQL = `SELECT name FROM travellers WHERE id = $1::uuid`
 
-// Read is DEC-31's conditional read. The version has already been taken inside
-// the snapshot by WithReadSnapshot; `assemble` is asked BEFORE any other query
-// runs, so a request that has not changed costs exactly that one indexed row
-// read.
+// Read is the conditional read.
 func (s LogbookStore) Read(ctx context.Context, travellerID string, assemble func(int64) bool) (logbook.Snapshot, error) {
 	var snap logbook.Snapshot
 
@@ -257,15 +204,6 @@ func readVisits(ctx context.Context, tx *sql.Tx, travellerID string) (map[string
 	out := map[string][]logbook.Visit{}
 	for rows.Next() {
 		var v logbook.Visit
-		// THE THREE NOT NULL DATE COLUMNS ARE SCANNED INTO time.Time DIRECTLY
-		// (DEC-102). They were `sql.NullTime` with `.Valid` never checked,
-		// which is correct only while the constraint holds — and the
-		// constraint was doing 100% of the work while this same file is
-		// careful with `instantOrNil` and with `if lat.Valid && lng.Valid`.
-		// The failure it hid: a NULL scans as the zero time, the emitter
-		// writes `0001-01-01T00:00:00.000Z`, `DateTime.parse` accepts it
-		// happily, and every screen renders a year-1 date with nothing
-		// reporting a fault. Into time.Time the driver errors instead.
 		var at time.Time
 		var note sql.NullString
 		if err := rows.Scan(&v.ID, &v.PlaceID, &v.TripID, &at, &note); err != nil {
@@ -288,8 +226,6 @@ func readPhotos(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.
 	var out []logbook.Photo
 	for rows.Next() {
 		var p logbook.Photo
-		// taken_at is NOT NULL and is scanned as such; filed_later is
-		// nullable and keeps its sql.NullTime. DEC-102.
 		var takenAt time.Time
 		var filedLater sql.NullTime
 		var placeID, visitID, caption sql.NullString
@@ -326,7 +262,6 @@ func readWalks(ctx context.Context, tx *sql.Tx, travellerID string) ([]logbook.W
 	var out []logbook.Walk
 	for rows.Next() {
 		var w logbook.Walk
-		// recorded_on is NOT NULL. DEC-102.
 		var recordedOn time.Time
 		var name sql.NullString
 		if err := rows.Scan(&w.ID, &w.TripID, &w.CityID, &recordedOn, &w.DistanceKm,
@@ -361,8 +296,7 @@ func readWalkPoints(ctx context.Context, tx *sql.Tx, travellerID string) (map[st
 }
 
 // readTravellerName answers nil for a name nobody has set, never an empty
-// Traveller: the client casts `json['name'] as String`, non-nullable, so `{}`
-// throws where `null` reads as "a log nobody has named yet".
+// Traveller.
 func readTravellerName(ctx context.Context, tx *sql.Tx, travellerID string) (*logbook.Traveller, error) {
 	var name sql.NullString
 	switch err := tx.QueryRowContext(ctx, readTravellerNameSQL, travellerID).Scan(&name); {
@@ -377,30 +311,8 @@ func readTravellerName(ctx context.Context, tx *sql.Tx, travellerID string) (*lo
 	return &logbook.Traveller{Name: name.String}, nil
 }
 
-// upsertTripSQL is DEC-33's idempotent write on a client-minted key, and WHAT
-// IT DOES NOT WRITE IS THE POINT — twice over now.
-//
-// share_photos, share_notes and share_coordinates appear in neither the column
-// list nor the SET clause, so a create leaves them at their schema defaults and
-// an update leaves them exactly as they were. Naming them in EXCLUDED-form
-// would silently reset a group this route does not own (SF6) on every rename.
-//
-// AND THE OTHER FIVE COLUMNS NOW GET THE SAME ANSWER (DEC-89). Each is written
-// only when its `sent` flag says the key was in the body; otherwise the CASE
-// keeps `trips.<column>`, the value already stored. That is what makes T4's
-// two-key rename leave an itinerary and two dates alone, and what makes an
-// accidental re-PUT harmless.
-//
-// THE FLAGS ARE PARAMETERS RATHER THAN A BUILT STRING, and that is a decision.
-// Assembling a SET clause per request would make the statement text vary with
-// the body — thirty-two shapes for five optional columns — so nothing is
-// prepared twice, pg_stat_statements shows thirty-two rows where it should show
-// one, and the one place a column name could be interpolated is the one place
-// this file must never interpolate. One statement, five booleans.
-//
-// EXCLUDED.<column> IS STILL THE SOURCE ON THE WRITTEN BRANCH. It is the row
-// the INSERT proposed, so a sent null lands as NULL and a sent value lands as
-// itself, with no second set of parameters.
+// upsertTripSQL is the idempotent write on a client-minted key, and what it
+// does not write is the point — twice over now.
 const upsertTripSQL = `INSERT INTO trips
 		(traveller_id, id, name, started_on, ended_on, summary, cover_asset)
 	VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
@@ -411,31 +323,8 @@ const upsertTripSQL = `INSERT INTO trips
 		summary     = CASE WHEN $11::boolean THEN EXCLUDED.summary     ELSE trips.summary     END,
 		cover_asset = CASE WHEN $12::boolean THEN EXCLUDED.cover_asset ELSE trips.cover_asset END`
 
-// readTripForWriteSQL is the row as it stands BEFORE the upsert, and it answers
-// two questions the pointer contract asks that nothing else can.
-//
-// WHETHER THE TRIP EXISTS decides whether an absent `name` is legal. Absent
-// means leave alone on an update; on a create there is nothing to leave, and
-// trips.name is NOT NULL, so without this the answer is a constraint violation
-// reaching the client as a 500 with no field on it.
-//
-// WHAT ITS DATES ARE decides whether a body carrying ONE date is orderable.
-// trips_dates_ordered_ck compares the two columns after the write, so
-// `{"id":"autumn","start":"2027-12-01T00:00:00.000Z"}` against a trip that ends
-// in October is a violation ValidateTrip cannot see — it holds one date and the
-// other is in the database. DEC-89's pointer contract is what makes that
-// reachable: a whole-state upsert always carries both dates.
-//
-// Both reads are free of races: the write already holds the traveller's
-// advisory lock, so the row cannot move between this SELECT and the INSERT.
-// AND IT READS name AS WELL, FOR A REASON THAT IS PURE POSTGRES. The proposed
-// INSERT row is checked against NOT NULL before the conflict is resolved, so
-// `VALUES (…, NULL, …)` on a rename that omits the name answers `null value in
-// column "name" of relation "trips" violates not-null constraint (SQLSTATE
-// 23502)` — measured, and it is the first thing a name-only PUT does. The CASE
-// would have discarded that NULL a moment later, but the tuple never gets
-// there. So an unsent name proposes the name the row already has: the write
-// is a no-op on that column by two independent mechanisms rather than one.
+// readTripForWriteSQL is the row as it stands BEFORE the upsert, and it
+// answers two questions the pointer contract asks that nothing else can.
 const readTripForWriteSQL = `SELECT name, started_on, ended_on FROM trips
 	WHERE traveller_id = $1::uuid AND id = $2`
 
@@ -446,22 +335,8 @@ const insertTripCitySQL = `INSERT INTO trip_cities (traveller_id, trip_id, city_
 
 const cityExistsSQL = `SELECT 1 FROM cities WHERE traveller_id = $1::uuid AND id = $2`
 
-// mediaObjectCommittedSQL is `uploaded_at IS NOT NULL`, AND THE PREDICATE IS
-// THE WHOLE OF IT.
-//
-// A BARE EXISTENCE CHECK IS NOT THE SAME QUESTION, and DEC-58's "enforced
-// twice" is precise rather than loose about the difference. The four foreign keys
-// guarantee the ROW EXISTS and say nothing about `uploaded_at`, because an FK
-// cannot see a column it does not reference. So the schema refuses a reference
-// to an object nobody ever began; this refuses a reference to one that was
-// begun and never uploaded — bytes that are not in the bucket, behind a row
-// that says they are coming. Two different lies, two different guards, and
-// only one of them is the database's.
-//
-// WHAT IT COSTS TO GET WRONG IS A PHOTOGRAPH THAT NEVER LOADS. The reference
-// resolves, the emitted log carries the locator, the phone mints a read
-// capability for it, and the bucket answers NoSuchKey — on a screen with no
-// error state, because DEC-51's read path has none.
+// mediaObjectCommittedSQL is `uploaded_at is not null`, and the predicate is
+// the whole of it.
 const mediaObjectCommittedSQL = `SELECT 1 FROM media_objects
 	WHERE traveller_id = $1::uuid AND id = $2 AND uploaded_at IS NOT NULL`
 
@@ -472,25 +347,7 @@ const readOneTripSQL = `SELECT t.id, t.name, t.started_on, t.ended_on, t.summary
 const readOneTripsCitiesSQL = `SELECT city_id FROM trip_cities
 	WHERE traveller_id = $1::uuid AND trip_id = $2 ORDER BY ordinal`
 
-// PutTrip is the whole-state upsert, inside WithTravellerTx: one transaction,
-// the traveller's advisory lock, and the version bump taken before the body
-// runs so the write knows the version it will commit under.
-//
-// THE ANSWER IS RE-READ FROM THE ROW AND NOT ASSEMBLED FROM THE REQUEST. The
-// three sharing flags are not in the body at all, so a response built from the
-// input could only guess at them — and a response built from the input is a
-// response that agrees with the client about a write the database may have
-// shaped differently.
-//
-// THE EXISTENCE CHECKS ARE HERE RATHER THAN IN ValidateTrip, and they are here
-// rather than left to the foreign keys. Under the traveller's advisory lock
-// the check is race-free, which is exactly what DEC-02 says the lock buys; and
-// reading a violation back off the driver would mean importing pgconn to read
-// SQLSTATE 23503, which cmd/api's import sweep forbids (spec L20, pgx "solely
-// as a blank import driver"). Without them an unknown city is a 500 with
-// nothing the client can show. DEC-64 deleted the Go check that SUBSTITUTED
-// for referential integrity; this is the one that names the field before the
-// constraint fires, and the constraint is still what enforces it.
+// PutTrip is the whole-state upsert, inside WithTravellerTx.
 func (s LogbookStore) PutTrip(ctx context.Context, travellerID string, w logbook.TripWrite) (logbook.Trip, int64, error) {
 	var trip logbook.Trip
 	if w.ID == nil {
@@ -525,9 +382,6 @@ func (s LogbookStore) PutTrip(ctx context.Context, travellerID string, w logbook
 		); err != nil {
 			return fmt.Errorf("postgres: upserting the trip %s: %w", id, err)
 		}
-		// ABSENT MEANS LEAVE ALONE HERE TOO, and this is the branch DEC-89 was
-		// measured on: a nil CityIDs skips the delete-then-insert entirely
-		// rather than replacing the list with an empty one.
 		if w.CityIDs != nil {
 			if err := replaceTripCities(ctx, tx, travellerID, id, *w.CityIDs); err != nil {
 				return err
@@ -547,13 +401,8 @@ func (s LogbookStore) PutTrip(ctx context.Context, travellerID string, w logbook
 	return trip, version, nil
 }
 
-// requireWritableTrip is the half of DEC-89's validation that needs the stored
-// row, and it names a field rather than letting a constraint answer.
-//
-// It reads the trip as it stands and refuses two bodies ValidateTrip cannot
-// see: a CREATE with no `name`, and a partial date write whose result would be
-// out of order. Both are reachable only because absence is now a value —
-// see readTripForWriteSQL for why each one is a 422 and not a 500.
+// requireWritableTrip is the half of the validation that needs the stored row,
+// It names a field rather than letting a constraint answer.
 func requireWritableTrip(ctx context.Context, tx *sql.Tx, travellerID, id string, w logbook.TripWrite) (tripBeforeWrite, error) {
 	var before tripBeforeWrite
 	err := tx.QueryRowContext(ctx, readTripForWriteSQL, travellerID, id).
@@ -581,9 +430,8 @@ func requireWritableTrip(ctx context.Context, tx *sql.Tx, travellerID, id string
 	return before, nil
 }
 
-// tripBeforeWrite is the three columns the upsert has to know about the row it
-// is replacing. It is a type rather than three return values because two of
-// the three are only read to be handed straight back to the statement.
+// tripBeforeWrite is's three columns the upsert has to know about the row
+// it is replacing.
 type tripBeforeWrite struct {
 	name           string
 	started, ended sql.NullTime
@@ -597,10 +445,7 @@ func nullTimeOf(i *logbook.Instant) sql.NullTime {
 }
 
 // replaceTripCities is DELETE-THEN-INSERT, which is the mandated strategy and
-// a measurement rather than a style. trip_cities_ordinal_uq is NOT deferrable,
-// so a UNIQUE index is checked per ROW during a statement even when the final
-// state is unique — an UPDATE-in-place reorder collides, and two separate
-// statements do not, because the DELETE completes first.
+// a measurement rather than a style.
 func replaceTripCities(ctx context.Context, tx *sql.Tx, travellerID, tripID string, cityIDs []string) error {
 	if _, err := tx.ExecContext(ctx, deleteTripCitiesSQL, travellerID, tripID); err != nil {
 		return fmt.Errorf("postgres: clearing the cities of %s: %w", tripID, err)
@@ -677,30 +522,11 @@ func readOneTrip(ctx context.Context, tx *sql.Tx, travellerID, tripID string) (l
 	return t, rows.Err()
 }
 
-// --------------------------------------------------- U1's PENCIL: THE NAME
-
 // setTravellerNameSQL is the only write that touches the traveller row's own
-// data, and it BUMPS logbook_version — through WithTravellerTx below —
-// because `traveller: {name}` is the sixth key of the emitted document.
-//
-// IT IS NOT NULLABLE THROUGH THIS ROUTE. `travellers.name` is nullable and
-// `travellers_name_present_ck` refuses the empty string, so the two states
-// that exist are "a log nobody has named yet" and a name. Clearing it back to
-// NULL is not something the client can ask for and is not something this
-// statement can do: `setTravellerName` refuses a trimmed-empty name, and the
-// client's own reason is that "'no traveller' is a state a log arrives in and
-// never returns to".
+// data.
 const setTravellerNameSQL = `UPDATE travellers SET name = $2 WHERE id = $1::uuid`
 
 // SetTravellerName is U1's pencil.
-//
-// THE TRIM IS THE SERVER'S TOO, and it is not duplication for its own sake.
-// The client trims because its sheet's gate is `trim().isNotEmpty`, "so a name
-// that passes the gate and then goes to disk with its whitespace still on is
-// the gate's string rather than the user's" — and the server is the record, so
-// a name arriving from anything that is not that sheet gets the same
-// treatment. What the server adds is the REFUSAL: `"   "` is a 422 naming the
-// field rather than a 500 from travellers_name_present_ck.
 func (s LogbookStore) SetTravellerName(ctx context.Context, travellerID, name string) (logbook.Traveller, int64, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -714,12 +540,6 @@ func (s LogbookStore) SetTravellerName(ctx context.Context, travellerID, name st
 	}
 
 	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
-		// THE ROW COUNT IS NOT CHECKED HERE, and that is not an oversight:
-		// WithTravellerTx's own bump is `UPDATE travellers … RETURNING`, which
-		// has already answered ErrNoTraveller for a traveller that is gone
-		// before this statement runs. Checking again would be a second answer
-		// to a question already asked, in the same transaction, about the same
-		// row.
 		if _, err := tx.ExecContext(ctx, setTravellerNameSQL, travellerID, trimmed); err != nil {
 			return fmt.Errorf("postgres: naming the traveller %s: %w", travellerID, err)
 		}
@@ -731,56 +551,14 @@ func (s LogbookStore) SetTravellerName(ctx context.Context, travellerID, name st
 	return logbook.Traveller{Name: trimmed}, version, nil
 }
 
-// ---------------------------------------------------------- D3: THE CASCADE
-
-// deleteTripSQL IS ONE STATEMENT, AND EVERY OTHER ROW D3 ITEMISES GOES BECAUSE
-// THE SCHEMA SAYS SO RATHER THAN BECAUSE GO ASKS TWICE.
-//
-// The sheet's own table, and the foreign key that implements each line:
-//
-//	"N photos and their notes"   -> photos_trip_fk       ON DELETE CASCADE
-//	"N recorded walks"           -> walks_trip_fk        ON DELETE CASCADE
-//	"N pins in …" — KEPT         -> NOTHING. places has no trip_id at all;
-//	                                what goes is visits_trip_fk's rows, and a
-//	                                place left with none is a wishlist place.
-//	"the shared link stops"      -> share_links_trip_fk  ON DELETE CASCADE
-//	the itinerary                -> trip_cities_trip_fk  ON DELETE CASCADE
-//	the cities                   -> trip_cities_city_fk is RESTRICT, and no
-//	                                key from trips reaches cities at all.
-//	another trip's photograph    -> photos_visit_fk ON DELETE SET NULL
-//	                                (visit_id), which fires as the visits go.
-//
-// WRITING ANY OF THOSE OUT IN GO WOULD BE A SECOND IMPLEMENTATION OF THE SHEET,
-// and the one that is easy to write is the one that is wrong: `DELETE FROM
-// places WHERE id IN (SELECT place_id FROM visits WHERE trip_id = $1)` is the
-// CRUD reflex, it takes five pins the sheet promised to keep, and nothing
-// errors.
+// deleteTripSQL is one statement, and every other row D3 itemises goes
+// The schema says so rather than because go asks twice.
 const deleteTripSQL = `DELETE FROM trips WHERE traveller_id = $1::uuid AND id = $2`
 
-// errNothingDeleted is how a miss ROLLS THE VERSION BUMP BACK.
-//
-// It is a sentinel and not a bool because of where the decision has to be
-// taken: `WithTravellerTx` bumps logbook_version BEFORE the body runs, so by
-// the time the body knows the trip was not there the number has already moved.
-// Returning an error is the only way to un-move it — the bump rides the
-// rollback with everything else — and this one is caught immediately outside,
-// so it never reaches a caller.
+// errNothingDeleted is how a miss rolls the version bump back.
 var errNothingDeleted = errors.New("postgres: that trip was not in this log")
 
-// DeleteTrip is D3, and it answers THE WHOLE LOG.
-//
-// THE DOCUMENT IS READ INSIDE THE WRITE TRANSACTION, which is not the
-// repeatable-read snapshot GET /v1/logbook uses and does not need to be. The
-// traveller's advisory lock is held for the whole of it, so no other write for
-// this traveller can land between the DELETE and the ten SELECTs; and the
-// reads see this transaction's own delete because they are in it. What the
-// snapshot buys the READER — a consistent view against concurrent writers — the
-// lock buys the WRITER, and taking a repeatable-read snapshot as well would
-// mean a second transaction and therefore a second moment.
-//
-// A MISS IS A SUCCESS AND MOVES NOTHING. See logbook.Store's contract: the
-// client's own rule is that a delete of something absent has succeeded, and a
-// bump on a retried delete throws away the phone's whole cached document.
+// DeleteTrip is D3, and it answers the whole log.
 func (s LogbookStore) DeleteTrip(ctx context.Context, travellerID, tripID string) (logbook.Snapshot, error) {
 	var snap logbook.Snapshot
 
@@ -805,9 +583,6 @@ func (s LogbookStore) DeleteTrip(ctx context.Context, travellerID, tripID string
 	})
 	switch {
 	case errors.Is(err, errNothingDeleted):
-		// Nothing was written, so the version the caller should see is the one
-		// that was already there — which is what a plain read answers, in its
-		// own snapshot, with `assemble` saying yes.
 		return s.Read(ctx, travellerID, func(int64) bool { return true })
 	case err != nil:
 		return logbook.Snapshot{}, travellerError(err, travellerID)

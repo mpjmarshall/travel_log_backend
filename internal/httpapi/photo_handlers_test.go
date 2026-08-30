@@ -1,20 +1,5 @@
 // R7's five routes over the real mux, the real middleware chain and the real
-// auth, with fake stores. Test-first.
-//
-// WHAT IS HERE AND WHAT IS DELIBERATELY NOT. These legs are about what leaves
-// the process: which shape a re-file answers, that a bare Walk never reaches
-// the wire carrying `"points":null`, that an over-long track is refused BY
-// NAME, that a snooze answers `[]` rather than `null`, and that a 204 still
-// carries an ETag. What only a real PostgreSQL can say — that a caption-only
-// write does not unfile a photograph, that a `{dismissed:true}` body leaves a
-// track alone, that the count does not fall — is in internal/postgres and
-// internal/seed and is NOT repeated here.
-//
-// R5 WROTE THAT RULE DOWN AFTER PAYING FOR IT: "a leg over a twin cannot guard
-// a statement the twin does not execute". So the fakes below are honest little
-// stores — they honour DEC-89's pointer contract and they refuse to write a
-// half-filed pair — and nothing in this file is offered as evidence about a
-// statement.
+// auth, with fake stores.
 package httpapi
 
 import (
@@ -30,51 +15,20 @@ import (
 	"travellog/internal/logbook"
 )
 
-// === the fakes ===
-
-// fakeMoments satisfies logbook.PhotoStore AND logbook.WalkStore over the same
-// little document the trip fake writes to, so a photograph written here is a
-// photograph a later re-file can name.
-//
-// IT HONOURS DEC-89 BECAUSE IT HAS TO, and on `Points` that is not a
-// formality: a fake that wrote an empty track on a `{dismissed:true}` body
-// would make the handler legs green against the contract this whole step is
-// about. It also refuses to write `place_id` without `visit_id`, which is the
-// pair rule DEC-83 leaves in Go — a twin that could express the half-filed
-// state would let a leg pass over a shape no row may hold.
+// fakeMoments satisfies logbook.PhotoStore and logbook.WalkStore over the
+// same little document the trip fake writes to.
 type fakeMoments struct {
 	mu       sync.Mutex
 	books    *fakeLogbook
 	failWith error
 
-	// lastPhotoWrite and lastWalkWrite are what the handler handed the store,
-	// so a leg can assert that an OMITTED key arrived as nil rather than as a
-	// zero value — the difference the whole step turns on, and one that is
-	// invisible in the response.
 	lastPhotoWrite logbook.PhotoWrite
 	lastWalkWrite  logbook.WalkWrite
 
-	// snoozes counts the calls, so a leg can prove the store was not reached
-	// at all when the body was refused.
 	snoozes int
 
-	// mintOnRefile makes the next re-file answer the WHOLE ENVELOPE, which is
-	// what the real store does when the client named an occasion the log does
-	// not hold.
 	mintOnRefile bool
 
-	// answerWithoutPoints is a STORE DEFECT, on purpose, and it is the only
-	// knob here that models something no correct store does.
-	//
-	// IT EXISTS BECAUSE THAT IS EXACTLY WHAT EmitWalk IS FOR. Since 0003's
-	// `walks_points_present_ck` no STORED walk can have an empty track, so a
-	// correct store never hands the handler a nil slice and a leg over a
-	// correct twin cannot see whether the emitter is there. What the emitter
-	// guards is a Walk that was ASSEMBLED rather than read back — a store
-	// answering the request instead of the row, a re-read that forgot to join
-	// the points, a zero value returned beside an error nobody checked. This
-	// knob is that shape, and it is what lets "return the bare Walk" redden a
-	// behavioural leg rather than only the AST sweep.
 	answerWithoutPoints bool
 }
 
@@ -98,8 +52,6 @@ func (f *fakeMoments) PutPhoto(_ context.Context, _ string, w logbook.PhotoWrite
 		}
 	}
 	if found < 0 {
-		// The store's own create-time refusals, so a leg about them is a leg
-		// about the same rule the real store enforces under the lock.
 		switch {
 		case w.TripID == nil:
 			return logbook.Photo{}, 0, logbook.InvalidFieldError{Field: "tripId",
@@ -139,8 +91,6 @@ func (f *fakeMoments) PutPhoto(_ context.Context, _ string, w logbook.PhotoWrite
 	if logbook.Sent(w.FiledLater) {
 		next.FiledLater = logbook.Value(w.FiledLater)
 	}
-	// THE PAIR IS NOT WRITABLE FROM HERE AT ALL, which mirrors the statement:
-	// `upsertPhotoSQL` names neither column, and `PhotoWrite` has no slot.
 
 	if found < 0 {
 		f.books.doc.Photos = append(f.books.doc.Photos, next)
@@ -164,9 +114,6 @@ func (f *fakeMoments) DeletePhoto(_ context.Context, _, photoID string) (int64, 
 		}
 	}
 	if len(kept) == len(f.books.doc.Photos) {
-		// AN UNKNOWN ID MOVES NO VERSION, which is the real store's contract
-		// and is what stops a retried delete throwing away the phone's whole
-		// cached document.
 		return f.books.version, nil
 	}
 	f.books.doc.Photos = kept
@@ -216,8 +163,6 @@ func (f *fakeMoments) RefilePhoto(_ context.Context, _, photoID string, w logboo
 	if found < 0 {
 		return logbook.PhotoRefiled{}, logbook.ErrNoPhoto
 	}
-	// BOTH COLUMNS OR NEITHER. The twin cannot express the half-filed state,
-	// for the reason the statement writes them in one UPDATE.
 	f.books.doc.Photos[found].PlaceID = w.PlaceID
 	f.books.doc.Photos[found].VisitID = w.VisitID
 	f.books.version++
@@ -266,7 +211,6 @@ func (f *fakeMoments) PutWalk(_ context.Context, _ string, w logbook.WalkWrite) 
 	if w.DistanceKm != nil {
 		next.DistanceKm = *w.DistanceKm
 	}
-	// ABSENT MEANS LEAVE ALONE, AND ON THIS FIELD IT IS THE WHOLE STEP.
 	if w.Points != nil {
 		next.Points = *w.Points
 	}
@@ -288,8 +232,6 @@ func (f *fakeMoments) PutWalk(_ context.Context, _ string, w logbook.WalkWrite) 
 	}
 	return next, f.books.version, nil
 }
-
-// === the legs ===
 
 func aFiledPhotograph() logbook.Photo {
 	place, visit := "bukchon", "v-bukchon-0"
@@ -326,12 +268,7 @@ func withMoments(t *testing.T) (*harness, *fakeMoments, string) {
 	return h, moments, bearer(t, h)
 }
 
-// M2's NOTE ARRIVES AT THE STORE AS A CAPTION AND NOTHING ELSE.
-//
-// THE ASSERTION IS ON WHAT THE HANDLER HANDED THE STORE, not on the response,
-// because that is where the difference is visible. A body of `{caption}` that
-// reached the store carrying a zero `tripId` or a sent-but-empty coordinate
-// would answer exactly the same 200.
+// M2's note arrives at the store as A caption and nothing else.
 func TestACaptionOnlyPutReachesTheStoreCarryingOnlyACaption(t *testing.T) {
 	h, moments, token := withMoments(t)
 
@@ -362,9 +299,6 @@ func TestACaptionOnlyPutReachesTheStoreCarryingOnlyACaption(t *testing.T) {
 		t.Error("the caption did not reach the store at all")
 	}
 
-	// AND THE ANSWER STILL CARRIES THE FILING, which is what the phone
-	// splices. A response assembled from the request could not: `PhotoWrite`
-	// has no slot for a place.
 	var answered logbook.Photo
 	if err := json.Unmarshal(got.body, &answered); err != nil {
 		t.Fatalf("decoding the answer: %v", err)
@@ -380,13 +314,8 @@ func TestACaptionOnlyPutReachesTheStoreCarryingOnlyACaption(t *testing.T) {
 	}
 }
 
-// AND THE ANSWER TO A PHOTO WRITE CARRIES NO LIST KEY AT ALL, WHICH IS WHY
-// THERE IS NO EmitPhoto.
-//
-// MEASURED ON THE WIRE rather than on a Go value: the assertion walks the
-// emitted keys and reddens the day `Photo` grows a list. `internal/logbook`
-// holds the same claim about the struct; this one holds it about the bytes
-// this route actually writes.
+// The answer to A photo write carries no list key at all, which is why
+// there is no EmitPhoto.
 func TestAPhotoAnswerCarriesNoListKeyAndThereforeNeedsNoEmitter(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -410,16 +339,7 @@ func TestAPhotoAnswerCarriesNoListKeyAndThereforeNeedsNoEmitter(t *testing.T) {
 	}
 }
 
-// D1 ANSWERS 204 WITH AN ETag AND NO BODY, AND AN UNKNOWN ID ANSWERS 204 TOO.
-//
-// THE ETag IS WHAT THE 204 IS FOR rather than a bare success: the phone has
-// just spliced a deletion into a document it caches under a version, and
-// without the new tag its next conditional GET either refetches the whole log
-// or keeps serving a body that still holds the photograph.
-//
-// THE UNKNOWN-ID HALF IS THE CLIENT'S OWN ASYMMETRY. `deletePhoto` answers
-// true for an id the log does not hold — the caller asked for it to be absent
-// and it is — while `setPhotoCaption` and `refilePhoto` answer false.
+// D1 ANSWERS 204 with an ETag and no body, and an unknown id answers 204 TOO.
 func TestDeletingAPhotographAnswers204WithAnETagAndAnUnknownIdDoesToo(t *testing.T) {
 	h, moments, token := withMoments(t)
 
@@ -438,9 +358,6 @@ func TestDeletingAPhotographAnswers204WithAnETagAndAnUnknownIdDoesToo(t *testing
 		t.Errorf("%d photographs survive", len(moments.books.doc.Photos))
 	}
 
-	// THE REPEAT IS A SUCCESS AND MOVES NOTHING, which is what stops a retried
-	// delete taking the client's failure branch (DEC-103) — and what stops it
-	// throwing away the phone's whole cached document.
 	again := h.do(t, http.MethodDelete, "/v1/photos/ph-0", "", token)
 	if again.status != http.StatusNoContent {
 		t.Errorf("the SECOND DELETE = %d, want 204", again.status)
@@ -451,12 +368,8 @@ func TestDeletingAPhotographAnswers204WithAnETagAndAnUnknownIdDoesToo(t *testing
 	}
 }
 
-// N1's 'LATER' ANSWERS THE ROWS IT WROTE, AND AN EMPTY MATCH ANSWERS `[]`
-// RATHER THAN `null`.
-//
-// `null` IS THE ONE SHAPE THE CLIENT THROWS ON, and a bulk route is where a
-// nil slice is most likely: the ordinary case for an empty match is a group
-// whose photographs have all been filed since the row was drawn.
+// N1's 'LATER' answers the rows it wrote, and an empty match answers `[]`
+// Than `null`.
 func TestASnoozeAnswersTheRowsItWroteAndAnEmptyMatchAnswersAnEmptyList(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -489,12 +402,8 @@ func TestASnoozeAnswersTheRowsItWroteAndAnEmptyMatchAnswersAnEmptyList(t *testin
 	}
 }
 
-// AND A SNOOZE WITH NO `photoIds` IS A 422 NAMING THE FIELD, WITHOUT REACHING
-// THE STORE.
-//
-// An absent group and an empty one are different requests: the first never
-// named a group, and the second is a group that turned out to be empty.
-// Collapsing them would make a malformed request look like an ordinary one.
+// A snooze with no `photoIds` is a 422 naming the field, without reaching
+// the store.
 func TestASnoozeWithNoGroupIsRefusedByNameAndNeverReachesTheStore(t *testing.T) {
 	h, moments, token := withMoments(t)
 
@@ -517,13 +426,7 @@ func TestASnoozeWithNoGroupIsRefusedByNameAndNeverReachesTheStore(t *testing.T) 
 	}
 }
 
-// M2.2's RE-FILE ANSWERS TWO SHAPES AND THE SHAPE IS READ OFF WHAT MOVED.
-//
-// An occasion that ALREADY EXISTED moved one entity, so DEC-32's bare
-// photograph is the splice. A MINTED one moved the place as well — and
-// renumbered every one of that place's ordinals — so the phone cannot splice
-// what it was not sent, and the answer is the whole envelope. That is `PUT
-// /v1/cities/{id}`'s own device.
+// M2.2's RE-file answers two shapes and the shape is read off what moved.
 func TestARefileAnswersAPhotographOrTheWholeEnvelopeDependingOnWhatMoved(t *testing.T) {
 	h, moments, token := withMoments(t)
 
@@ -559,12 +462,7 @@ func TestARefileAnswersAPhotographOrTheWholeEnvelopeDependingOnWhatMoved(t *test
 	}
 }
 
-// AND A RE-FILE THAT NAMES NO OCCASION IS A 422 NAMING `visitId`.
-//
-// The refusal is `logbook.Service`'s and the leg here is that it REACHES THE
-// WIRE as the 422 that says which field — through the same mapping every other
-// refusal in this API goes through. The proof that the store was not reached
-// is in internal/logbook, where the counting twin lives.
+// a re-file that names no occasion is a 422 NAMING `visitId`.
 func TestARefileThatNamesNoOccasionIsA422NamingVisitId(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -579,11 +477,8 @@ func TestARefileThatNamesNoOccasionIsA422NamingVisitId(t *testing.T) {
 	}
 }
 
-// A PHOTOGRAPH THIS LOG DOES NOT HOLD IS A 404 ON A RE-FILE AND A 204 ON A
+// A photograph this log does not hold is a 404 ON A RE-FILE and A 204 ON A
 // DELETE.
-//
-// The client's own asymmetry, and it is asserted as a PAIR because that is
-// what makes it a decision rather than two accidents.
 func TestAnUnknownPhotographIs404OnARefileAnd204OnADelete(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -599,18 +494,7 @@ func TestAnUnknownPhotographIs404OnARefileAnd204OnADelete(t *testing.T) {
 	}
 }
 
-// === the walk route ===
-
-// A WALK ANSWER CARRIES `"points": [...]` AND NEVER `null` (CF-BLO-3, PD-15).
-//
-// MEASURED AGAINST THE WIRE rather than against a Go value. `jq -c` renders a
-// JSON null as the four characters `null`, and so does this: the substring
-// check tells `[]` from `null`, which is the whole distinction and the one the
-// client throws on.
-//
-// THE BODY IS N1's DISCARD, which carries no track at all — so a handler
-// answering the request rather than the row would produce exactly the null
-// this leg refuses.
+// A walk answer carries `"points": [...]` and never `null`.
 func TestAWalkAnswerCarriesItsPointsAndNeverNull(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -635,24 +519,12 @@ func TestAWalkAnswerCarriesItsPointsAndNeverNull(t *testing.T) {
 		t.Error("dismissed = false after N1's Discard")
 	}
 
-	// AND THE STORE WAS TOLD NOTHING ABOUT THE TRACK, which is the half of it
-	// the response cannot show.
 	if h.moments().lastWalkWrite.Points != nil {
 		t.Errorf("the store was handed a track of %d points on a `{dismissed:true}` "+
 			"body. Absent means LEAVE ALONE, and a List<LatLng> recorded on a day "+
 			"that has passed cannot be re-recorded", len(*h.moments().lastWalkWrite.Points))
 	}
 
-	// AND THE EMITTER IS THE NET UNDER A STORE THAT ANSWERS A WALK WITH NO
-	// TRACK AT ALL.
-	//
-	// THAT IS A DEFECT AND NOT A DATA STATE, which is the whole reason this
-	// half needs a knob: since 0003 no STORED walk can have an empty track, so
-	// a correct store never produces a nil slice and a leg over a correct twin
-	// cannot tell whether EmitWalk is there. The shapes that DO produce one
-	// are code — a store answering the request instead of the row, a re-read
-	// that forgot to join the points — and those are exactly what put
-	// `"cityIds":null` on a running server before EmitTrip existed.
 	h.moments().answerWithoutPoints = true
 	unread := h.do(t, http.MethodPut, "/v1/walks/w-busan", `{"dismissed":true}`, token)
 	if unread.status != http.StatusOK {
@@ -665,12 +537,8 @@ func TestAWalkAnswerCarriesItsPointsAndNeverNull(t *testing.T) {
 	}
 }
 
-// AND AN EMPTY TRACK IS REFUSED BY NAME, WHERE `walks_points_array_ck` WOULD
-// LET IT THROUGH.
-//
-// An empty array IS an array, so the 0001 constraint does not see it. 0003's
-// `walks_points_present_ck` is the guarantee and this 422 is what names the
-// field — DEC-58's precedent.
+// An empty track is refused by name, where `walks_points_array_ck` would
+// let it through.
 func TestAnEmptyTrackIsRefusedNamingPoints(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -682,8 +550,6 @@ func TestAnEmptyTrackIsRefusedNamingPoints(t *testing.T) {
 		t.Errorf("the refusal names %q, want \"points\"", field)
 	}
 
-	// THE OTHER HALF: a real track is not refused. Without it this leg passes
-	// against a build that refuses every walk write.
 	fine := h.do(t, http.MethodPut, "/v1/walks/w-busan",
 		`{"points":[{"lat":35.0975,"lng":129.0104}]}`, token)
 	if fine.status != http.StatusOK {
@@ -691,16 +557,7 @@ func TestAnEmptyTrackIsRefusedNamingPoints(t *testing.T) {
 	}
 }
 
-// AND AN OVER-LONG TRACK IS REFUSED BY NAME AND NOT BY http.MaxBytesReader.
-//
-// THAT IS THE WHOLE OF DEC-93's SECOND SENTENCE. `ErrBodyTooLarge` carries no
-// field at all, so a client whose walk is too long would be told "your request
-// is too big" about a body it cannot see the shape of — and a user whose walk
-// is refused has lost a recording of a day.
-//
-// THE BODY IS DELIBERATELY WELL INSIDE `httpx.MaxBodyBytes`, or the leg would
-// be measuring the reader rather than the validator: 501 points at seven
-// decimal places is about 21 KB against a 1 MiB ceiling.
+// An over-long track is refused by name and not by http.MaxBytesReader.
 func TestAnOverLongTrackIsRefusedNamingPointsAndNotAsABodyTooLarge(t *testing.T) {
 	h, _, token := withMoments(t)
 
@@ -728,9 +585,7 @@ func TestAnOverLongTrackIsRefusedNamingPointsAndNotAsABodyTooLarge(t *testing.T)
 	}
 }
 
-// fieldOfBody reads DEC-12's one additive key off an error body, and answers
-// "" when there is none — so a leg comparing against a field name reddens on a
-// 500 as well as on the wrong field.
+// fieldOfBody reads the one additive key off an error body.
 func fieldOfBody(t *testing.T, body []byte) string {
 	t.Helper()
 	var decoded struct {

@@ -6,11 +6,7 @@ import (
 	"testing"
 )
 
-// The mechanism that keeps the three hand-written bodies honest. They cannot come
-// from the encoder — http.TimeoutHandler wants a string before any request
-// exists, and encoding/json is confined to two functions — so instead of
-// trusting them, this asserts each is BYTE-IDENTICAL to what WriteJSON writes
-// for the same payload. Change the envelope and this reddens.
+// The mechanism that keeps's three hand-written bodies honest.
 func TestThePrebuiltBodiesEqualWhatTheEncoderProduces(t *testing.T) {
 	for _, c := range []Code{CodeTimeout, CodeInternal, CodeUnsupportedRoute} {
 		rec := httptest.NewRecorder()

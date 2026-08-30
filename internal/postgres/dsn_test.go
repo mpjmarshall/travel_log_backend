@@ -1,5 +1,4 @@
-// The DSN rewrite. No database: these are claims about a string, and the one
-// leg that needs a server is the one that asks Postgres what it received.
+// The DSN rewrite.
 package postgres_test
 
 import (
@@ -28,9 +27,7 @@ func optionsOf(t *testing.T, dsn string) string {
 	return u.Query().Get("options")
 }
 
-// ALL THREE, ON ONE LINE. `search_path` closes DB-MIN-14 — the migrator pins
-// its schema and the application did not — and the two timeouts are DEC-96's
-// second bound and its backstop.
+// all three, on one line.
 func TestTheDSNCarriesTheThreeSessionSettings(t *testing.T) {
 	got, err := postgres.WithSessionOptions(bareDSN, 15*time.Second)
 	if err != nil {
@@ -49,10 +46,7 @@ func TestTheDSNCarriesTheThreeSessionSettings(t *testing.T) {
 	}
 }
 
-// THE UNIT IS EXPLICIT AND THAT IS NOT DECORATION. A bare integer in these two
-// settings is MILLISECONDS, so `statement_timeout=15` is a database that
-// refuses every query after fifteen thousandths of a second — and the failure
-// reads as "the database is broken" rather than "the unit was wrong".
+// the unit is explicit and that is not decoration.
 func TestTheTimeoutsCarryTheirUnit(t *testing.T) {
 	got, err := postgres.WithSessionOptions(bareDSN, 15*time.Second)
 	if err != nil {
@@ -64,10 +58,7 @@ func TestTheTimeoutsCarryTheirUnit(t *testing.T) {
 	}
 }
 
-// PRESERVING AN EXISTING `options=` IS LOAD-BEARING, NOT POLITE.
-// internal/postgres/testdb scopes its pool by putting `-c search_path=<schema>`
-// on this very parameter, so a rewrite that replaced it would point every store
-// test at `public` — where the tables are not — while every leg still ran.
+// preserving an existing `options=` is LOAD-bearing, not polite.
 func TestAnExistingOptionsParameterSurvivesAndWins(t *testing.T) {
 	scoped := bareDSN + "&options=" + url.QueryEscape("-c search_path=t_123")
 
@@ -117,17 +108,11 @@ func TestARubbishDSNIsRefusedRatherThanRewritten(t *testing.T) {
 	}
 }
 
-// AND THE ONE THAT ASKS POSTGRES WHAT IT ACTUALLY RECEIVED. Everything above is
-// a claim about a string; only the server can say whether libpq parsed the
-// `options=` line the way this file assumes. It needs a database and skips,
-// saying so, when there is none.
+// The one that asks postgres what it actually received.
 func TestPostgresAppliesTheSettingsThisDSNAsksFor(t *testing.T) {
 	db, schema := testdb.Open(t)
 	ctx := context.Background()
 
-	// testdb already scoped the pool it handed back; ask for the timeouts on
-	// top of that, which is exactly the composition cmd/api does not do and
-	// this leg does — it proves the merge, not just the addition.
 	dsn, err := postgres.WithSessionOptions(scopedURL(t, schema), 7*time.Second)
 	if err != nil {
 		t.Fatalf("WithSessionOptions: %v", err)
@@ -153,9 +138,7 @@ func TestPostgresAppliesTheSettingsThisDSNAsksFor(t *testing.T) {
 	_ = db
 }
 
-// scopedURL rebuilds the DSN testdb would have handed out for a schema. It is
-// here rather than exported from testdb because only this leg wants the STRING
-// — every other caller wants the pool.
+// scopedURL rebuilds the DSN testdb would have handed out for a schema.
 func scopedURL(t *testing.T, schema string) string {
 	t.Helper()
 	raw := os.Getenv("TEST_DATABASE_URL")

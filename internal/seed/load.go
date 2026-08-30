@@ -1,39 +1,4 @@
 // The load: ten tables, one transaction, and one refusal.
-//
-// THE REFUSAL IS THE SAME PREDICATE DEC-86 PUTS ON REGISTER (DEC-97): refuse
-// when ANY TRAVELLER ROW EXISTS. Not "when the log is non-empty", which was
-// the plan's wording and does not fire on the run that matters — a freshly
-// migrated database IS empty, so `make up && make seed` on a deployed box
-// would burn the only registration slot the deployment has on a passphrase
-// printed in a terminal. It covers the other direction too: after the real
-// owner registers and before they write anything, a log-shaped predicate still
-// sees nothing while registration is already closed behind them.
-//
-// ONE TRANSACTION, AND WHAT THAT DOES NOT COVER. The ten tables go in together
-// or not at all. The two PNG uploads happen BEFORE it (DEC-78), so a load that
-// dies at table seven rolls back the database and LEAVES THE OBJECTS in the
-// bucket. That is intended — content addressing makes the re-upload idempotent,
-// and the alternative is a database that references bytes nobody uploaded —
-// but it is written down here because once `-sweep-media` has a grace window,
-// an uploaded-not-committed object is indistinguishable from an orphan.
-//
-// THE INSERTS ARE ONE STATEMENT PER TABLE, NOT ONE PER ROW. 284 photographs
-// one at a time is 284 round trips; one multi-row VALUES list is one.
-//
-// AND THAT IS EXACTLY WHY generate.go CANNOT COPY THIS. The wire protocol
-// counts a statement's parameters in an int16, so the ceiling is 65,535. The
-// captured fixture's largest statement is photos at 284 rows x 14 written
-// columns = 3,976 parameters, comfortably under it. The generator's 50,000
-// photographs at the same 14 columns would be 700,000, more than ten times the
-// ceiling — so the generator chunks and the 284-row seed does not need to.
-// The arithmetic is in generate.go's own comment beside the stub.
-//
-// THE ARRAYS ARE NOT `unnest`, AND THE REASON IS A CONSTRAINT RATHER THAN A
-// PREFERENCE. `unnest($1::text[], ...)` is thirteen parameters at any row
-// count and would be the better shape — but database/sql has no array type, so
-// it needs pgx's pgtype, and spec L20 says pgx is used "solely as a blank
-// import driver". cmd/api/imports_test.go is the mechanism that says so, and
-// it went red against the first draft of this file.
 package seed
 
 import (
@@ -48,30 +13,18 @@ import (
 
 // LoadOptions is deliberately EMPTY, and it carries no `Force` and no
 // `Reset`.
-//
-// DEC-97 makes the refusal the whole point of this function, so a Force flag
-// on the same struct is a switch whose only use is to defeat it — and `Reset`
-// is `DROP` wearing a friendlier word, against the one volume that holds the
-// record. The
-// dev-database marker that DOES gate this lives in cmd/seed, where an operator
-// types it, rather than in a struct a future caller can set to true.
 type LoadOptions struct{}
 
-// Report is what a completed load answers with. Rows is per table, so a caller
-// can print the ten counts rather than a single number that hides a table
-// nobody wrote to.
+// Report is what a completed load answers with.
 type Report struct {
 	Rows     map[string]int
 	Duration time.Duration
 }
 
-// ErrTravellerExists is the refusal. It is a sentinel so a command can tell it
-// from a disk failure and exit with a sentence rather than a stack.
+// ErrTravellerExists is the refusal.
 var ErrTravellerExists = errors.New("seed: this database already has a traveller")
 
-// TravellerExistsError names the traveller that was found (SAF-MAJ-8), so an
-// operator who has pointed at the wrong database learns it FROM THE REFUSAL
-// rather than from a later surprise.
+// TravellerExistsError names the traveller that was found.
 type TravellerExistsError struct {
 	TravellerID string
 	Email       string
@@ -98,8 +51,6 @@ func Load(ctx context.Context, db *sql.DB, d *Dataset, _ LoadOptions) (Report, e
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// THE PREDICATE, INSIDE THE TRANSACTION. Outside it, two seeds racing each
-	// other both read zero and both insert.
 	existing, err := firstTraveller(ctx, tx)
 	if err != nil {
 		return report, err
@@ -127,14 +78,8 @@ func Load(ctx context.Context, db *sql.DB, d *Dataset, _ LoadOptions) (Report, e
 	return report, nil
 }
 
-// insertStep is one table's whole INSERT: the column list, the per-column cast
-// each placeholder carries, and one []any per row.
-//
-// THE CASTS ARE NOT DECORATION. A Go string reaches PostgreSQL as text, and
-// `date`, `uuid` and `jsonb` columns refuse a text expression outright — so
-// the cast is what lets a `date` column be written as `2027-09-17`, which is
-// the same day in every session timezone. Binding a time.Time instead makes
-// the stored day depend on the container's TimeZone setting (DEC-68).
+// insertStep is one table's whole INSERT: the column list, the per-column
+// cast each placeholder carries, and one []any per row.
 type insertStep struct {
 	table   string
 	columns []string
@@ -142,8 +87,8 @@ type insertStep struct {
 	rows    [][]any
 }
 
-// statement renders `INSERT INTO t (a, b) VALUES ($1::uuid, $2), ($3::uuid, $4)`
-// and the flat argument list beside it.
+// statement renders `insert into t (a, b) VALUES ($1::uuid, $2), ($3::uuid,
+// $4)` and the flat argument list beside it.
 func (s insertStep) statement() (string, []any) {
 	var b strings.Builder
 	b.WriteString("INSERT INTO ")
@@ -172,8 +117,7 @@ func (s insertStep) statement() (string, []any) {
 	return b.String(), args
 }
 
-// insertSteps is DEPENDENCY ORDER, spelled once. Every step may reference only
-// the steps above it, which is the same rule Dataset's own field order states.
+// insertSteps is dependency order, spelled once.
 func insertSteps(d *Dataset) []insertStep {
 	return []insertStep{
 		travellerStep(d), mediaStep(d), cityStep(d), tripStep(d), tripCityStep(d),
@@ -314,18 +258,13 @@ func shareLinkStep(d *Dataset) insertStep {
 	return step
 }
 
-// ExistingTraveller answers the traveller this database already holds, or nil.
-//
-// IT IS THE SAME QUERY Load TAKES INSIDE ITS TRANSACTION, exported so a command
-// can refuse BEFORE it uploads two photographs to a bucket. The one inside the
-// transaction is the guard; this one is the courtesy, and having both is what
-// keeps a refused run from leaving bytes behind.
+// ExistingTraveller answers the traveller this database already holds, or
+// nil.
 func ExistingTraveller(ctx context.Context, db *sql.DB) (*TravellerExistsError, error) {
 	return firstTraveller(ctx, db)
 }
 
-// rowQuerier is *sql.DB and *sql.Tx, which is the whole of what firstTraveller
-// needs and is why it is not an interface with a name anybody has to learn.
+// rowQuerier is *sql.DB and *sql.Tx.
 type rowQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }

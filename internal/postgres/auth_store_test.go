@@ -1,22 +1,4 @@
-// The auth store against a real PostgreSQL. Test-first.
-//
-// This file needs a database and SKIPS, saying so, when there is none —
-// internal/postgres/testdb decides that, and it refuses a server below 15
-// rather than skipping it. Run `make test-db` and export what it prints.
-//
-// THREE THINGS HERE CANNOT BE ASSERTED ANYWHERE ELSE, and they are why the
-// file exists rather than being folded into internal/auth's fake store:
-//
-//  1. DEC-65's functional unique index. The fake enforces lower(email)
-//     uniqueness in Go; the real store enforces it nowhere in Go at all, and a
-//     leg against the fake would be a leg about the fake.
-//  2. That the index is actually USED. DEC-65 says to assert it with EXPLAIN
-//     rather than by reading, because `WHERE email = $1` is a predicate that
-//     compiles, runs, returns zero rows against a differently-cased address,
-//     and reports an unknown traveller with no error anywhere.
-//  3. The bump/no-bump split (DEC-50). A session write must move
-//     logbook_version by ZERO, and only a real travellers row has a
-//     logbook_version to move.
+// The auth store against a real PostgreSQL.
 package postgres
 
 import (
@@ -58,15 +40,11 @@ func versionOf(t *testing.T, db *sql.DB, travellerID string) int64 {
 	return v
 }
 
-// AuthStore satisfies the interface internal/auth declares (DEC-62: the
-// business rules own the contract and the storage implementation meets it).
-// Its failure mode is a build error, which is the right one for a claim about
-// types.
+// AuthStore satisfies the interface internal/auth declares (: the business
+// rules own the contract and the storage implementation meets it).
 func TestAuthStoreIsTheStoreAuthDeclared(t *testing.T) {
 	var _ auth.Store = AuthStore{}
 }
-
-// === travellers ===
 
 func TestCreateTravellerStoresTheAddressExactlyAsTyped(t *testing.T) {
 	store, db, _ := authStore(t)
@@ -120,17 +98,8 @@ func TestCreateTravellerStartsTheLogbookVersionAtZero(t *testing.T) {
 	}
 }
 
-// DEC-60's surviving leg, which DEC-65 made stronger: it now fails at the
-// database rather than depending on a call site remembering a rule.
-//
-// SINCE DEC-86 IT IS THE ONLY THING IN THIS REPOSITORY THAT REACHES
-// travellers_email_lower_key IN THE WRITE DIRECTION, and that is the reason
-// registration's own rule is NOT in `createTravellerSQL`. Putting `WHERE NOT
-// EXISTS (SELECT 1 FROM travellers)` into the INSERT would make every second
-// CreateTraveller answer "no row" — the same answer a duplicate address gives
-// — and this leg would then be measuring the new guard rather than the index.
-// The rule lives in auth.Service.Register instead, where it can also refuse
-// before Argon2 runs; the store keeps the constraint the database owns.
+// The surviving leg, which made stronger: it now fails at the database rather
+// than depending on a call site remembering a rule.
 func TestASecondRegistrationOfOneAddressInAnotherCasingIsRefused(t *testing.T) {
 	store, _, _ := authStore(t)
 	ctx := context.Background()
@@ -179,15 +148,8 @@ func TestTravellerByEmailAnswersNoTravellerForAnAddressNobodyHolds(t *testing.T)
 	}
 }
 
-// DEC-65 asks for this to be asserted with EXPLAIN rather than by reading, and
-// the negative half is the point: `WHERE email = $1` does not error, does not
-// warn, and returns zero rows against a differently-cased stored address — so
-// a forgotten rule reads as an address nobody registered.
-//
-// enable_seqscan is turned off FOR THE TRANSACTION so the plan reflects what
-// the index can serve rather than what the planner prefers on a table of four
-// rows. That is the right question: on a table of four rows a sequential scan
-// IS faster, and the leg is about whether the index is usable at all.
+// asks for this to be asserted with EXPLAIN rather than by reading, and the
+// negative half is the point.
 func TestTheLookupUsesTheLowerEmailIndexAndAPlainEqualityDoesNot(t *testing.T) {
 	store, db, _ := authStore(t)
 	ctx := context.Background()
@@ -243,8 +205,6 @@ func TestTheLookupUsesTheLowerEmailIndexAndAPlainEqualityDoesNot(t *testing.T) {
 	}
 }
 
-// === sessions, and the half of DEC-50 that must move no number ===
-
 func withTravellerRow(t *testing.T) (AuthStore, *sql.DB, auth.Traveller) {
 	t.Helper()
 	store, db, _ := authStore(t)
@@ -284,13 +244,7 @@ func TestCreateSessionStoresTheHashAndTheExpiryAndAnswersAnId(t *testing.T) {
 	}
 }
 
-// THE LEG THE SLICE EXISTS FOR (DEC-50, and the slice's own definition of
-// done). Creating a session and touching one must move logbook_version by
-// ZERO. Count them and the phone's whole cached log — 95,586 bytes at fixture
-// scale through this build, measured — is invalidated on
-// every authenticated request, so GET /v1/logbook never once answers 304 in
-// real use — which was a real defect (V3-B4) and is invisible until somebody
-// measures the cache.
+// the leg the slice exists for (and the slice's own definition of done).
 func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 	store, db, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -318,17 +272,8 @@ func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 	}
 }
 
-// DEC-100, MEASURED RATHER THAN READ: a session touch DOES NOT WAIT for the
+// , measured rather than read: a session touch does not wait for the
 // traveller's write lock, and a session CREATE still does.
-//
-// THIS LEG USED TO BE CALLED TestCreateSessionAndTouchSessionBothTakeTheTravellerLock
-// AND IT NEVER TOUCHED A SESSION. Its body created one, blocked, and asserted;
-// TouchSession appeared in the name and nowhere in the code. So when DEC-100
-// took the lock off the touch, this leg stayed green — the rule leg in
-// tx_sweep_test.go is what went red. That is this project's own class 9
-// ("a test whose name promises a behaviour must assert that behaviour")
-// landing on a leg that had carried the wrong name since VS6, and it is why
-// both halves are asserted here, in opposite directions, against ONE held lock.
 func TestCreateSessionWaitsForTheTravellerLockAndTouchSessionDoesNot(t *testing.T) {
 	store, db, schema := authStore(t)
 	tr, err := store.CreateTraveller(context.Background(), "matt@example.com", "$argon2id$stub")
@@ -383,10 +328,6 @@ func TestCreateSessionWaitsForTheTravellerLockAndTouchSessionDoesNot(t *testing.
 		t.Fatalf("CreateSession never completed after the lock was released")
 	}
 
-	// THE OTHER DIRECTION, AND IT IS THE ONE DEC-100 CHANGED. The lock is
-	// taken again, and this time the write under it must NOT wait: the touch
-	// is one UPDATE of one row keyed by session id, and the row lock it takes
-	// itself is the whole of the exclusion it needs.
 	heldAgain := make(chan struct{})
 	releaseAgain := make(chan struct{})
 	holding := make(chan error, 1)
@@ -571,18 +512,7 @@ func TestCreateSessionRefusesATravellerThatIsNotThere(t *testing.T) {
 	}
 }
 
-// DEC-100's INPUT. The granularity decision is made in internal/auth from
-// `Session.LastUsedAt`, so a store that leaves the field at its zero value
-// makes every session look infinitely stale and puts the per-request write
-// back with every other leg still green — including the rule leg in
-// tx_sweep_test.go, which reads the file and not the row.
-//
-// IT ASSERTS THE VALUE AND NOT ONLY THE PRESENCE. `sessions.last_used_at` is
-// `NOT NULL DEFAULT now()`, so a fresh session's stamp is the moment it was
-// created: the assertion is that it sits between the instant before the
-// CreateSession call and the instant after it. A leg checking `!IsZero()`
-// would pass against a column scanned from `created_at`, from `expires_at`, or
-// from any other timestamp on the row.
+// The INPUT.
 func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
 	store, _, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -606,8 +536,6 @@ func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
 			session.LastUsedAt.UTC(), before, after)
 	}
 
-	// AND THE TOUCH MOVES IT, which is what makes the read above an input to
-	// something rather than a field nobody uses.
 	want := time.Date(2027, 10, 12, 9, 0, 0, 0, time.UTC)
 	if err := store.TouchSession(ctx, tr.ID, session.ID, want); err != nil {
 		t.Fatalf("TouchSession: %v", err)
@@ -621,13 +549,7 @@ func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
 	}
 }
 
-// DEC-86's question, against the real table.
-//
-// IT ASKS ABOUT THE TABLE AND NOT ABOUT AN ADDRESS, which is the whole
-// difference between this and DEC-65's unique index: `TravellerByEmail` is
-// about one address and this is about whether the log belongs to anybody yet.
-// A store that answered by looking a particular address up would report an
-// empty log to a stranger, which is exactly the state the ruling closes.
+// The question, against the real table.
 func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
 	store, _, _ := authStore(t)
 	ctx := context.Background()
@@ -656,14 +578,7 @@ func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
 	}
 }
 
-// REVOKING A SESSION IS AN UPDATE THAT MOVES A LIVE ROW AND NOTHING ELSE.
-//
-// Three claims, and the third is the one a bool alone would hide: the row is
-// revoked, a SECOND revoke moves nothing (so `revoked_at` records the moment
-// the token stopped working rather than the moment somebody asked again), and
-// ANOTHER traveller's session with the same digest is untouched — which cannot
-// happen through the unique index and is exactly the shape a `WHERE token_hash
-// = $1` written without the traveller would get wrong the day it could.
+// REVOKING A session is an update that moves A live row and nothing else.
 func TestRevokeSessionMovesTheLiveRowAndOnlyOnce(t *testing.T) {
 	store, db, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -706,22 +621,14 @@ func TestRevokeSessionMovesTheLiveRowAndOnlyOnce(t *testing.T) {
 		t.Errorf("revoked_at moved from %s to %s on a second revoke", first, second)
 	}
 
-	// A STRANGER CANNOT REVOKE IT. The predicate names the traveller as well
-	// as the digest.
 	other := aSecondTraveller(t, db, "stranger@example.com")
 	if moved, err := store.RevokeSession(ctx, other, digest("another token")); err != nil || moved {
 		t.Errorf("revoking a stranger's unknown digest answered (%v, %v), want (false, nil)", moved, err)
 	}
 }
 
-// "SIGN OUT EVERYWHERE" IS A CLAIM ABOUT A NUMBER, which is why the store
-// answers a count and not a bool: a store that revoked exactly one row would
-// satisfy every assertion a bool could make.
-//
-// AND IT IS SCOPED TO THE TRAVELLER. The second traveller's live session is
-// what makes that falsifiable — an unscoped `UPDATE sessions SET revoked_at`
-// signs the whole instance out and no count in this leg would notice without
-// it.
+// "sign out everywhere" is a claim about A NUMBER, which is why the store
+// answers a count and not a bool.
 func TestRevokeEverySessionCountsWhatItMovedAndStopsAtTheTraveller(t *testing.T) {
 	store, db, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -732,7 +639,6 @@ func TestRevokeEverySessionCountsWhatItMovedAndStopsAtTheTraveller(t *testing.T)
 			t.Fatalf("CreateSession %d: %v", i, err)
 		}
 	}
-	// One of them is already revoked, so the count is about LIVE rows.
 	if _, err := store.RevokeSession(ctx, tr.ID, digest("laptop")); err != nil {
 		t.Fatalf("the preparatory revoke: %v", err)
 	}
@@ -764,9 +670,7 @@ func TestRevokeEverySessionCountsWhatItMovedAndStopsAtTheTraveller(t *testing.T)
 	}
 }
 
-// AND NEITHER REVOCATION MOVES logbook_version. DEC-50's list puts sessions on
-// the non-bumping side, and a revoke that counted would invalidate the phone's
-// whole cached log for a write that is not in it.
+// Neither revocation moves logbook_version.
 func TestRevokingSessionsMovesNoLogbookVersion(t *testing.T) {
 	store, db, tr := withTravellerRow(t)
 	ctx := context.Background()
@@ -789,13 +693,6 @@ func TestRevokingSessionsMovesNoLogbookVersion(t *testing.T) {
 }
 
 // aSecondTraveller is `aTraveller` for a leg that needs two of them.
-//
-// IT GOES THROUGH THE STORE AND NOT THROUGH THE ROUTE, and after DEC-86 that
-// is the only way: `Service.Register` refuses once any traveller row exists.
-// What is bypassed is the registration rule, which is a decision about who may
-// open an account; what these legs are about is whether a statement is scoped
-// by traveller_id, which has to be right BEFORE a second traveller is ever
-// wanted — DEC-86's own trigger for revisiting.
 func aSecondTraveller(t *testing.T, db *sql.DB, email string) string {
 	t.Helper()
 	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), email, "$argon2id$stub")
