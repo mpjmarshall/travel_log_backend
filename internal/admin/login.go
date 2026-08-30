@@ -36,6 +36,7 @@ type Deps struct {
 	Dev      bool
 	Render   Renderer
 	Store    Store
+	Writer   Writer
 }
 
 type attempts struct {
@@ -160,6 +161,7 @@ type PageData struct {
 	Travellers []postgres.TravellerRow
 	Traveller  *postgres.TravellerDetail
 	Storage    string
+	Minted     string
 
 	Query    string
 	Total    int

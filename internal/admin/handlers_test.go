@@ -57,6 +57,11 @@ func (f *fakeStore) Invites(context.Context) ([]postgres.InviteRow, error) {
 }
 
 func pageDeps(t *testing.T, store *fakeStore) (*http.ServeMux, *http.Cookie) {
+	mux, c, _ := writeDeps(t, store, &fakeWriter{})
+	return mux, c
+}
+
+func writeDeps(t *testing.T, store *fakeStore, writer *fakeWriter) (*http.ServeMux, *http.Cookie, string) {
 	t.Helper()
 	set, err := admin.NewTemplates(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -71,15 +76,16 @@ func pageDeps(t *testing.T, store *fakeStore) (*http.ServeMux, *http.Cookie) {
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Render:   set,
 		Store:    store,
+		Writer:   writer,
 	}
 	mux := http.NewServeMux()
 	admin.Mount(mux, deps)
 
-	id, _, err := sessions.New(now())
+	id, csrf, err := sessions.New(now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return mux, &http.Cookie{Name: admin.CookieName, Value: id}
+	return mux, &http.Cookie{Name: admin.CookieName, Value: id}, csrf
 }
 
 func body(t *testing.T, mux *http.ServeMux, path string, c *http.Cookie, headers ...string) string {

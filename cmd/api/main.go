@@ -204,6 +204,7 @@ func adminPanel(cfg config.Config, db *sql.DB, log *slog.Logger) (func(*http.Ser
 			Dev:      cfg.Development,
 			Render:   pages,
 			Store:    postgres.AdminStore{DB: db},
+			Writer:   postgres.AdminStore{DB: db},
 		})
 	}, nil
 }

@@ -26,6 +26,7 @@ func mounted(t *testing.T, password string) (*http.ServeMux, admin.Deps) {
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Render:   &stubRenderer{},
 		Store:    &fakeStore{},
+		Writer:   &fakeWriter{},
 	}
 	mux := http.NewServeMux()
 	admin.Mount(mux, deps)
