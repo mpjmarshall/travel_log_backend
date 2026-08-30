@@ -147,4 +147,5 @@ func (d Deps) cookie(id string) *http.Cookie {
 type pageData struct {
 	Failed bool
 	Locked bool
+	CSRF   string
 }

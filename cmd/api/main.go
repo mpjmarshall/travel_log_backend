@@ -18,6 +18,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "time/tzdata"
 
+	"travellog/internal/admin"
 	"travellog/internal/auth"
 	"travellog/internal/config"
 	"travellog/internal/httpapi"
@@ -138,7 +139,17 @@ func run(cfg config.Config, addr string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	return serve(addr, serverChain(newMux(db, log, mount), log, cfg.RequestTimeout), log)
+	panel := func(mux *http.ServeMux) {
+		admin.Mount(mux, admin.Deps{
+			Password: cfg.AdminPassword,
+			Sessions: admin.NewSessions(),
+			Now:      time.Now,
+			Log:      log,
+			Dev:      cfg.Development,
+		})
+	}
+
+	return serve(addr, serverChain(newMux(db, log, mount, panel), log, cfg.RequestTimeout), log)
 }
 
 // pinger is the half of *sql.DB that /healthz needs.
