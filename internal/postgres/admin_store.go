@@ -245,11 +245,8 @@ func (s AdminStore) RevokeSessionByID(ctx context.Context, sessionID string) err
 	return nil
 }
 
-// DeleteTraveller removes the traveller, everything eleven foreign keys cascade
-// from them, and answers the object ids read before the rows went.
-//
-// It holds the traveller's advisory lock, so a delete cannot interleave with a
-// write that client is making.
+// DeleteTraveller removes the traveller and all eleven cascades, under their
+// advisory lock, answering the object ids read before the rows went.
 func (s AdminStore) DeleteTraveller(ctx context.Context, id string) ([]string, error) {
 	objects := []string{}
 
