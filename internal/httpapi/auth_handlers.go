@@ -72,10 +72,9 @@ func (d Deps) photos() logbook.Service {
 
 // credentials is both request bodies.
 type credentials struct {
-	Email      string `json:"email"`
-	Passphrase string `json:"passphrase"`
-	Code       string `json:"code"`
-	Invite     string `json:"invite"`
+	Email  string `json:"email"`
+	Code   string `json:"code"`
+	Invite string `json:"invite"`
 }
 
 // travellerBody is register's 201.
@@ -207,7 +206,7 @@ func register(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		tr, err := deps.Auth.RegisterWithInvite(r.Context(), body.Email, body.Passphrase, body.Invite)
+		tr, err := deps.Auth.RegisterWithInvite(r.Context(), body.Email, body.Invite)
 		if err != nil {
 			writeAuthFailure(w, r, deps.Log, err)
 			return
@@ -226,13 +225,7 @@ func signIn(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		var issued auth.Issued
-		var err error
-		if body.Code != "" {
-			issued, err = deps.Auth.SignInWithCode(r.Context(), body.Email, body.Code)
-		} else {
-			issued, err = deps.Auth.SignIn(r.Context(), body.Email, body.Passphrase)
-		}
+		issued, err := deps.Auth.SignInWithCode(r.Context(), body.Email, body.Code)
 		if err != nil {
 			writeAuthFailure(w, r, deps.Log, err)
 			return
@@ -340,8 +333,6 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 		httpx.WriteFieldError(w, r, "invite")
 	case errors.Is(err, auth.ErrBadCredentials), errors.Is(err, auth.ErrNoSession):
 		httpx.WriteError(w, r, httpx.CodeUnauthenticated)
-	case errors.Is(err, auth.ErrBusy):
-		httpx.WriteError(w, r, httpx.CodeRateLimited)
 	case httpx.DependencyIsDown(err):
 		logFailure(r, log, err)
 		httpx.WriteError(w, r, httpx.CodeTimeout)

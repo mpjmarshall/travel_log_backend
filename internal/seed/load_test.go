@@ -53,7 +53,6 @@ func aTraveller(id string) seed.Traveller {
 	return seed.Traveller{
 		ID:             id,
 		Email:          "seed@travellog.test",
-		PassphraseHash: "$argon2id$stub",
 		LogbookVersion: 1,
 		CreatedAt:      seed.Epoch,
 	}
@@ -514,7 +513,7 @@ func TestLoadRefusesATravellerWhoHasRegisteredAndWrittenNothing(t *testing.T) {
 	db := freshDatabase(t)
 
 	registered, err := postgres.AuthStore{DB: db}.CreateTraveller(t.Context(),
-		"owner@example.com", "$argon2id$stub")
+		"owner@example.com")
 	if err != nil {
 		t.Fatalf("registering the owner: %v", err)
 	}

@@ -119,7 +119,7 @@ func TestDeletingTheTravellerLeavesTheInviteSpent(t *testing.T) {
 
 func anotherTraveller(t *testing.T, db *sql.DB, email string) string {
 	t.Helper()
-	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), email, "$argon2id$stub")
+	tr, err := AuthStore{DB: db}.CreateTraveller(context.Background(), email)
 	if err != nil {
 		t.Fatalf("creating %s: %v", email, err)
 	}

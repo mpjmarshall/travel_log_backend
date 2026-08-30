@@ -22,7 +22,6 @@ var allVars = []string{
 	"AUTH_RATE_LIMIT_PER_MIN",
 	"TRAVELLER_RATE_LIMIT_PER_MIN",
 	"PUBLIC_RATE_LIMIT_PER_MIN",
-	"ARGON2_MAX_CONCURRENT",
 	"REQUEST_TIMEOUT",
 	"S3_INTERNAL_ENDPOINT",
 	"S3_PUBLIC_BASE_URL",
@@ -46,7 +45,6 @@ func complete() map[string]string {
 		"AUTH_RATE_LIMIT_PER_MIN":      "10",
 		"TRAVELLER_RATE_LIMIT_PER_MIN": "600",
 		"PUBLIC_RATE_LIMIT_PER_MIN":    "120",
-		"ARGON2_MAX_CONCURRENT":        "2",
 		"REQUEST_TIMEOUT":              "15s",
 		"S3_INTERNAL_ENDPOINT":         "http://minio:9000",
 		"S3_PUBLIC_BASE_URL":           "http://127.0.0.1:9000",
@@ -92,29 +90,6 @@ func with(key, value string) map[string]string {
 }
 
 // All three missing variables are reported at once, not one per run.
-func TestLoadReportsAllThreeMissingVariablesAtOnce(t *testing.T) {
-	missing := []string{"DATABASE_URL", "DB_MAX_IDLE_CONNS", "ARGON2_MAX_CONCURRENT"}
-	setEnv(t, without(missing...))
-
-	_, err := config.Load()
-	if err == nil {
-		t.Fatal("Load() = nil error with three variables unset, want an error")
-	}
-	for _, name := range missing {
-		if !strings.Contains(err.Error(), name) {
-			t.Errorf("error does not name %s:\n%s", name, err)
-		}
-	}
-	for _, name := range allVars {
-		if slicesContains(missing, name) {
-			continue
-		}
-		if strings.Contains(err.Error(), name) {
-			t.Errorf("error names %s, which is set:\n%s", name, err)
-		}
-	}
-}
-
 func TestLoadNamesEveryVariableWhenTheEnvironmentIsEmpty(t *testing.T) {
 	setEnv(t, map[string]string{})
 
@@ -173,7 +148,6 @@ func TestLoadReadsEveryValueFromACompleteEnvironment(t *testing.T) {
 		AuthRateLimitPerMin:      10,
 		TravellerRateLimitPerMin: 600,
 		PublicRateLimitPerMin:    120,
-		Argon2MaxConcurrent:      2,
 		RequestTimeout:           15 * time.Second,
 		S3InternalEndpoint:       "http://minio:9000",
 		S3PublicBaseURL:          "http://127.0.0.1:9000",
@@ -212,68 +186,6 @@ func TestLoadAcceptsEveryLogLevelInAnyCase(t *testing.T) {
 }
 
 // Table-driven over every rejection.
-func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		key   string
-		value string
-		why   string
-	}{
-		{"port is not a number", "PORT", "http", "SetAddr would listen on a name the kernel cannot bind"},
-		{"port is zero", "PORT", "0", "port 0 asks the kernel for any free port; the container publishes 8080"},
-		{"port is above the range", "PORT", "65536", "outside the 16-bit port space"},
-		{"port is negative", "PORT", "-1", "outside the 16-bit port space"},
-		{"log level is unknown", "LOG_LEVEL", "verbose", "slog has four levels and this is not one"},
-		{"max open is not a number", "DB_MAX_OPEN_CONNS", "eight", "strconv"},
-		{"max idle is not a number", "DB_MAX_IDLE_CONNS", "four", "strconv"},
-		{"rate limit is not a number", "AUTH_RATE_LIMIT_PER_MIN", "ten", "strconv"},
-		{"traveller rate limit is not a number", "TRAVELLER_RATE_LIMIT_PER_MIN", "six hundred", "strconv"},
-		{"argon2 concurrency is not a number", "ARGON2_MAX_CONCURRENT", "two", "strconv"},
-		{"max open is zero", "DB_MAX_OPEN_CONNS", "0", "database/sql reads 0 as UNLIMITED, which removes the ceiling DEC-21 sizes Argon2 against"},
-		{"max open is negative", "DB_MAX_OPEN_CONNS", "-1", "same as 0 to database/sql"},
-		{"max idle is negative", "DB_MAX_IDLE_CONNS", "-1", "database/sql reads any n<=0 as no idle connections; say 0 and mean it"},
-		{"rate limit is zero", "AUTH_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every login, which is an outage spelled as a setting"},
-		{"traveller rate limit is zero", "TRAVELLER_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every authenticated request, which is the app switched off"},
-		{"argon2 concurrency is zero", "ARGON2_MAX_CONCURRENT", "0", "a zero-capacity semaphore blocks the first login forever"},
-		{"request timeout has no unit", "REQUEST_TIMEOUT", "15", "a bare number is ambiguous and ParseDuration refuses it, which is the point of a duration"},
-		{"request timeout is not a duration", "REQUEST_TIMEOUT", "fifteen", "ParseDuration"},
-		{"request timeout is zero", "REQUEST_TIMEOUT", "0s", "http.TimeoutHandler reads a non-positive duration as 'time out immediately', so every request answers 503"},
-		{"request timeout is negative", "REQUEST_TIMEOUT", "-1s", "same as zero to http.TimeoutHandler"},
-		{"request timeout is below the floor", "REQUEST_TIMEOUT", "500ms", "one Argon2id hash at 64 MiB does not finish inside it, so every sign-in answers 503"},
-		{"request timeout is above the ceiling", "REQUEST_TIMEOUT", "120s", "a handler allowed to outlive the connection's own write deadline"},
-
-		{"the internal endpoint has no scheme", "S3_INTERNAL_ENDPOINT", "minio:9000", "minio.New needs a host and a transport, and a bare host:port gives neither"},
-		{"the internal endpoint is a scheme we do not speak", "S3_INTERNAL_ENDPOINT", "s3://minio:9000", "only http and https"},
-		{"the internal endpoint has no host", "S3_INTERNAL_ENDPOINT", "http://", "a signature covers the host"},
-		{"the public base has no scheme", "S3_PUBLIC_BASE_URL", "127.0.0.1:9000", "the phone connects to this one, and it is what the signature covers"},
-		{"the public base is not a URL at all", "S3_PUBLIC_BASE_URL", "http://a b c", "url.Parse"},
-
-		{"the private lifetime has no unit", "S3_PRESIGN_TTL_PRIVATE", "120", "a bare number is ambiguous and ParseDuration refuses it"},
-		{"the private lifetime is below the signer's floor", "S3_PRESIGN_TTL_PRIVATE", "500ms", "minio-go refuses an expiry under a second"},
-		{"the private lifetime is zero", "S3_PRESIGN_TTL_PRIVATE", "0s", "every minted URL would be expired on arrival"},
-		{"the public lifetime is above the signer's ceiling", "S3_PRESIGN_TTL_PUBLIC", "169h", "SigV4 presigned URLs cap at seven days"},
-		{"the public lifetime is not a duration", "S3_PRESIGN_TTL_PUBLIC", "fifteen", "ParseDuration"},
-
-		{"the media bound is not a number", "MEDIA_MAX_BYTES", "twenty-five megabytes", "strconv"},
-		{"the media bound is zero", "MEDIA_MAX_BYTES", "0", "a ceiling of zero refuses every upload, which is a feature switched off by a setting that reads like a safety measure"},
-		{"the media bound is negative", "MEDIA_MAX_BYTES", "-1", "same as zero"},
-		{"the media bound is below the fixture's own largest object", "MEDIA_MAX_BYTES", "555375", "one byte under hero-mountain.png, and `make seed` is where it would be found"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			setEnv(t, with(tc.key, tc.value))
-
-			_, err := config.Load()
-			if err == nil {
-				t.Fatalf("Load() = nil error with %s=%q, want an error (%s)", tc.key, tc.value, tc.why)
-			}
-			if !strings.Contains(err.Error(), tc.key) {
-				t.Errorf("error does not name %s:\n%s", tc.key, err)
-			}
-		})
-	}
-}
-
-// measured, in $(go env goroot)/src/database/sql/sql.go, SetMaxIdleConns.
 func TestLoadRejectsMoreIdleConnectionsThanOpenOnes(t *testing.T) {
 	env := complete()
 	env["DB_MAX_OPEN_CONNS"] = "4"
@@ -324,3 +236,87 @@ func slicesContains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+func TestLoadReportsEveryMissingVariableAtOnce(t *testing.T) {
+	missing := []string{"DATABASE_URL", "DB_MAX_IDLE_CONNS"}
+	setEnv(t, without(missing...))
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() = nil error with three variables unset, want an error")
+	}
+	for _, name := range missing {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error does not name %s:\n%s", name, err)
+		}
+	}
+	for _, name := range allVars {
+		if slicesContains(missing, name) {
+			continue
+		}
+		if strings.Contains(err.Error(), name) {
+			t.Errorf("error names %s, which is set:\n%s", name, err)
+		}
+	}
+}
+
+func TestLoadRejectsInvalidValuesAndNamesTheVariable(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value string
+		why   string
+	}{
+		{"port is not a number", "PORT", "http", "SetAddr would listen on a name the kernel cannot bind"},
+		{"port is zero", "PORT", "0", "port 0 asks the kernel for any free port; the container publishes 8080"},
+		{"port is above the range", "PORT", "65536", "outside the 16-bit port space"},
+		{"port is negative", "PORT", "-1", "outside the 16-bit port space"},
+		{"log level is unknown", "LOG_LEVEL", "verbose", "slog has four levels and this is not one"},
+		{"max open is not a number", "DB_MAX_OPEN_CONNS", "eight", "strconv"},
+		{"max idle is not a number", "DB_MAX_IDLE_CONNS", "four", "strconv"},
+		{"rate limit is not a number", "AUTH_RATE_LIMIT_PER_MIN", "ten", "strconv"},
+		{"traveller rate limit is not a number", "TRAVELLER_RATE_LIMIT_PER_MIN", "six hundred", "strconv"},
+		{"max open is zero", "DB_MAX_OPEN_CONNS", "0", "database/sql reads 0 as UNLIMITED, which removes the ceiling DEC-21 sizes Argon2 against"},
+		{"max open is negative", "DB_MAX_OPEN_CONNS", "-1", "same as 0 to database/sql"},
+		{"max idle is negative", "DB_MAX_IDLE_CONNS", "-1", "database/sql reads any n<=0 as no idle connections; say 0 and mean it"},
+		{"rate limit is zero", "AUTH_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every login, which is an outage spelled as a setting"},
+		{"traveller rate limit is zero", "TRAVELLER_RATE_LIMIT_PER_MIN", "0", "a limit of zero refuses every authenticated request, which is the app switched off"},
+		{"request timeout has no unit", "REQUEST_TIMEOUT", "15", "a bare number is ambiguous and ParseDuration refuses it, which is the point of a duration"},
+		{"request timeout is not a duration", "REQUEST_TIMEOUT", "fifteen", "ParseDuration"},
+		{"request timeout is zero", "REQUEST_TIMEOUT", "0s", "http.TimeoutHandler reads a non-positive duration as 'time out immediately', so every request answers 503"},
+		{"request timeout is negative", "REQUEST_TIMEOUT", "-1s", "same as zero to http.TimeoutHandler"},
+		{"request timeout is below the floor", "REQUEST_TIMEOUT", "500ms", "one Argon2id hash at 64 MiB does not finish inside it, so every sign-in answers 503"},
+		{"request timeout is above the ceiling", "REQUEST_TIMEOUT", "120s", "a handler allowed to outlive the connection's own write deadline"},
+
+		{"the internal endpoint has no scheme", "S3_INTERNAL_ENDPOINT", "minio:9000", "minio.New needs a host and a transport, and a bare host:port gives neither"},
+		{"the internal endpoint is a scheme we do not speak", "S3_INTERNAL_ENDPOINT", "s3://minio:9000", "only http and https"},
+		{"the internal endpoint has no host", "S3_INTERNAL_ENDPOINT", "http://", "a signature covers the host"},
+		{"the public base has no scheme", "S3_PUBLIC_BASE_URL", "127.0.0.1:9000", "the phone connects to this one, and it is what the signature covers"},
+		{"the public base is not a URL at all", "S3_PUBLIC_BASE_URL", "http://a b c", "url.Parse"},
+
+		{"the private lifetime has no unit", "S3_PRESIGN_TTL_PRIVATE", "120", "a bare number is ambiguous and ParseDuration refuses it"},
+		{"the private lifetime is below the signer's floor", "S3_PRESIGN_TTL_PRIVATE", "500ms", "minio-go refuses an expiry under a second"},
+		{"the private lifetime is zero", "S3_PRESIGN_TTL_PRIVATE", "0s", "every minted URL would be expired on arrival"},
+		{"the public lifetime is above the signer's ceiling", "S3_PRESIGN_TTL_PUBLIC", "169h", "SigV4 presigned URLs cap at seven days"},
+		{"the public lifetime is not a duration", "S3_PRESIGN_TTL_PUBLIC", "fifteen", "ParseDuration"},
+
+		{"the media bound is not a number", "MEDIA_MAX_BYTES", "twenty-five megabytes", "strconv"},
+		{"the media bound is zero", "MEDIA_MAX_BYTES", "0", "a ceiling of zero refuses every upload, which is a feature switched off by a setting that reads like a safety measure"},
+		{"the media bound is negative", "MEDIA_MAX_BYTES", "-1", "same as zero"},
+		{"the media bound is below the fixture's own largest object", "MEDIA_MAX_BYTES", "555375", "one byte under hero-mountain.png, and `make seed` is where it would be found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setEnv(t, with(tc.key, tc.value))
+
+			_, err := config.Load()
+			if err == nil {
+				t.Fatalf("Load() = nil error with %s=%q, want an error (%s)", tc.key, tc.value, tc.why)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("error does not name %s:\n%s", tc.key, err)
+			}
+		})
+	}
+}
+
+// measured, in $(go env goroot)/src/database/sql/sql.go, SetMaxIdleConns.

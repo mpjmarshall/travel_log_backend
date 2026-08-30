@@ -49,7 +49,6 @@ services:
       # sign-in. It does not bind behind a proxy until ClientKey learns
       # X-Forwarded-For; Caddy is deferred.
       PUBLIC_RATE_LIMIT_PER_MIN: ${PUBLIC_RATE_LIMIT_PER_MIN:-120}
-      ARGON2_MAX_CONCURRENT: ${ARGON2_MAX_CONCURRENT:-2}
       # DEC-96's per-request bound. httpx.Timeout was written at VS3 and had
       # ZERO production call sites for four steps, because main.go had no
       # variable to read and inventing one there would have been a

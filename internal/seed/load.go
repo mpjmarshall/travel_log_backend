@@ -128,11 +128,11 @@ func insertSteps(d *Dataset) []insertStep {
 func travellerStep(d *Dataset) insertStep {
 	step := insertStep{
 		table:   "travellers",
-		columns: []string{"id", "email", "passphrase_hash", "name", "logbook_version", "created_at"},
+		columns: []string{"id", "email", "name", "logbook_version", "created_at"},
 		casts:   []string{"::uuid", "", "", "", "", ""},
 	}
 	for _, t := range d.Travellers {
-		step.rows = append(step.rows, []any{t.ID, t.Email, t.PassphraseHash, t.Name, t.LogbookVersion, t.CreatedAt})
+		step.rows = append(step.rows, []any{t.ID, t.Email, t.Name, t.LogbookVersion, t.CreatedAt})
 	}
 	return step
 }

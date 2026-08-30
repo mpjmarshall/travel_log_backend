@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,16 +146,9 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 	t.Helper()
 	log := quietLog()
 
-	gate, err := auth.NewGate(4)
-	if err != nil {
-		t.Fatalf("NewGate: %v", err)
-	}
-	service := &auth.Service{
-		Store: postgres.AuthStore{DB: db},
-		Hasher: auth.Capped{Gate: gate, Hasher: auth.Argon2id{Params: auth.Params{
-			Memory: 8 << 10, Time: 1, Threads: 1, KeyLen: 16, SaltLen: 8,
-		}}},
-	}
+	service := &auth.Service{Store: postgres.AuthStore{DB: db}}
+
+	posted := &recordingMail{}
 
 	mux := http.NewServeMux()
 	httpapi.Mount(mux, httpapi.Deps{
@@ -167,7 +161,7 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		Walks:          postgres.WalkStore{DB: db},
 		Public:         postgres.ShareReadStore{DB: db},
 		Log:            log,
-		Mail:           mail.SenderFunc(func(context.Context, string, mail.Message) error { return nil }),
+		Mail:           posted,
 		AuthLimit:      httpx.NewLimiter(1000, nil),
 		TravellerLimit: httpx.NewLimiter(1000, nil),
 		PublicLimit:    httpx.NewLimiter(1000, nil),
@@ -184,10 +178,10 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 	}
 
 	const credentials = `{"email":"lock@travellog.test","passphrase":"correct-horse-battery-staple","invite":"` + invite + `"}`
-	post := func(path string) map[string]any {
+	postBody := func(path, body string) map[string]any {
 		t.Helper()
 		resp, err := server.Client().Post(server.URL+path, "application/json",
-			strings.NewReader(credentials))
+			strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("POST %s: %v", path, err)
 		}
@@ -201,8 +195,20 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 		}
 		return out
 	}
+	post := func(path string) map[string]any { return postBody(path, credentials) }
 	post("/v1/auth/register")
-	issued := post("/v1/auth/session")
+
+	if resp, err := server.Client().Post(server.URL+"/v1/auth/code", "application/json",
+		strings.NewReader(`{"email":"lock@travellog.test"}`)); err != nil {
+		t.Fatalf("asking for a code: %v", err)
+	} else {
+		resp.Body.Close()
+	}
+	waitFor(t, func() bool { return posted.count() > 0 })
+	code := posted.codeFor(t, "lock@travellog.test")
+
+	issued := postBody("/v1/auth/session",
+		`{"email":"lock@travellog.test","code":"`+code+`"}`)
 	token, held := issued["token"].(string)
 	if !held {
 		t.Fatalf("the sign-in answered no token: %v", issued)
@@ -230,4 +236,53 @@ func scopedDSN(t *testing.T, schema string) string {
 	q.Set("options", "-c search_path="+schema)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// recordingMail is this package's own, because the external test package
+// cannot see the one beside the handlers.
+type recordingMail struct {
+	mu   sync.Mutex
+	sent []struct{ To, Text string }
+}
+
+func (r *recordingMail) Send(_ context.Context, to string, m mail.Message) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, struct{ To, Text string }{to, m.Text})
+	return nil
+}
+
+func (r *recordingMail) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sent)
+}
+
+func (r *recordingMail) codeFor(t *testing.T, to string) string {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.sent) - 1; i >= 0; i-- {
+		if r.sent[i].To != to {
+			continue
+		}
+		for _, f := range strings.Fields(r.sent[i].Text) {
+			if len(f) == auth.CodeDigits && strings.Trim(f, "0123456789") == "" {
+				return f
+			}
+		}
+	}
+	t.Fatalf("no code was mailed to %s", to)
+	return ""
+}
+
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	for range 200 {
+		if ok() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the condition never became true")
 }

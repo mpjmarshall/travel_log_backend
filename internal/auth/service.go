@@ -70,8 +70,8 @@ type Issued struct {
 // Store is the storage this package needs, declared here and satisfied by
 // internal/postgres.
 type Store interface {
-	CreateTraveller(ctx context.Context, email, passphraseHash string) (Traveller, error)
-	TravellerByEmail(ctx context.Context, email string) (Traveller, string, error)
+	CreateTraveller(ctx context.Context, email string) (Traveller, error)
+	TravellerByEmail(ctx context.Context, email string) (Traveller, error)
 	CreateSession(ctx context.Context, travellerID string, tokenHash []byte, expiresAt time.Time) (string, error)
 	SessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, Traveller, error)
 
@@ -99,8 +99,7 @@ type Store interface {
 // Service is the one real addition: the business rules, so a handler
 // translates HTTP and nothing more.
 type Service struct {
-	Store  Store
-	Hasher Hasher
+	Store Store
 
 	Now func() time.Time
 
@@ -109,14 +108,6 @@ type Service struct {
 
 // dummyHash is a real argon2id encoding, at the shipped parameters, of a
 // passphrase nobody holds.
-var dummyHash = func() string {
-	encoded, err := (Argon2id{Params: DefaultParams}).Hash(
-		"a passphrase nobody holds, hashed so an unknown address costs what a wrong one does")
-	if err != nil {
-		panic("auth: the decoy hash could not be computed: " + err.Error())
-	}
-	return encoded
-}()
 
 // emailPattern is deliberately small.
 var emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
@@ -137,35 +128,24 @@ func (s *Service) ttl() time.Duration {
 
 // Register creates a traveller and mints no session, and refuses once this
 // log has one.
-func (s *Service) Register(ctx context.Context, email, passphrase string) (Traveller, error) {
+func (s *Service) Register(ctx context.Context, email string) (Traveller, error) {
 	if err := checkEmail(email); err != nil {
 		return Traveller{}, err
 	}
-	if err := checkPassphrase(passphrase); err != nil {
-		return Traveller{}, err
-	}
-
-	encoded, err := s.Hasher.Hash(passphrase)
-	if err != nil {
-		return Traveller{}, err
-	}
-	return s.Store.CreateTraveller(ctx, email, encoded)
+	return s.Store.CreateTraveller(ctx, email)
 }
 
 // RegisterWithInvite is Register behind a single-use invite. The claim comes
 // after the create, because the claim records who spent it.
-func (s *Service) RegisterWithInvite(ctx context.Context, email, passphrase, invite string) (Traveller, error) {
+func (s *Service) RegisterWithInvite(ctx context.Context, email, invite string) (Traveller, error) {
 	if err := checkEmail(email); err != nil {
-		return Traveller{}, err
-	}
-	if err := checkPassphrase(passphrase); err != nil {
 		return Traveller{}, err
 	}
 	if strings.TrimSpace(invite) == "" {
 		return Traveller{}, InvalidFieldError{Field: "invite", Why: "an invite is required"}
 	}
 
-	tr, err := s.Register(ctx, email, passphrase)
+	tr, err := s.Register(ctx, email)
 	if err != nil {
 		return Traveller{}, err
 	}
@@ -173,45 +153,6 @@ func (s *Service) RegisterWithInvite(ctx context.Context, email, passphrase, inv
 		return Traveller{}, err
 	}
 	return tr, nil
-}
-
-// SignIn resolves an address in any casing and answers a fresh opaque token.
-func (s *Service) SignIn(ctx context.Context, email, passphrase string) (Issued, error) {
-	if err := checkEmail(email); err != nil {
-		return Issued{}, err
-	}
-	if err := checkPassphrase(passphrase); err != nil {
-		return Issued{}, err
-	}
-
-	tr, encoded, err := s.Store.TravellerByEmail(ctx, email)
-	switch {
-	case errors.Is(err, ErrNoTraveller):
-		if _, err := s.Hasher.Verify(dummyHash, passphrase); err != nil {
-			return Issued{}, err
-		}
-		return Issued{}, ErrBadCredentials
-	case err != nil:
-		return Issued{}, err
-	}
-
-	ok, err := s.Hasher.Verify(encoded, passphrase)
-	if err != nil {
-		return Issued{}, err
-	}
-	if !ok {
-		return Issued{}, ErrBadCredentials
-	}
-
-	plaintext, hash, err := NewToken()
-	if err != nil {
-		return Issued{}, err
-	}
-	expires := s.now().Add(s.ttl())
-	if _, err := s.Store.CreateSession(ctx, tr.ID, hash, expires); err != nil {
-		return Issued{}, err
-	}
-	return Issued{Token: plaintext, ExpiresAt: expires, Traveller: tr}, nil
 }
 
 // Authenticate resolves a bearer token, and writes `last_used_at` at most

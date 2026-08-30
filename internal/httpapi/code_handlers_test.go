@@ -31,6 +31,17 @@ func (s *sentMail) Send(_ context.Context, to string, m mail.Message) error {
 	return nil
 }
 
+func (s *sentMail) hasFor(to string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.sent {
+		if m.To == to {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *sentMail) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -41,11 +52,11 @@ func (s *sentMail) codeFor(t *testing.T, to string) string {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, m := range s.sent {
-		if m.To != to {
+	for i := len(s.sent) - 1; i >= 0; i-- {
+		if s.sent[i].To != to {
 			continue
 		}
-		for _, f := range strings.Fields(m.Text) {
+		for _, f := range strings.Fields(s.sent[i].Text) {
 			if len(f) == auth.CodeDigits && strings.Trim(f, "0123456789") == "" {
 				return f
 			}

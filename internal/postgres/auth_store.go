@@ -17,13 +17,13 @@ type AuthStore struct{ DB *sql.DB }
 
 // createTravellerSQL relies on the functional unique index by name of its
 // expression.
-const createTravellerSQL = `INSERT INTO travellers (id, email, passphrase_hash)
-	VALUES (gen_random_uuid(), $1, $2)
+const createTravellerSQL = `INSERT INTO travellers (id, email)
+	VALUES (gen_random_uuid(), $1)
 	ON CONFLICT (lower(email)) DO NOTHING
 	RETURNING id, email, name`
 
 // travellerByEmailSQL is the rule as a statement.
-const travellerByEmailSQL = `SELECT id, email, name, passphrase_hash
+const travellerByEmailSQL = `SELECT id, email, name
 	FROM travellers WHERE lower(email) = lower($1)`
 
 const createSessionSQL = `INSERT INTO sessions (id, traveller_id, token_hash, expires_at)
@@ -47,11 +47,11 @@ const touchSessionSQL = `UPDATE sessions SET last_used_at = $3
 
 // CreateTraveller inserts one, and answers auth.ErrEmailTaken when the
 // address is already held in any casing.
-func (s AuthStore) CreateTraveller(ctx context.Context, email, passphraseHash string) (auth.Traveller, error) {
+func (s AuthStore) CreateTraveller(ctx context.Context, email string) (auth.Traveller, error) {
 	var tr auth.Traveller
 	var name sql.NullString
 
-	switch err := s.DB.QueryRowContext(ctx, createTravellerSQL, email, passphraseHash).
+	switch err := s.DB.QueryRowContext(ctx, createTravellerSQL, email).
 		Scan(&tr.ID, &tr.Email, &name); {
 	case errors.Is(err, sql.ErrNoRows):
 		return auth.Traveller{}, fmt.Errorf("%w: %s", auth.ErrEmailTaken, email)
@@ -63,19 +63,18 @@ func (s AuthStore) CreateTraveller(ctx context.Context, email, passphraseHash st
 
 // TravellerByEmail resolves an address in any casing, and answers the
 // passphrase hash beside it.
-func (s AuthStore) TravellerByEmail(ctx context.Context, email string) (auth.Traveller, string, error) {
+func (s AuthStore) TravellerByEmail(ctx context.Context, email string) (auth.Traveller, error) {
 	var tr auth.Traveller
 	var name sql.NullString
-	var hash string
 
 	switch err := s.DB.QueryRowContext(ctx, travellerByEmailSQL, email).
-		Scan(&tr.ID, &tr.Email, &name, &hash); {
+		Scan(&tr.ID, &tr.Email, &name); {
 	case errors.Is(err, sql.ErrNoRows):
-		return auth.Traveller{}, "", auth.ErrNoTraveller
+		return auth.Traveller{}, auth.ErrNoTraveller
 	case err != nil:
-		return auth.Traveller{}, "", fmt.Errorf("postgres: looking up a traveller: %w", err)
+		return auth.Traveller{}, fmt.Errorf("postgres: looking up a traveller: %w", err)
 	}
-	return named(tr, name), hash, nil
+	return named(tr, name), nil
 }
 
 // CreateSession writes a session under the traveller's lock and moves no

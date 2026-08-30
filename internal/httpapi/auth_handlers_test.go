@@ -38,7 +38,6 @@ type fakeStore struct {
 
 type stored struct {
 	auth.Traveller
-	hash string
 }
 
 func newStore() *fakeStore {
@@ -49,7 +48,7 @@ func newStore() *fakeStore {
 	}
 }
 
-func (f *fakeStore) CreateTraveller(_ context.Context, email, hash string) (auth.Traveller, error) {
+func (f *fakeStore) CreateTraveller(_ context.Context, email string) (auth.Traveller, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failWith != nil {
@@ -61,21 +60,21 @@ func (f *fakeStore) CreateTraveller(_ context.Context, email, hash string) (auth
 	}
 	f.next++
 	tr := auth.Traveller{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", f.next), Email: email}
-	f.travellers[key] = stored{Traveller: tr, hash: hash}
+	f.travellers[key] = stored{Traveller: tr}
 	return tr, nil
 }
 
-func (f *fakeStore) TravellerByEmail(_ context.Context, email string) (auth.Traveller, string, error) {
+func (f *fakeStore) TravellerByEmail(_ context.Context, email string) (auth.Traveller, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failWith != nil {
-		return auth.Traveller{}, "", f.failWith
+		return auth.Traveller{}, f.failWith
 	}
 	held, ok := f.travellers[strings.ToLower(email)]
 	if !ok {
-		return auth.Traveller{}, "", auth.ErrNoTraveller
+		return auth.Traveller{}, auth.ErrNoTraveller
 	}
-	return held.Traveller, held.hash, nil
+	return held.Traveller, nil
 }
 
 func (f *fakeStore) CreateSession(_ context.Context, travellerID string, tokenHash []byte, expiresAt time.Time) (string, error) {
@@ -177,9 +176,6 @@ const fixedNow = "2027-10-12T09:00:00Z"
 
 // cheapArgon keeps the suite honest about time rather than about cost: the
 // shipped parameters are 64 MiB a call and this file makes dozens of them.
-var cheapArgon = auth.Argon2id{Params: auth.Params{
-	Memory: 8 << 10, Time: 1, Threads: 1, KeyLen: 16, SaltLen: 8,
-}}
 
 type harness struct {
 	server  *httptest.Server
@@ -192,6 +188,7 @@ type harness struct {
 
 	bearerToken string
 	logs        *bytes.Buffer
+	posted      *sentMail
 	client      *http.Client
 	addrs       *addressLog
 }
@@ -234,7 +231,6 @@ type options struct {
 	travellerPerMin int
 	publicPerMin    int
 	maxConcurrent   int
-	hasher          auth.Hasher
 	mailer          mail.Sender
 }
 
@@ -252,9 +248,6 @@ func newHarness(t *testing.T, opt options) *harness {
 	if opt.maxConcurrent == 0 {
 		opt.maxConcurrent = 8
 	}
-	if opt.hasher == nil {
-		opt.hasher = cheapArgon
-	}
 
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(logs, nil))
@@ -264,13 +257,8 @@ func newHarness(t *testing.T, opt options) *harness {
 		return at
 	}
 
-	gate, err := auth.NewGate(opt.maxConcurrent)
-	if err != nil {
-		t.Fatalf("NewGate: %v", err)
-	}
 	service := &auth.Service{
-		Store:  store,
-		Hasher: auth.Capped{Hasher: opt.hasher, Gate: gate},
+		Store: store,
 		Now: func() time.Time {
 			at, _ := time.Parse(time.RFC3339, fixedNow)
 			return at
@@ -287,8 +275,9 @@ func newHarness(t *testing.T, opt options) *harness {
 	rows := newFakeMedia()
 	shared := &fakePublic{books: books}
 	counted := &countingObjects{Store: objects}
+	posted := &sentMail{}
 	if opt.mailer == nil {
-		opt.mailer = mail.SenderFunc(func(context.Context, string, mail.Message) error { return nil })
+		opt.mailer = posted
 	}
 
 	deps := Deps{
@@ -334,7 +323,7 @@ func newHarness(t *testing.T, opt options) *harness {
 	return &harness{
 		server: server, store: store, logbook: books, deps: deps,
 		media: rows, objects: objects, public: shared,
-		logs: logs, client: server.Client(), addrs: addrs,
+		logs: logs, client: server.Client(), addrs: addrs, posted: posted,
 	}
 }
 
@@ -559,8 +548,7 @@ func TestRegisterThenSignInGoesThroughTheRealChain(t *testing.T) {
 		`{"email":"A@B.com","passphrase":"a long enough passphrase","invite":"`+testInvite+`"}`); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
-	got := h.post(t, "/v1/auth/session",
-		`{"email":"A@B.com","passphrase":"a long enough passphrase"}`)
+	got := h.signIn(t, "A@B.com")
 	if got.status != http.StatusCreated {
 		t.Errorf("sign in straight after register = %d %s", got.status, got.body)
 	}
@@ -569,10 +557,8 @@ func TestRegisterThenSignInGoesThroughTheRealChain(t *testing.T) {
 func TestABadFieldIs422AndNamesTheField(t *testing.T) {
 	h := newHarness(t, options{})
 	for name, c := range map[string]struct{ body, field string }{
-		"no at sign":    {`{"email":"matt.example.com","passphrase":"a long enough passphrase"}`, "email"},
-		"no email":      {`{"passphrase":"a long enough passphrase"}`, "email"},
-		"short":         {`{"email":"matt@example.com","passphrase":"short"}`, "passphrase"},
-		"no passphrase": {`{"email":"matt@example.com"}`, "passphrase"},
+		"no at sign": {`{"email":"matt.example.com","passphrase":"a long enough passphrase"}`, "email"},
+		"no email":   {`{"passphrase":"a long enough passphrase"}`, "email"},
 	} {
 		got := h.post(t, "/v1/auth/register", c.body)
 		if got.status != http.StatusUnprocessableEntity {
@@ -635,7 +621,7 @@ func TestSignInAnswers201WithATokenAndItsExpiry(t *testing.T) {
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
-	got := h.post(t, "/v1/auth/session", registered)
+	got := h.signIn(t, "matt@example.com")
 	if got.status != http.StatusCreated {
 		t.Fatalf("sign in = %d %s, want 201", got.status, got.body)
 	}
@@ -666,7 +652,7 @@ func TestThePlaintextTokenAppearsInOneBodyAndInNoLogLine(t *testing.T) {
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
-	issued := h.post(t, "/v1/auth/session", registered)
+	issued := h.signIn(t, "matt@example.com")
 	token, _ := issued.decode(t)["token"].(string)
 	if token == "" {
 		t.Fatalf("no token in %s", issued.body)
@@ -683,7 +669,7 @@ func TestThePlaintextTokenAppearsInOneBodyAndInNoLogLine(t *testing.T) {
 		}
 	}
 
-	again := h.post(t, "/v1/auth/session", registered)
+	again := h.signIn(t, "matt@example.com")
 	if second, _ := again.decode(t)["token"].(string); second == token {
 		t.Errorf("two sign-ins answered the same token")
 	}
@@ -704,76 +690,6 @@ func TestBothAuthRoutesAreRateLimited(t *testing.T) {
 			t.Errorf("%s: body = %q", path, last.body)
 		}
 	}
-}
-
-// The own named leg, asserted on the response and not on a timer: the N+1th
-// concurrent login is refused, not made to wait.
-func TestTheNPlusOnethConcurrentLoginIsRefusedWith429(t *testing.T) {
-	const n = 2
-	inner := &parkingHasher{
-		entered: make(chan struct{}, 64),
-		release: make(chan struct{}),
-		real:    cheapArgon,
-	}
-	h := newHarness(t, options{maxConcurrent: n, hasher: inner})
-	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
-		t.Fatalf("register = %d %s", got.status, got.body)
-	}
-	inner.park.Store(true)
-
-	var wg sync.WaitGroup
-	for range n {
-		wg.Add(1)
-		go func() { defer wg.Done(); h.post(t, "/v1/auth/session", registered) }()
-	}
-	for range n {
-		select {
-		case <-inner.entered:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("only some of the %d logins reached the hasher", n)
-		}
-	}
-
-	refused := make(chan answer, 1)
-	go func() { refused <- h.post(t, "/v1/auth/session", registered) }()
-	select {
-	case got := <-refused:
-		if got.status != http.StatusTooManyRequests {
-			t.Errorf("the %dth concurrent login = %d %s, want 429", n+1, got.status, got.body)
-		}
-		if string(got.body) != `{"code":"rate_limited"}` {
-			t.Errorf("body = %q, want %q", got.body, `{"code":"rate_limited"}`)
-		}
-	case <-time.After(5 * time.Second):
-		t.Errorf("the %dth concurrent login is still waiting after 5s — it was QUEUED.\n"+
-			"    DEC-48 rejects queueing by name.", n+1)
-	}
-
-	close(inner.release)
-	wg.Wait()
-}
-
-// parkingHasher holds every call open once `park` is set, so a test can have
-// N logins genuinely in flight at once.
-type parkingHasher struct {
-	real    auth.Hasher
-	entered chan struct{}
-	release chan struct{}
-	park    atomicBool
-}
-
-func (p *parkingHasher) hold() {
-	if !p.park.Load() {
-		return
-	}
-	p.entered <- struct{}{}
-	<-p.release
-}
-
-func (p *parkingHasher) Hash(s string) (string, error) { p.hold(); return p.real.Hash(s) }
-func (p *parkingHasher) Verify(e, s string) (bool, error) {
-	p.hold()
-	return p.real.Verify(e, s)
 }
 
 type atomicBool struct {
@@ -832,7 +748,7 @@ func TestAnAuthenticatedRouteSeesTheTravellerTheTokenNames(t *testing.T) {
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
-	issued := h.post(t, "/v1/auth/session", registered)
+	issued := h.signIn(t, "matt@example.com")
 	token, _ := issued.decode(t)["token"].(string)
 
 	got := h.do(t, http.MethodGet, "/probe", "", "Bearer "+token)
@@ -849,7 +765,7 @@ func TestAStoreFailureUnderTheMiddlewareIs500AndNot401(t *testing.T) {
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
-	issued := h.post(t, "/v1/auth/session", registered)
+	issued := h.signIn(t, "matt@example.com")
 	token, _ := issued.decode(t)["token"].(string)
 
 	h.store.mu.Lock()
@@ -866,17 +782,6 @@ func TestAStoreFailureUnderTheMiddlewareIs500AndNot401(t *testing.T) {
 }
 
 // Is a ruling, and a ruling like this regresses silently.
-func TestMountRefusesToRunWithoutARateLimiter(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Errorf("Mount accepted a nil limiter, so the auth routes would serve\n" +
-				"    unlimited Argon2 work and every DEC-48 leg above would still pass")
-		}
-	}()
-	Mount(http.NewServeMux(), Deps{Auth: &auth.Service{}, Log: slog.Default()})
-}
-
-// The code methods, so this file's fake still satisfies auth.Store.
 func (f *fakeStore) IssueCode(_ context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -947,4 +852,30 @@ func (f *fakeStore) ClaimInvite(_ context.Context, hash []byte, _ string) error 
 	}
 	f.invites[string(hash)] = true
 	return nil
+}
+
+// signIn does the code dance and answers the session route's own reply, so a
+// leg about sign-in still asserts on a real response.
+func (h *harness) signIn(t *testing.T, email string) answer {
+	t.Helper()
+	h.store.clearCode(strings.ToLower(email))
+	before := h.posted.count()
+	if got := h.post(t, "/v1/auth/code", `{"email":"`+email+`"}`); got.status != http.StatusAccepted {
+		t.Fatalf("asking for a code for %s = %d %s", email, got.status, got.body)
+	}
+	waitFor(t, func() bool { return h.posted.count() > before })
+	return h.post(t, "/v1/auth/session",
+		`{"email":"`+email+`","code":"`+h.posted.codeFor(t, email)+`"}`)
+}
+
+// clearCode drops any outstanding code, which resets the throttle too: a
+// second session for one traveller would otherwise be refused a code.
+func (f *fakeStore) clearCode(email string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held, ok := f.travellers[email]
+	if !ok {
+		return
+	}
+	delete(f.codes, held.Traveller.ID)
 }

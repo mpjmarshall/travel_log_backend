@@ -287,7 +287,7 @@ func bearer(t *testing.T, h *harness) string {
 	if got := h.post(t, "/v1/auth/register", registered); got.status != http.StatusCreated {
 		t.Fatalf("register = %d %s", got.status, got.body)
 	}
-	issued := h.post(t, "/v1/auth/session", registered)
+	issued := h.signIn(t, "matt@example.com")
 	if issued.status != http.StatusCreated {
 		t.Fatalf("sign in = %d %s", issued.status, issued.body)
 	}
@@ -313,7 +313,16 @@ func bearerFor(t *testing.T, h *harness, email string) string {
 // two live tokens for one traveller.
 func signInAs(t *testing.T, h *harness, email string) string {
 	t.Helper()
-	issued := h.post(t, "/v1/auth/session", credentialsFor(email))
+	h.store.clearCode(strings.ToLower(email))
+	before := h.posted.count()
+	if got := h.post(t, "/v1/auth/code", `{"email":"`+email+`"}`); got.status != http.StatusAccepted {
+		t.Fatalf("asking for a code for %s = %d %s", email, got.status, got.body)
+	}
+	waitFor(t, func() bool { return h.posted.count() > before })
+	code := h.posted.codeFor(t, email)
+
+	issued := h.post(t, "/v1/auth/session",
+		`{"email":"`+email+`","code":"`+code+`"}`)
 	if issued.status != http.StatusCreated {
 		t.Fatalf("sign in %s = %d %s", email, issued.status, issued.body)
 	}

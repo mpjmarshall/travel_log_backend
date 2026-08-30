@@ -24,7 +24,6 @@ type Config struct {
 	TravellerRateLimitPerMin int
 
 	PublicRateLimitPerMin int
-	Argon2MaxConcurrent   int
 	RequestTimeout        time.Duration
 
 	S3InternalEndpoint string
@@ -75,7 +74,6 @@ func Load() (Config, error) {
 		AuthRateLimitPerMin:      l.atLeast("AUTH_RATE_LIMIT_PER_MIN", 1),
 		TravellerRateLimitPerMin: l.atLeast("TRAVELLER_RATE_LIMIT_PER_MIN", 1),
 		PublicRateLimitPerMin:    l.atLeast("PUBLIC_RATE_LIMIT_PER_MIN", 1),
-		Argon2MaxConcurrent:      l.atLeast("ARGON2_MAX_CONCURRENT", 1),
 		RequestTimeout:           l.duration("REQUEST_TIMEOUT", MinRequestTimeout, MaxRequestTimeout),
 		S3InternalEndpoint:       l.address("S3_INTERNAL_ENDPOINT"),
 		S3PublicBaseURL:          l.address("S3_PUBLIC_BASE_URL"),
