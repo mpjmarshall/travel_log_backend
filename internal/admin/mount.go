@@ -5,6 +5,10 @@ import (
 	"net/http"
 )
 
+// contentSecurityPolicy keeps script to this origin. style-src takes
+// unsafe-inline because htmx injects a style element for its own indicator.
+const contentSecurityPolicy = "default-src 'self'; style-src 'self' 'unsafe-inline'"
+
 // CSRFHeader is what htmx attaches to every request from the panel.
 const CSRFHeader = "X-CSRF-Token"
 
@@ -58,7 +62,7 @@ func (d Deps) guarded(h http.HandlerFunc) http.Handler {
 func securityHeaders(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'")
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
