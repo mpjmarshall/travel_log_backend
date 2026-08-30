@@ -3,7 +3,9 @@
 <thead><tr><th>Traveller</th><th>Signed in</th><th>Last used</th><th></th></tr></thead>
 <tbody>
 {{range .Sessions}}
-  <tr><td>{{.Email}}</td><td>{{.CreatedAt}}</td><td>{{.LastUsedAt}}</td><td></td></tr>
+  <tr><td>{{.Email}}</td><td>{{.CreatedAt}}</td><td>{{.LastUsedAt}}</td>
+      <td><button class="danger" hx-post="/admin/sessions/{{.ID}}/revoke"
+          hx-target="body" hx-confirm="Sign this traveller out on that device?">Revoke</button></td></tr>
 {{else}}
   <tr><td colspan="4" class="note">Nobody is signed in.</td></tr>
 {{end}}

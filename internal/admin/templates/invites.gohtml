@@ -1,5 +1,13 @@
 {{define "content" -}}
 <h1>Invites</h1>
+{{if .Minted}}
+<p class="warn">New invite: <strong>{{.Minted}}</strong><br>
+This is the only time it is shown. It is stored hashed and cannot be read back.</p>
+{{end}}
+<form hx-post="/admin/invites" hx-target="body" class="pager">
+  <input type="text" name="note" placeholder="What is this invite for?">
+  <button type="submit">Mint an invite</button>
+</form>
 {{if .Failed}}<p class="warn">Those invites could not be read.</p>{{end}}
 <table>
 <thead><tr><th>Note</th><th>Minted</th><th>Claimed by</th><th></th></tr></thead>
@@ -10,7 +18,9 @@
     <td>{{.CreatedAt}}</td>
     <td>{{if .Used}}{{if .UsedBy}}{{.UsedBy}}{{else}}<span class="note">a deleted traveller</span>{{end}}
         {{else}}<span class="note">unused</span>{{end}}</td>
-    <td></td>
+    <td>{{if not .Used}}<button class="danger"
+        hx-post="/admin/invites/{{.Hash}}/revoke" hx-target="body"
+        hx-confirm="Revoke this invite? It stops existing.">Revoke</button>{{end}}</td>
   </tr>
 {{else}}
   <tr><td colspan="4" class="note">No invites yet.</td></tr>

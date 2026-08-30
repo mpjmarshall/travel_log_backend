@@ -20,9 +20,9 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	if deps.Password == "" {
 		return
 	}
-	if deps.Store == nil || deps.Render == nil {
-		panic("admin: Mount needs a Store and a Renderer, or every page is a nil " +
-			"dereference on the first request rather than a refusal here")
+	if deps.Store == nil || deps.Writer == nil || deps.Render == nil {
+		panic("admin: Mount needs a Store, a Writer and a Renderer, or every page " +
+			"is a nil dereference on the first request rather than a refusal here")
 	}
 
 	login := Login(deps)
@@ -37,6 +37,10 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	mux.Handle("GET /admin/travellers/{id}", deps.guarded(traveller(deps)))
 	mux.Handle("GET /admin/sessions", deps.guarded(sessionsPage(deps)))
 	mux.Handle("GET /admin/invites", deps.guarded(invitesPage(deps)))
+	mux.Handle("POST /admin/travellers/{id}/name", deps.guarded(renameTraveller(deps)))
+	mux.Handle("POST /admin/invites", deps.guarded(mintInvite(deps)))
+	mux.Handle("POST /admin/invites/{hash}/revoke", deps.guarded(revokeInvite(deps)))
+	mux.Handle("POST /admin/sessions/{id}/revoke", deps.guarded(revokeSession(deps)))
 }
 
 // open is a page nobody has to be signed in for, which is the login alone.

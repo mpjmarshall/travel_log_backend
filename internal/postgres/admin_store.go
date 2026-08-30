@@ -210,3 +210,37 @@ func (s AdminStore) Invites(ctx context.Context) ([]InviteRow, error) {
 	}
 	return out, rows.Err()
 }
+
+// Rename goes through the logbook store so logbook_version moves, or every
+// client keeps showing the old name until something else happens to move it.
+func (s AdminStore) Rename(ctx context.Context, travellerID, name string) (int64, error) {
+	_, version, err := LogbookStore{DB: s.DB}.SetTravellerName(ctx, travellerID, name)
+	return version, err
+}
+
+// MintInvite records a hashed invite. The plaintext never reaches this layer.
+func (s AdminStore) MintInvite(ctx context.Context, hash []byte, note string) error {
+	return AuthStore{DB: s.DB}.MintInvite(ctx, hash, note)
+}
+
+// DeleteInvite revokes by removing the row: an unused invite is a live
+// credential, and the clearest revocation is that it stops existing.
+func (s AdminStore) DeleteInvite(ctx context.Context, hash []byte) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM invite_codes WHERE code_hash = $1`, hash)
+	if err != nil {
+		return fmt.Errorf("postgres: deleting an invite: %w", err)
+	}
+	return nil
+}
+
+// RevokeSessionByID stamps one session rather than deleting it, so the row
+// stays as a record of a session that existed.
+func (s AdminStore) RevokeSessionByID(ctx context.Context, sessionID string) error {
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = now() WHERE id = $1::uuid AND revoked_at IS NULL`,
+		sessionID)
+	if err != nil {
+		return fmt.Errorf("postgres: revoking the session %s: %w", sessionID, err)
+	}
+	return nil
+}

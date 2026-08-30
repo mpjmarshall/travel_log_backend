@@ -198,3 +198,82 @@ func TestInvitesReportWhetherTheyAreSpent(t *testing.T) {
 		t.Errorf("Invites() = %+v, want one unused invite noted 'for matt'", rows)
 	}
 }
+
+func TestRenameMovesTheLogbookVersion(t *testing.T) {
+	store, db := adminStore(t)
+	ctx := context.Background()
+	ada := makeTraveller(t, db, "ada@example.com")
+
+	var before int64
+	if err := db.QueryRow(
+		`SELECT logbook_version FROM travellers WHERE id = $1::uuid`, ada).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := store.Rename(ctx, ada, "Ada Lovelace")
+	if err != nil {
+		t.Fatalf("Rename() = %v", err)
+	}
+	if after <= before {
+		t.Errorf("logbook_version went %d -> %d: a rename that does not move it "+
+			"leaves every client showing the old name until something else does",
+			before, after)
+	}
+
+	var name string
+	if err := db.QueryRow(
+		`SELECT name FROM travellers WHERE id = $1::uuid`, ada).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Ada Lovelace" {
+		t.Errorf("name = %q", name)
+	}
+}
+
+func TestDeletingAnInviteRemovesTheRow(t *testing.T) {
+	store, db := adminStore(t)
+	ctx := context.Background()
+	hash := make([]byte, 32)
+	hash[0] = 7
+
+	if err := store.MintInvite(ctx, hash, "for matt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteInvite(ctx, hash); err != nil {
+		t.Fatalf("DeleteInvite() = %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM invite_codes`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d invites remain: revoking must remove the credential, not mark it", n)
+	}
+}
+
+func TestRevokingASessionTakesItOutOfTheLiveList(t *testing.T) {
+	store, db := adminStore(t)
+	ctx := context.Background()
+	ada := makeTraveller(t, db, "ada@example.com")
+
+	var id string
+	if err := db.QueryRow(
+		`INSERT INTO sessions (traveller_id, id, token_hash, expires_at)
+		 VALUES ($1::uuid, gen_random_uuid(), decode(repeat('00', 32), 'hex'), $2)
+		 RETURNING id::text`,
+		ada, time.Now().Add(time.Hour)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RevokeSessionByID(ctx, id); err != nil {
+		t.Fatalf("RevokeSessionByID() = %v", err)
+	}
+	rows, err := store.Sessions(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("%d sessions still live after revoking the only one", len(rows))
+	}
+}
