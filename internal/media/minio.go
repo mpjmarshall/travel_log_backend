@@ -219,3 +219,16 @@ func ExpiresIn(presigned string) (time.Duration, error) {
 	}
 	return time.Duration(seconds) * time.Second, nil
 }
+
+// Delete removes one object. A key that is not there is not an error: the
+// caller is cleaning up after a row that has already gone.
+func (m *MinIO) Delete(ctx context.Context, key Key) error {
+	path, _, err := Address(key.Traveller, key.Object)
+	if err != nil {
+		return err
+	}
+	if err := m.api.RemoveObject(ctx, m.bucket, path, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("media: delete %s: %w", path, err)
+	}
+	return nil
+}

@@ -4,6 +4,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,5 +276,56 @@ func TestRevokingASessionTakesItOutOfTheLiveList(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Errorf("%d sessions still live after revoking the only one", len(rows))
+	}
+}
+
+func TestDeletingATravellerTakesEveryCascadedRowAndNamesTheirObjects(t *testing.T) {
+	store, db := adminStore(t)
+	ctx := context.Background()
+	ada := makeTraveller(t, db, "ada@example.com")
+	grace := makeTraveller(t, db, "grace@example.com")
+
+	for _, id := range []string{ada, grace} {
+		if _, err := db.Exec(
+			`INSERT INTO trips (traveller_id, id, name) VALUES ($1::uuid, 'trip-1', 'Theirs')`,
+			id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(
+			`INSERT INTO media_objects (traveller_id, id, byte_size, content_type, uploaded_at)
+			 VALUES ($1::uuid, $2, 100, 'image/jpeg', now())`,
+			id, strings.Repeat("a", 64)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	objects, err := store.DeleteTraveller(ctx, ada)
+	if err != nil {
+		t.Fatalf("DeleteTraveller() = %v", err)
+	}
+	if len(objects) != 1 || objects[0] != strings.Repeat("a", 64) {
+		t.Errorf("objects = %v, want ada's one object id: without them the bytes "+
+			"are unreachable for ever", objects)
+	}
+
+	var travellers, trips, media int
+	if err := db.QueryRow(
+		`SELECT (SELECT count(*) FROM travellers), (SELECT count(*) FROM trips),
+		        (SELECT count(*) FROM media_objects)`).Scan(&travellers, &trips, &media); err != nil {
+		t.Fatal(err)
+	}
+	if travellers != 1 || trips != 1 || media != 1 {
+		t.Errorf("after deleting one of two: travellers=%d trips=%d media=%d, want 1 1 1: "+
+			"the cascade must take that traveller's rows and nobody else's",
+			travellers, trips, media)
+	}
+}
+
+func TestDeletingATravellerWhoIsNotThereIsAnError(t *testing.T) {
+	store, _ := adminStore(t)
+	_, err := store.DeleteTraveller(context.Background(),
+		"00000000-0000-0000-0000-000000000000")
+	if err == nil {
+		t.Error("deleting a traveller that does not exist reported success")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"travellog/internal/auth"
+	"travellog/internal/media"
 )
 
 // Writer is every change the panel makes. It is separate from Store so a read
@@ -17,6 +18,7 @@ type Writer interface {
 	MintInvite(ctx context.Context, hash []byte, note string) error
 	DeleteInvite(ctx context.Context, hash []byte) error
 	RevokeSessionByID(ctx context.Context, sessionID string) error
+	DeleteTraveller(ctx context.Context, travellerID string) ([]string, error)
 }
 
 // record is the audit line every mutating action writes.
@@ -112,4 +114,53 @@ func hxRedirect(w http.ResponseWriter, r *http.Request, to string) {
 		return
 	}
 	http.Redirect(w, r, to, http.StatusSeeOther)
+}
+
+// deleteTraveller needs the traveller's email typed exactly. Rows go before
+// bytes: a storage failure then leaves an orphan, not a photograph with none.
+func deleteTraveller(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		detail, err := d.Store.Traveller(r.Context(), id)
+		if err != nil {
+			http.Error(w, "no traveller with that id", http.StatusNotFound)
+			return
+		}
+
+		typed := strings.TrimSpace(r.PostFormValue("email"))
+		if typed != detail.Email {
+			d.record("delete refused", detail.Email, nil)
+			http.Error(w, "that is not their address, so nothing was deleted",
+				http.StatusBadRequest)
+			return
+		}
+
+		objects, err := d.Writer.DeleteTraveller(r.Context(), id)
+		if err != nil {
+			d.record("delete", detail.Email, err)
+			http.Error(w, "the traveller could not be deleted", http.StatusInternalServerError)
+			return
+		}
+		d.record("delete", detail.Email, nil)
+		d.forget(r.Context(), id, objects)
+
+		hxRedirect(w, r, "/admin/travellers")
+	}
+}
+
+// forget removes the bytes, best effort, logging each failure by object id.
+// None of them undoes the delete.
+func (d Deps) forget(ctx context.Context, travellerID string, objects []string) {
+	if d.Objects == nil {
+		return
+	}
+	for _, object := range objects {
+		err := d.Objects.Delete(ctx, media.Key{Traveller: travellerID, Object: object})
+		if err != nil {
+			d.Log.Error("admin: an object outlived its traveller",
+				slog.String("traveller", travellerID),
+				slog.String("object", object),
+				slog.String("err", err.Error()))
+		}
+	}
 }

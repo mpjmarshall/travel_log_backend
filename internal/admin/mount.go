@@ -41,6 +41,7 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	mux.Handle("POST /admin/invites", deps.guarded(mintInvite(deps)))
 	mux.Handle("POST /admin/invites/{hash}/revoke", deps.guarded(revokeInvite(deps)))
 	mux.Handle("POST /admin/sessions/{id}/revoke", deps.guarded(revokeSession(deps)))
+	mux.Handle("POST /admin/travellers/{id}/delete", deps.guarded(deleteTraveller(deps)))
 }
 
 // open is a page nobody has to be signed in for, which is the login alone.

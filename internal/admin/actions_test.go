@@ -9,17 +9,51 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
 	"travellog/internal/admin"
+	"travellog/internal/media"
+	"travellog/internal/postgres"
 )
 
 type fakeWriter struct {
-	renamedID   string
-	renamedName string
-	mintedNote  string
-	mintedHash  []byte
-	deletedHash []byte
-	revokedID   string
-	err         error
+	renamedID        string
+	renamedName      string
+	mintedNote       string
+	mintedHash       []byte
+	deletedHash      []byte
+	revokedID        string
+	deletedTraveller string
+	objects          []string
+	err              error
+}
+
+func (f *fakeWriter) DeleteTraveller(_ context.Context, id string) ([]string, error) {
+	f.deletedTraveller = id
+	return f.objects, f.err
+}
+
+// fakeObjects stands in for the bucket, and records what it was asked to
+// forget.
+type fakeObjects struct {
+	media.Memory
+	deleted []media.Key
+	err     error
+}
+
+func (f *fakeObjects) Delete(_ context.Context, key media.Key) error {
+	f.deleted = append(f.deleted, key)
+	return f.err
+}
+
+func adaDetail() postgres.TravellerDetail {
+	return postgres.TravellerDetail{
+		TravellerRow: postgres.TravellerRow{
+			ID: "id-1", Email: "ada@example.com", Trips: 7, Photos: 286,
+			CreatedAt: time.Now(),
+		},
+		Places: 16, BucketBytes: 5_175_532,
+	}
 }
 
 func (f *fakeWriter) Rename(_ context.Context, id, name string) (int64, error) {
@@ -141,5 +175,56 @@ func TestAFailedWriteSaysSoAndIsNotSilent(t *testing.T) {
 	rec := postForm(t, mux, "/admin/travellers/id-1/name", c, csrf, "name=Ada")
 	if rec.Code < 400 {
 		t.Errorf("a failed rename answered %d, so the operator is told it worked", rec.Code)
+	}
+}
+
+func TestDeleteRefusesUnlessTheTypedEmailMatchesExactly(t *testing.T) {
+	store := &fakeStore{detail: adaDetail()}
+	writer := &fakeWriter{}
+	mux, c, csrf := writeDeps(t, store, writer)
+
+	for _, typed := range []string{"", "ada@example.co", "ADA@EXAMPLE.COM", " "} {
+		rec := postForm(t, mux, "/admin/travellers/id-1/delete", c, csrf, "email="+typed)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("typing %q = %d, want 400", typed, rec.Code)
+		}
+	}
+	if writer.deletedTraveller != "" {
+		t.Errorf("a refused confirmation still deleted %q", writer.deletedTraveller)
+	}
+}
+
+func TestDeleteRemovesTheTravellerAndAsksTheBucketToForgetTheirObjects(t *testing.T) {
+	store := &fakeStore{detail: adaDetail()}
+	writer := &fakeWriter{objects: []string{"object-a", "object-b"}}
+	objects := &fakeObjects{}
+	mux, c, csrf := writeDepsWithObjects(t, store, writer, objects)
+
+	rec := postForm(t, mux, "/admin/travellers/id-1/delete", c, csrf, "email=ada@example.com")
+	if rec.Code >= 400 {
+		t.Fatalf("delete = %d", rec.Code)
+	}
+	if writer.deletedTraveller != "id-1" {
+		t.Errorf("deleted %q, want id-1", writer.deletedTraveller)
+	}
+	if len(objects.deleted) != 2 {
+		t.Errorf("the bucket was asked to forget %d objects, want 2: bytes left behind "+
+			"are unreachable and still there after the account is gone", len(objects.deleted))
+	}
+}
+
+func TestABucketFailureStillLeavesTheTravellerDeleted(t *testing.T) {
+	store := &fakeStore{detail: adaDetail()}
+	writer := &fakeWriter{objects: []string{"object-a"}}
+	objects := &fakeObjects{err: errors.New("the bucket is unreachable")}
+	mux, c, csrf := writeDepsWithObjects(t, store, writer, objects)
+
+	rec := postForm(t, mux, "/admin/travellers/id-1/delete", c, csrf, "email=ada@example.com")
+	if rec.Code >= 400 {
+		t.Errorf("a bucket failure answered %d: the rows are already gone, so the "+
+			"delete succeeded and only an orphan is left", rec.Code)
+	}
+	if writer.deletedTraveller != "id-1" {
+		t.Error("the traveller was not deleted")
 	}
 }
