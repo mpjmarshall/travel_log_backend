@@ -83,9 +83,9 @@ services:
       S3_PRESIGN_TTL_PUBLIC: ${S3_PRESIGN_TTL_PUBLIC:-15m}
       MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-26214400}
     ports:
-      # Loopback-bound: local-only target (DEC-21). Nothing here is reachable
-      # from the network without an explicit change.
-      - "127.0.0.1:${API_PORT:-8080}:8080"
+      # Loopback-bound by default: local-only target (DEC-21). BIND_HOST is the
+      # explicit change, and 0.0.0.0 is what a real phone on the LAN needs.
+      - "${BIND_HOST:-127.0.0.1}:${API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -241,7 +241,7 @@ services:
       # covers the host, so the address a browser fetches from has to be an
       # address a browser can reach. The console (9001) is deliberately not
       # published.
-      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "${BIND_HOST:-127.0.0.1}:${MINIO_PORT:-9000}:9000"
     healthcheck:
       # `mc ready local` rather than a GET of /minio/health/live, because there
       # is no curl in this image.
