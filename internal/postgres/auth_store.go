@@ -42,7 +42,7 @@ const sessionByTokenHashSQL = `SELECT s.id, s.traveller_id, s.token_hash,
 const travellerExistsAtAllSQL = `SELECT 1 FROM travellers LIMIT 1`
 
 // touchSessionSQL names the traveller as well as the session.
-const touchSessionSQL = `UPDATE sessions SET last_used_at = $3
+const touchSessionSQL = `UPDATE sessions SET last_used_at = $3, expires_at = $4
 	WHERE id = $1::uuid AND traveller_id = $2::uuid`
 
 // CreateTraveller inserts one, and answers auth.ErrEmailTaken when the
@@ -123,8 +123,8 @@ func (s AuthStore) SessionByTokenHash(ctx context.Context, tokenHash []byte) (au
 
 // TouchSession writes `last_used_at`, moves no version, and takes no advisory
 // lock.
-func (s AuthStore) TouchSession(ctx context.Context, travellerID, sessionID string, at time.Time) error {
-	result, err := s.DB.ExecContext(ctx, touchSessionSQL, sessionID, travellerID, at)
+func (s AuthStore) TouchSession(ctx context.Context, travellerID, sessionID string, at, expiresAt time.Time) error {
+	result, err := s.DB.ExecContext(ctx, touchSessionSQL, sessionID, travellerID, at, expiresAt)
 	if err != nil {
 		return fmt.Errorf("postgres: touching a session: %w", err)
 	}

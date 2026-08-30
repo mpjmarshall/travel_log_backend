@@ -111,7 +111,7 @@ func (f *fakeStore) SessionByTokenHash(_ context.Context, tokenHash []byte) (Ses
 	return held.Session, held.traveller, nil
 }
 
-func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID string, at time.Time) error {
+func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID string, at, expiresAt time.Time) error {
 	if f.failWith != nil {
 		return f.failWith
 	}
@@ -119,6 +119,7 @@ func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID strin
 	for key, held := range f.sessions {
 		if held.ID == sessionID {
 			held.LastUsedAt = at
+			held.ExpiresAt = expiresAt
 			f.sessions[key] = held
 		}
 	}

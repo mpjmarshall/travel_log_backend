@@ -257,7 +257,7 @@ func TestASessionWriteMovesNoLogbookVersion(t *testing.T) {
 	}
 
 	for i := range 5 {
-		if err := store.TouchSession(ctx, tr.ID, id, time.Now().UTC()); err != nil {
+		if err := store.TouchSession(ctx, tr.ID, id, time.Now().UTC(), time.Now().UTC().Add(time.Hour)); err != nil {
 			t.Fatalf("TouchSession %d: %v", i, err)
 		}
 	}
@@ -341,7 +341,9 @@ func TestCreateSessionWaitsForTheTravellerLockAndTouchSessionDoesNot(t *testing.
 	}
 
 	touched := make(chan error, 1)
-	go func() { touched <- store.TouchSession(ctx, tr.ID, sessionID, time.Now().UTC()) }()
+	go func() {
+		touched <- store.TouchSession(ctx, tr.ID, sessionID, time.Now().UTC(), time.Now().UTC().Add(time.Hour))
+	}()
 	select {
 	case err := <-touched:
 		if err != nil {
@@ -442,7 +444,7 @@ func TestTouchSessionWritesLastUsedAt(t *testing.T) {
 	}
 
 	want := before.Add(90 * time.Minute).UTC().Truncate(time.Microsecond)
-	if err := store.TouchSession(ctx, tr.ID, id, want); err != nil {
+	if err := store.TouchSession(ctx, tr.ID, id, want, want.Add(time.Hour)); err != nil {
 		t.Fatalf("TouchSession: %v", err)
 	}
 
@@ -468,14 +470,14 @@ func TestTouchSessionRefusesASessionThatIsNotThisTravellersAndOneThatIsGone(t *t
 	if err != nil {
 		t.Fatalf("CreateTraveller: %v", err)
 	}
-	if err := store.TouchSession(ctx, stranger.ID, id, time.Now().UTC()); !errors.Is(err, auth.ErrNoSession) {
+	if err := store.TouchSession(ctx, stranger.ID, id, time.Now().UTC(), time.Now().UTC().Add(time.Hour)); !errors.Is(err, auth.ErrNoSession) {
 		t.Errorf("touching another traveller's session answered %v, want auth.ErrNoSession", err)
 	}
 
 	if _, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1::uuid`, id); err != nil {
 		t.Fatalf("deleting the session: %v", err)
 	}
-	if err := store.TouchSession(ctx, tr.ID, id, time.Now().UTC()); !errors.Is(err, auth.ErrNoSession) {
+	if err := store.TouchSession(ctx, tr.ID, id, time.Now().UTC(), time.Now().UTC().Add(time.Hour)); !errors.Is(err, auth.ErrNoSession) {
 		t.Errorf("touching a session that is gone answered %v, want auth.ErrNoSession.\n"+
 			"    An UPDATE that matches nothing reports success, which is a sign-in that\n"+
 			"    keeps working against a row that is not there.", err)
@@ -492,7 +494,7 @@ func TestASessionOfATravellerWhoIsGoneIsNotLive(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `DELETE FROM travellers WHERE id = $1::uuid`, tr.ID); err != nil {
 		t.Fatalf("deleting the traveller: %v", err)
 	}
-	if err := store.TouchSession(ctx, tr.ID, id, time.Now().UTC()); !errors.Is(err, auth.ErrNoSession) {
+	if err := store.TouchSession(ctx, tr.ID, id, time.Now().UTC(), time.Now().UTC().Add(time.Hour)); !errors.Is(err, auth.ErrNoSession) {
 		t.Errorf("touching the session of a deleted traveller answered %v, want auth.ErrNoSession", err)
 	}
 }
@@ -534,7 +536,7 @@ func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
 	}
 
 	want := time.Date(2027, 10, 12, 9, 0, 0, 0, time.UTC)
-	if err := store.TouchSession(ctx, tr.ID, session.ID, want); err != nil {
+	if err := store.TouchSession(ctx, tr.ID, session.ID, want, want.Add(time.Hour)); err != nil {
 		t.Fatalf("TouchSession: %v", err)
 	}
 	again, _, err := store.SessionByTokenHash(ctx, hash)
