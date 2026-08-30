@@ -8,8 +8,7 @@ import (
 )
 
 // AdminStore holds every read the panel makes. Its writes go through the
-// stores that already own those invariants, except the delete, which is here
-// because nothing else has ever removed a traveller.
+// stores that already own those invariants.
 type AdminStore struct{ DB *sql.DB }
 
 // Overview is the landing page's figures.
