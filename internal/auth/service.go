@@ -75,7 +75,7 @@ type Store interface {
 	CreateSession(ctx context.Context, travellerID string, tokenHash []byte, expiresAt time.Time) (string, error)
 	SessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, Traveller, error)
 
-	TouchSession(ctx context.Context, travellerID, sessionID string, at time.Time) error
+	TouchSession(ctx context.Context, travellerID, sessionID string, at, expiresAt time.Time) error
 
 	RevokeSession(ctx context.Context, travellerID string, tokenHash []byte) (bool, error)
 
@@ -181,7 +181,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Traveller, er
 	}
 
 	if now.Sub(session.LastUsedAt) >= TouchInterval {
-		if err := s.Store.TouchSession(ctx, tr.ID, session.ID, now); err != nil {
+		if err := s.Store.TouchSession(ctx, tr.ID, session.ID, now, now.Add(s.ttl())); err != nil {
 			return Traveller{}, err
 		}
 	}

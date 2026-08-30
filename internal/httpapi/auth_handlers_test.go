@@ -110,7 +110,7 @@ func (f *fakeStore) SessionByTokenHash(_ context.Context, tokenHash []byte) (aut
 	return held, f.owners[held.ID], nil
 }
 
-func (f *fakeStore) TouchSession(context.Context, string, string, time.Time) error {
+func (f *fakeStore) TouchSession(context.Context, string, string, time.Time, time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.failWith
