@@ -1,0 +1,15 @@
+{{define "content" -}}
+<div class="login">
+<h1>Travel Log</h1>
+{{if .Locked}}
+<p class="warn">Too many attempts. The panel is locked for a short while.</p>
+{{else if .Failed}}
+<p class="warn">That password was not right.</p>
+{{end}}
+<form method="post" action="/admin/login">
+  <input type="password" name="password" placeholder="Password" autofocus
+         autocomplete="current-password">
+  <button type="submit">Sign in</button>
+</form>
+</div>
+{{- end}}

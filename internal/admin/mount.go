@@ -25,6 +25,7 @@ func Mount(mux *http.ServeMux, deps Deps) {
 	mux.Handle("GET "+loginPath, deps.open(login))
 	mux.Handle("POST "+loginPath, deps.open(login))
 	mux.Handle("POST /admin/logout", deps.guarded(logout(deps)))
+	mux.Handle("GET /admin/static/", StaticHandler())
 	home := deps.guarded(dashboard(deps))
 	mux.Handle("GET "+rootPath, home)
 	mux.Handle("GET "+rootPath+"/{$}", home)
@@ -101,6 +102,10 @@ func logout(d Deps) http.HandlerFunc {
 // dashboard is a placeholder until task 6 gives it its counts.
 func dashboard(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		d.Render.Page(w, http.StatusOK, "dashboard", pageData{CSRF: csrfFrom(r.Context())})
+		d.Render.Page(w, http.StatusOK, "dashboard", PageData{
+			Title:    "Overview",
+			CSRF:     csrfFrom(r.Context()),
+			SignedIn: true,
+		})
 	}
 }
