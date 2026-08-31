@@ -32,6 +32,8 @@ type Deps struct {
 
 	Public logbook.PublicStore
 
+	Geocode Geocoder
+
 	AuthLimit      *httpx.Limiter
 	TravellerLimit *httpx.Limiter
 

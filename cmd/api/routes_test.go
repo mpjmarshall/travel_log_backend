@@ -318,7 +318,7 @@ func TestTheRequestCeilingIsTheServersWriteDeadline(t *testing.T) {
 
 // The shipped surface is twenty-three routes and the twenty-third is
 // `/healthz`.
-func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
+func TestTheShippedSurfaceIsTwentyFourRoutesIncludingHealthz(t *testing.T) {
 	mux := wiredMux(t, quiet())
 
 	req := httptest.NewRequest(http.MethodGet, "/l/mnpqrstuvwxy", nil)
@@ -332,10 +332,10 @@ func TestTheShippedSurfaceIsTwentyThreeRoutesIncludingHealthz(t *testing.T) {
 		t.Errorf("%s resolves to no pattern", healthzPath)
 	}
 
-	const inTheAPITable = 23
+	const inTheAPITable = 24
 	if got := len(httpapi.Routes(httpapi.Deps{})); got != inTheAPITable {
 		t.Errorf("httpapi.Routes() holds %d rows, want %d — with /healthz "+
-			"that is the 24 the route table names. Re-derive rather than "+
+			"that is the 25 the route table names. Re-derive rather than "+
 			"remember:\n"+
 			"    grep -cE '^\\t\\t\\{http\\.Method' internal/httpapi/routes.go",
 			got, inTheAPITable)
