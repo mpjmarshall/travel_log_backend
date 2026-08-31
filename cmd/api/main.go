@@ -21,6 +21,7 @@ import (
 	"travellog/internal/admin"
 	"travellog/internal/auth"
 	"travellog/internal/config"
+	"travellog/internal/geocode"
 	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
 	"travellog/internal/logging"
@@ -41,6 +42,14 @@ const shutdownTimeout = 10 * time.Second
 // migrateTimeout bounds the whole migration run, the wait for the advisory
 // lock included.
 const migrateTimeout = 2 * time.Minute
+
+// Komoot's public Photon needs no key. The User-Agent is what OSM's policy
+// asks for, and the timeout stops a slow third party holding a request open.
+const (
+	geocodeBase    = "https://photon.komoot.io"
+	geocodeAgent   = "travel-log/1.0 (+https://github.com/mpjmarshall/travellog)"
+	geocodeTimeout = 8 * time.Second
+)
 
 // bucketTimeout bounds the boot-time bucket check.
 const bucketTimeout = 10 * time.Second
@@ -226,6 +235,9 @@ func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.S
 // that mounts its routes.
 func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.Store, sender mail.Sender) (func(*http.ServeMux), error) {
 	service := &auth.Service{Store: postgres.AuthStore{DB: db}}
+	places := geocode.NewPhoton(geocodeBase, geocodeAgent, &http.Client{
+		Timeout: geocodeTimeout,
+	})
 	credential, traveller, public := limiters(cfg)
 
 	return func(mux *http.ServeMux) {
@@ -239,6 +251,7 @@ func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.St
 			Photos:         postgres.PhotoStore{DB: db},
 			Walks:          postgres.WalkStore{DB: db},
 			Public:         postgres.ShareReadStore{DB: db},
+			Geocode:        places,
 			Log:            log,
 			AuthLimit:      credential,
 			TravellerLimit: traveller,

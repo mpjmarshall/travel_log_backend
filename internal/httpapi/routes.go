@@ -48,6 +48,7 @@ func Routes(deps Deps) []Route {
 
 		{http.MethodDelete, "/v1/trips/{id}", deleteTrip(deps), true, LimitTraveller, false},
 
+		{http.MethodGet, "/v1/cities/search", searchCities(deps), true, LimitTraveller, true},
 		{http.MethodPut, "/v1/cities/{id}", putCity(deps), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/places/{id}", putPlace(deps), true, LimitTraveller, false},
 		{http.MethodDelete, "/v1/places/{id}", removePlace(deps), true, LimitTraveller, false},

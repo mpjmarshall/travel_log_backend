@@ -232,6 +232,7 @@ type options struct {
 	publicPerMin    int
 	maxConcurrent   int
 	mailer          mail.Sender
+	geocoder        Geocoder
 }
 
 func newHarness(t *testing.T, opt options) *harness {
@@ -290,6 +291,7 @@ func newHarness(t *testing.T, opt options) *harness {
 		Photos:         moments,
 		Walks:          moments,
 		Public:         shared,
+		Geocode:        opt.geocoder,
 		Log:            log,
 		AuthLimit:      httpx.NewLimiter(opt.ratePerMin, nil),
 		TravellerLimit: httpx.NewLimiter(opt.travellerPerMin, nil),

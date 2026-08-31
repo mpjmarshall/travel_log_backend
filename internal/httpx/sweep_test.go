@@ -77,6 +77,9 @@ var jsonImporters = map[string]string{
 	"internal/logbook/rewrite.go": "DecodeEnvelope: `make seed` reads the captured client fixture " +
 		"off disk (DEC-75), which is a file rather than a payload and has no ResponseWriter to " +
 		"hand MaxBytesReader",
+	"internal/geocode/geocode.go": "the geocoder reads a THIRD PARTY's answer, not this API's " +
+		"envelope: httpx.DecodeJSON takes a ResponseWriter and enforces this server's own " +
+		"payload rules, neither of which applies to a response Photon sent us",
 }
 
 func TestOnlyNamedFilesImportTheJSONPackage(t *testing.T) {
