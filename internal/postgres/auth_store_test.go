@@ -548,35 +548,6 @@ func TestSessionByTokenHashCarriesLastUsedAt(t *testing.T) {
 	}
 }
 
-// The question, against the real table.
-func TestTravellerExistsIsAboutTheTableAndNotAboutAnAddress(t *testing.T) {
-	store, _, _ := authStore(t)
-	ctx := context.Background()
-
-	held, err := store.TravellerExists(ctx)
-	if err != nil {
-		t.Fatalf("TravellerExists on an empty table: %v", err)
-	}
-	if held {
-		t.Fatalf("TravellerExists is true on an empty table")
-	}
-
-	if _, err := store.CreateTraveller(ctx, "matt@example.com"); err != nil {
-		t.Fatalf("CreateTraveller: %v", err)
-	}
-
-	held, err = store.TravellerExists(ctx)
-	if err != nil {
-		t.Fatalf("TravellerExists after a registration: %v", err)
-	}
-	if !held {
-		t.Errorf("TravellerExists is false with a traveller in the table.\n" +
-			"    DEC-86: registration closes once ANY traveller row exists, whatever\n" +
-			"    address it holds. Answering by address would report an empty log to a\n" +
-			"    stranger, which is the state the ruling closes.")
-	}
-}
-
 // revoking A session is an update that moves A live row and nothing else.
 func TestRevokeSessionMovesTheLiveRowAndOnlyOnce(t *testing.T) {
 	store, db, tr := withTravellerRow(t)

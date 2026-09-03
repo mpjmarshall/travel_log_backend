@@ -10,12 +10,8 @@ import (
 	"time"
 )
 
-// The three limits, and what each is for.
-const (
-	MaxEmailBytes      = 254
-	MinPassphraseBytes = 8
-	MaxPassphraseBytes = 1024
-)
+// MaxEmailBytes is the wire's ceiling, from RFC 5321 rather than from policy.
+const MaxEmailBytes = 254
 
 // DefaultSessionTTL is untuned in the same sense's Argon2 parameters are:
 // nothing has measured it against anything.
@@ -28,8 +24,6 @@ const TouchInterval = 5 * time.Minute
 // The sentinels.
 var (
 	ErrEmailTaken = errors.New("auth: that address is already registered")
-
-	ErrRegistrationClosed = errors.New("auth: this log already has a traveller")
 
 	ErrNoTraveller = errors.New("auth: no traveller with that address")
 
@@ -81,10 +75,6 @@ type Store interface {
 
 	RevokeEverySession(ctx context.Context, travellerID string) (int64, error)
 
-	TravellerExists(ctx context.Context) (bool, error)
-
-	MintInvite(ctx context.Context, hash []byte, note string) error
-
 	ClaimInvite(ctx context.Context, hash []byte, travellerID string) error
 
 	IssueCode(ctx context.Context, travellerID string, hash []byte, expiresAt time.Time) error
@@ -105,9 +95,6 @@ type Service struct {
 
 	SessionTTL time.Duration
 }
-
-// dummyHash is a real argon2id encoding, at the shipped parameters, of a
-// passphrase nobody holds.
 
 // emailPattern is deliberately small.
 var emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
@@ -212,18 +199,6 @@ func checkEmail(email string) error {
 			Why: fmt.Sprintf("%d bytes, and the longest address SMTP carries is %d", len(email), MaxEmailBytes)}
 	case !emailPattern.MatchString(email):
 		return InvalidFieldError{Field: "email", Why: "that is not the shape of an address"}
-	}
-	return nil
-}
-
-func checkPassphrase(passphrase string) error {
-	switch {
-	case len(passphrase) < MinPassphraseBytes:
-		return InvalidFieldError{Field: "passphrase",
-			Why: fmt.Sprintf("%d bytes, and this build asks for at least %d", len(passphrase), MinPassphraseBytes)}
-	case len(passphrase) > MaxPassphraseBytes:
-		return InvalidFieldError{Field: "passphrase",
-			Why: fmt.Sprintf("%d bytes, and this build takes at most %d", len(passphrase), MaxPassphraseBytes)}
 	}
 	return nil
 }

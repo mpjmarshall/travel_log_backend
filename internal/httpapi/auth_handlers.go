@@ -329,7 +329,7 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 	switch {
 	case errors.As(err, &invalid):
 		httpx.WriteFieldError(w, r, invalid.Field)
-	case errors.Is(err, auth.ErrEmailTaken), errors.Is(err, auth.ErrRegistrationClosed):
+	case errors.Is(err, auth.ErrEmailTaken):
 		httpx.WriteError(w, r, httpx.CodeConflict)
 	case errors.Is(err, auth.ErrInviteSpent):
 		httpx.WriteFieldError(w, r, "invite")

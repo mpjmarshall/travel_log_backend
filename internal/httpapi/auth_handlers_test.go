@@ -24,154 +24,6 @@ import (
 	"travellog/internal/media"
 )
 
-type fakeStore struct {
-	mu         sync.Mutex
-	travellers map[string]stored
-	sessions   map[string]auth.Session
-	owners     map[string]auth.Traveller
-	codes      map[string]*auth.SignInCode
-	invites    map[string]bool
-	next       int
-	failWith   error
-	clock      func() time.Time
-}
-
-type stored struct {
-	auth.Traveller
-}
-
-func newStore() *fakeStore {
-	return &fakeStore{
-		travellers: map[string]stored{},
-		sessions:   map[string]auth.Session{},
-		owners:     map[string]auth.Traveller{},
-	}
-}
-
-func (f *fakeStore) CreateTraveller(_ context.Context, email string) (auth.Traveller, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return auth.Traveller{}, f.failWith
-	}
-	key := strings.ToLower(email)
-	if _, held := f.travellers[key]; held {
-		return auth.Traveller{}, auth.ErrEmailTaken
-	}
-	f.next++
-	tr := auth.Traveller{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", f.next), Email: email}
-	f.travellers[key] = stored{Traveller: tr}
-	return tr, nil
-}
-
-func (f *fakeStore) TravellerByEmail(_ context.Context, email string) (auth.Traveller, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return auth.Traveller{}, f.failWith
-	}
-	held, ok := f.travellers[strings.ToLower(email)]
-	if !ok {
-		return auth.Traveller{}, auth.ErrNoTraveller
-	}
-	return held.Traveller, nil
-}
-
-func (f *fakeStore) CreateSession(_ context.Context, travellerID string, tokenHash []byte, expiresAt time.Time) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return "", f.failWith
-	}
-	id := fmt.Sprintf("session-%d", len(f.sessions)+1)
-	f.sessions[string(tokenHash)] = auth.Session{
-		ID: id, TravellerID: travellerID,
-		TokenHash:  append([]byte(nil), tokenHash...),
-		LastUsedAt: f.now(), ExpiresAt: expiresAt,
-	}
-	for _, held := range f.travellers {
-		if held.ID == travellerID {
-			f.owners[id] = held.Traveller
-		}
-	}
-	return id, nil
-}
-
-func (f *fakeStore) SessionByTokenHash(_ context.Context, tokenHash []byte) (auth.Session, auth.Traveller, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return auth.Session{}, auth.Traveller{}, f.failWith
-	}
-	held, ok := f.sessions[string(tokenHash)]
-	if !ok {
-		return auth.Session{}, auth.Traveller{}, auth.ErrNoSession
-	}
-	return held, f.owners[held.ID], nil
-}
-
-func (f *fakeStore) TouchSession(context.Context, string, string, time.Time, time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.failWith
-}
-
-// RevokeSession and RevokeEverySession mirror `update … where revoked_at is
-// NULL`.
-func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return false, f.failWith
-	}
-	held, ok := f.sessions[string(tokenHash)]
-	if !ok || held.TravellerID != travellerID || held.RevokedAt != nil {
-		return false, nil
-	}
-	at := f.now()
-	held.RevokedAt = &at
-	f.sessions[string(tokenHash)] = held
-	return true, nil
-}
-
-func (f *fakeStore) RevokeEverySession(_ context.Context, travellerID string) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return 0, f.failWith
-	}
-	var moved int64
-	at := f.now()
-	for key, held := range f.sessions {
-		if held.TravellerID != travellerID || held.RevokedAt != nil {
-			continue
-		}
-		held.RevokedAt = &at
-		f.sessions[key] = held
-		moved++
-	}
-	return moved, nil
-}
-
-// TravellerExists is the question, and the fake answers it the way the table
-// does: any row at all, whatever its address.
-func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return false, f.failWith
-	}
-	return len(f.travellers) > 0, nil
-}
-
-// now is the clock `sessions.last_used_at` defaults to.
-func (f *fakeStore) now() time.Time {
-	if f.clock == nil {
-		return time.Time{}
-	}
-	return f.clock()
-}
-
 const fixedNow = "2027-10-12T09:00:00Z"
 
 // cheapArgon keeps the suite honest about time rather than about cost: the
@@ -179,7 +31,7 @@ const fixedNow = "2027-10-12T09:00:00Z"
 
 type harness struct {
 	server  *httptest.Server
-	store   *fakeStore
+	store   *auth.Memory
 	logbook *fakeLogbook
 	media   *fakeMedia
 	objects *media.Memory
@@ -253,10 +105,10 @@ func newHarness(t *testing.T, opt options) *harness {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(logs, nil))
 	store := newStore()
-	store.clock = func() time.Time {
+	store.SetClock(func() time.Time {
 		at, _ := time.Parse(time.RFC3339, fixedNow)
 		return at
-	}
+	})
 
 	service := &auth.Service{
 		Store: store,
@@ -279,6 +131,9 @@ func newHarness(t *testing.T, opt options) *harness {
 	posted := &sentMail{}
 	if opt.mailer == nil {
 		opt.mailer = posted
+	}
+	if opt.geocoder == nil {
+		opt.geocoder = &fakeGeocoder{}
 	}
 
 	deps := Deps{
@@ -385,6 +240,14 @@ func (a answer) decode(t *testing.T) map[string]any {
 }
 
 const testInvite = "TESTINVITE"
+
+// newStore is the twin with this package's standing invite already accepted,
+// because every leg here registers somebody before it can assert anything.
+func newStore() *auth.Memory {
+	store := auth.NewMemory()
+	store.AcceptInvite(testInvite)
+	return store
+}
 
 const registered = `{"email":"matt@example.com","passphrase":"a long enough passphrase","invite":"` + testInvite + `"}`
 
@@ -600,7 +463,7 @@ func TestABodyThatIsNotTheJSONThisRouteExpectsIs400(t *testing.T) {
 
 func TestAStoreFailureIs500AndSaysNothingElse(t *testing.T) {
 	h := newHarness(t, options{})
-	h.store.failWith = errors.New("the database named travellog at 127.0.0.1:5434 went away")
+	h.store.FailWith(errors.New("the database named travellog at 127.0.0.1:5434 went away"))
 
 	got := h.post(t, "/v1/auth/register", registered)
 	if got.status != http.StatusInternalServerError {
@@ -665,8 +528,8 @@ func TestThePlaintextTokenAppearsInOneBodyAndInNoLogLine(t *testing.T) {
 	if strings.Contains(h.logs.String(), token) {
 		t.Errorf("the plaintext token is in the log:\n%s", h.logs.String())
 	}
-	for _, held := range h.store.sessions {
-		if string(held.TokenHash) == token {
+	for _, hash := range h.store.StoredTokenHashes() {
+		if string(hash) == token {
 			t.Errorf("the plaintext token reached the store")
 		}
 	}
@@ -770,9 +633,7 @@ func TestAStoreFailureUnderTheMiddlewareIs500AndNot401(t *testing.T) {
 	issued := h.signIn(t, "matt@example.com")
 	token, _ := issued.decode(t)["token"].(string)
 
-	h.store.mu.Lock()
-	h.store.failWith = errors.New("the database went away")
-	h.store.mu.Unlock()
+	h.store.FailWith(errors.New("the database went away"))
 
 	got := h.do(t, http.MethodGet, "/probe", "", "Bearer "+token)
 	if got.status != http.StatusInternalServerError {
@@ -783,47 +644,6 @@ func TestAStoreFailureUnderTheMiddlewareIs500AndNot401(t *testing.T) {
 	}
 }
 
-// Is a ruling, and a ruling like this regresses silently.
-func (f *fakeStore) IssueCode(_ context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.codes == nil {
-		f.codes = map[string]*auth.SignInCode{}
-	}
-	f.codes[travellerID] = &auth.SignInCode{
-		Hash: hash, IssuedAt: f.now(), ExpiresAt: expiresAt,
-	}
-	return nil
-}
-
-func (f *fakeStore) CodeFor(_ context.Context, travellerID string) (auth.SignInCode, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	c, held := f.codes[travellerID]
-	if !held {
-		return auth.SignInCode{}, auth.ErrNoCode
-	}
-	return *c, nil
-}
-
-func (f *fakeStore) CountAttempt(_ context.Context, travellerID string) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	c, held := f.codes[travellerID]
-	if !held {
-		return 0, auth.ErrNoCode
-	}
-	c.Attempts++
-	return c.Attempts, nil
-}
-
-func (f *fakeStore) BurnCode(_ context.Context, travellerID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.codes, travellerID)
-	return nil
-}
-
 func (h *harness) registerTraveller(t *testing.T, email, passphrase string) {
 	t.Helper()
 	body := `{"email":"` + email + `","passphrase":"` + passphrase + `","invite":"` + testInvite + `"}`
@@ -832,35 +652,11 @@ func (h *harness) registerTraveller(t *testing.T, email, passphrase string) {
 	}
 }
 
-func (f *fakeStore) MintInvite(_ context.Context, hash []byte, _ string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.invites == nil {
-		f.invites = map[string]bool{}
-	}
-	f.invites[string(hash)] = false
-	return nil
-}
-
-func (f *fakeStore) ClaimInvite(_ context.Context, hash []byte, _ string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if string(hash) == string(auth.HashInvite(testInvite)) {
-		return nil
-	}
-	spent, held := f.invites[string(hash)]
-	if !held || spent {
-		return auth.ErrInviteSpent
-	}
-	f.invites[string(hash)] = true
-	return nil
-}
-
 // signIn does the code dance and answers the session route's own reply, so a
 // leg about sign-in still asserts on a real response.
 func (h *harness) signIn(t *testing.T, email string) answer {
 	t.Helper()
-	h.store.clearCode(strings.ToLower(email))
+	h.store.ClearCode(strings.ToLower(email))
 	before := h.posted.count()
 	if got := h.post(t, "/v1/auth/code", `{"email":"`+email+`"}`); got.status != http.StatusAccepted {
 		t.Fatalf("asking for a code for %s = %d %s", email, got.status, got.body)
@@ -868,16 +664,4 @@ func (h *harness) signIn(t *testing.T, email string) answer {
 	waitFor(t, func() bool { return h.posted.count() > before })
 	return h.post(t, "/v1/auth/session",
 		`{"email":"`+email+`","code":"`+h.posted.codeFor(t, email)+`"}`)
-}
-
-// clearCode drops any outstanding code, which resets the throttle too: a
-// second session for one traveller would otherwise be refused a code.
-func (f *fakeStore) clearCode(email string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	held, ok := f.travellers[email]
-	if !ok {
-		return
-	}
-	delete(f.codes, held.Traveller.ID)
 }

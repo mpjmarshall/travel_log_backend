@@ -313,7 +313,7 @@ func bearerFor(t *testing.T, h *harness, email string) string {
 // two live tokens for one traveller.
 func signInAs(t *testing.T, h *harness, email string) string {
 	t.Helper()
-	h.store.clearCode(strings.ToLower(email))
+	h.store.ClearCode(strings.ToLower(email))
 	before := h.posted.count()
 	if got := h.post(t, "/v1/auth/code", `{"email":"`+email+`"}`); got.status != http.StatusAccepted {
 		t.Fatalf("asking for a code for %s = %d %s", email, got.status, got.body)

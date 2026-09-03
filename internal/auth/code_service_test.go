@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func aRegistered(t *testing.T, s *Service, store *fakeStore, email string) Traveller {
+func aRegistered(t *testing.T, s *Service, store *Memory, email string) Traveller {
 	t.Helper()
 	tr, err := s.Register(context.Background(), email)
 	if err != nil {
@@ -17,7 +17,7 @@ func aRegistered(t *testing.T, s *Service, store *fakeStore, email string) Trave
 }
 
 func TestRequestCodeMintsSomethingMailableAndStoresOnlyTheDigest(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	aRegistered(t, s, store, "matt@example.com")
@@ -46,7 +46,7 @@ func TestRequestCodeMintsSomethingMailableAndStoresOnlyTheDigest(t *testing.T) {
 }
 
 func TestRequestCodeIsNotAnAccountOracle(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	aRegistered(t, s, store, "matt@example.com")
@@ -64,7 +64,7 @@ func TestRequestCodeIsNotAnAccountOracle(t *testing.T) {
 }
 
 func TestTheRightCodeSignsInOnce(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	aRegistered(t, s, store, "matt@example.com")
@@ -84,7 +84,7 @@ func TestTheRightCodeSignsInOnce(t *testing.T) {
 }
 
 func TestAWrongCodeIsRefusedAndCounted(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	tr := aRegistered(t, s, store, "matt@example.com")
@@ -105,7 +105,7 @@ func TestAWrongCodeIsRefusedAndCounted(t *testing.T) {
 }
 
 func TestTheCodeDiesAtTheAttemptCap(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	tr := aRegistered(t, s, store, "matt@example.com")
@@ -129,7 +129,7 @@ func TestTheCodeDiesAtTheAttemptCap(t *testing.T) {
 }
 
 func TestAnExpiredCodeIsRefused(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
 	ctx := context.Background()
@@ -144,12 +144,12 @@ func TestAnExpiredCodeIsRefused(t *testing.T) {
 }
 
 func TestACodeIsNotValidForAnotherTraveller(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	aRegistered(t, s, store, "matt@example.com")
-	other := Traveller{ID: fakeUUID(99), Email: "other@example.com"}
-	store.travellers["other@example.com"] = storedTraveller{Traveller: other}
+	other := Traveller{ID: memoryUUID(99), Email: "other@example.com"}
+	store.travellers["other@example.com"] = other
 
 	code, _, _, _ := s.RequestCode(ctx, "matt@example.com")
 	if _, _, _, err := s.RequestCode(ctx, "other@example.com"); err != nil {
@@ -164,45 +164,15 @@ func TestACodeIsNotValidForAnotherTraveller(t *testing.T) {
 }
 
 func TestSigningInWithACodeForAnUnknownAddressIsNotAnOracle(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	if _, err := s.SignInWithCode(context.Background(), "nobody@example.com", "123456"); !errors.Is(err, ErrBadCredentials) {
 		t.Fatalf("an unknown address answered %v, want ErrBadCredentials", err)
 	}
 }
 
-func (f *fakeStore) IssueCode(_ context.Context, travellerID string, hash []byte, expiresAt time.Time) error {
-	if f.codes == nil {
-		f.codes = map[string]*SignInCode{}
-	}
-	f.codes[travellerID] = &SignInCode{Hash: hash, IssuedAt: f.now(), ExpiresAt: expiresAt}
-	return nil
-}
-
-func (f *fakeStore) CodeFor(_ context.Context, travellerID string) (SignInCode, error) {
-	c, ok := f.codes[travellerID]
-	if !ok {
-		return SignInCode{}, ErrNoCode
-	}
-	return *c, nil
-}
-
-func (f *fakeStore) CountAttempt(_ context.Context, travellerID string) (int, error) {
-	c, ok := f.codes[travellerID]
-	if !ok {
-		return 0, ErrNoCode
-	}
-	c.Attempts++
-	return c.Attempts, nil
-}
-
-func (f *fakeStore) BurnCode(_ context.Context, travellerID string) error {
-	delete(f.codes, travellerID)
-	return nil
-}
-
 func TestACodeFoundAlreadyAtTheCapIsRefusedOnSight(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	tr := aRegistered(t, s, store, "matt@example.com")
@@ -219,7 +189,7 @@ func TestACodeFoundAlreadyAtTheCapIsRefusedOnSight(t *testing.T) {
 }
 
 func TestASecondRequestInsideTheIntervalSendsNothing(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
 	ctx := context.Background()
@@ -241,7 +211,7 @@ func TestASecondRequestInsideTheIntervalSendsNothing(t *testing.T) {
 }
 
 func TestThrottlingIsIndistinguishableFromAnUnknownAddress(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
 	ctx := context.Background()
@@ -263,7 +233,7 @@ func TestThrottlingIsIndistinguishableFromAnUnknownAddress(t *testing.T) {
 }
 
 func TestAThrottledRequestDOESNOTDisturbTheLiveCode(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
 	ctx := context.Background()
@@ -282,7 +252,7 @@ func TestAThrottledRequestDOESNOTDisturbTheLiveCode(t *testing.T) {
 }
 
 func TestAfterTheIntervalANewCodeIsSent(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	now := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return now })
 	ctx := context.Background()

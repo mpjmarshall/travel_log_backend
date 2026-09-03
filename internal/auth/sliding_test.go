@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-func aSession(t *testing.T, clock *time.Time) (*Service, *fakeStore, Issued) {
+func aSession(t *testing.T, clock *time.Time) (*Service, *Memory, Issued) {
 	t.Helper()
-	store := newFakeStore()
+	store := NewMemory()
 	s := newServiceAtClock(t, store, func() time.Time { return *clock })
 	ctx := context.Background()
 	if _, err := s.Register(ctx, "matt@example.com"); err != nil {
@@ -25,7 +25,7 @@ func aSession(t *testing.T, clock *time.Time) (*Service, *fakeStore, Issued) {
 	return s, store, issued
 }
 
-func expiryOf(t *testing.T, store *fakeStore) time.Time {
+func expiryOf(t *testing.T, store *Memory) time.Time {
 	t.Helper()
 	for _, held := range store.sessions {
 		return held.ExpiresAt
