@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"net/http"
@@ -66,9 +67,21 @@ func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	}
 }
 
+// unconnected is a real handle that has never dialled: sql.Open validates the
+// DSN and connects lazily, so routing legs get a database they never query.
+func unconnected(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("pgx", "postgres://unused:unused@127.0.0.1:1/unused?sslmode=disable")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
 func wiredMux(t *testing.T, log *slog.Logger) *http.ServeMux {
 	t.Helper()
-	mount, err := apiRoutes(wiredConfig(), nil, log, media.NewMemory(), mail.SenderFunc(
+	mount, err := apiRoutes(wiredConfig(), unconnected(t), log, media.NewMemory(), mail.SenderFunc(
 		func(context.Context, string, mail.Message) error { return nil }))
 	if err != nil {
 		t.Fatalf("apiRoutes: %v", err)
@@ -339,5 +352,21 @@ func TestTheShippedSurfaceIsTwentyFourRoutesIncludingHealthz(t *testing.T) {
 			"remember:\n"+
 			"    grep -cE '^\\t\\t\\{http\\.Method' internal/httpapi/routes.go",
 			got, inTheAPITable)
+	}
+}
+
+// A store built on a nil *sql.DB is a non-nil interface value, so Mount's own
+// guards cannot see it and every route it mounts panics on its first query.
+func TestApiRoutesRefusesANilDatabase(t *testing.T) {
+	_, err := apiRoutes(wiredConfig(), nil, quiet(), media.NewMemory(),
+		mail.SenderFunc(func(context.Context, string, mail.Message) error { return nil }))
+	if err == nil {
+		t.Fatal("apiRoutes accepted a nil *sql.DB and mounted the whole API on it — " +
+			"every route it just built answers a panic on its first query, which is " +
+			"the failure Mount's fifteen nil-guards describe and none of them can see")
+	}
+	if !strings.Contains(err.Error(), "database") {
+		t.Errorf("the refusal is %q, and it does not name the database, so an "+
+			"operator reading it cannot tell which dependency was missing", err)
 	}
 }

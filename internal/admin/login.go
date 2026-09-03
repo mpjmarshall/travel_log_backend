@@ -9,7 +9,6 @@ import (
 
 	"travellog/internal/httpx"
 	"travellog/internal/media"
-	"travellog/internal/postgres"
 )
 
 // CookieName carries the session id and nothing else.
@@ -161,8 +160,8 @@ type PageData struct {
 	Cards      []Card
 	Sessions   []SessionRow
 	Invites    []InviteRow
-	Travellers []postgres.TravellerRow
-	Traveller  *postgres.TravellerDetail
+	Travellers []Traveller
+	Traveller  *TravellerDetail
 	Storage    string
 	Minted     string
 

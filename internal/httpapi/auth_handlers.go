@@ -107,6 +107,15 @@ func Mount(mux *http.ServeMux, deps Deps) {
 			"is not 'no limit', it is unmetered token enumeration on the only " +
 			"route with no credential in front of it")
 	}
+	if deps.Auth == nil {
+		panic("httpapi: the credential routes need an auth service; a nil one is not " +
+			"'no authentication', it is a panic on the first sign-in and on every " +
+			"authenticated request after it")
+	}
+	if deps.Geocode == nil {
+		panic("httpapi: the city search needs a geocoder; a nil one is not 'no search', " +
+			"it is a panic the first time T5 looks a city up")
+	}
 	if deps.Logbook == nil {
 		panic("httpapi: the logbook routes need a store; a nil one is not 'no logbook', " +
 			"it is a 500 the first time somebody asks for their log")
@@ -201,16 +210,16 @@ func limitByTraveller(l *httpx.Limiter, log *slog.Logger) httpx.Middleware {
 	})
 }
 
-func register(deps Deps) http.HandlerFunc {
+func register(log *slog.Logger, service *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body credentials
 		if err := httpx.DecodeJSON(w, r, &body); err != nil {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		tr, err := deps.Auth.RegisterWithInvite(r.Context(), body.Email, body.Invite)
+		tr, err := service.RegisterWithInvite(r.Context(), body.Email, body.Invite)
 		if err != nil {
-			writeAuthFailure(w, r, deps.Log, err)
+			writeAuthFailure(w, r, log, err)
 			return
 		}
 		httpx.WriteJSON(w, r, http.StatusCreated, travellerBody{
@@ -219,7 +228,7 @@ func register(deps Deps) http.HandlerFunc {
 	}
 }
 
-func signIn(deps Deps) http.HandlerFunc {
+func signIn(log *slog.Logger, service *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body credentials
 		if err := httpx.DecodeJSON(w, r, &body); err != nil {
@@ -227,9 +236,9 @@ func signIn(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		issued, err := deps.Auth.SignInWithCode(r.Context(), body.Email, body.Code)
+		issued, err := service.SignInWithCode(r.Context(), body.Email, body.Code)
 		if err != nil {
-			writeAuthFailure(w, r, deps.Log, err)
+			writeAuthFailure(w, r, log, err)
 			return
 		}
 		httpx.WriteJSON(w, r, http.StatusCreated, sessionBody{
@@ -240,11 +249,10 @@ func signIn(deps Deps) http.HandlerFunc {
 
 // revokeSession is `DELETE /v1/auth/session`, and its sibling rides on A
 // query parameter rather than on A second path.
-func revokeSession(deps Deps) http.HandlerFunc {
+func revokeSession(log *slog.Logger, service *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -255,8 +263,8 @@ func revokeSession(deps Deps) http.HandlerFunc {
 		}
 
 		if everywhere {
-			if _, err := deps.Auth.RevokeEverySession(r.Context(), traveller.ID); err != nil {
-				writeAuthFailure(w, r, deps.Log, err)
+			if _, err := service.RevokeEverySession(r.Context(), traveller.ID); err != nil {
+				writeAuthFailure(w, r, log, err)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -268,8 +276,8 @@ func revokeSession(deps Deps) http.HandlerFunc {
 			httpx.WriteError(w, r, httpx.CodeUnauthenticated)
 			return
 		}
-		if _, err := deps.Auth.RevokeSession(r.Context(), traveller.ID, token); err != nil {
-			writeAuthFailure(w, r, deps.Log, err)
+		if _, err := service.RevokeSession(r.Context(), traveller.ID, token); err != nil {
+			writeAuthFailure(w, r, log, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -329,7 +337,7 @@ func writeAuthFailure(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 	switch {
 	case errors.As(err, &invalid):
 		httpx.WriteFieldError(w, r, invalid.Field)
-	case errors.Is(err, auth.ErrEmailTaken), errors.Is(err, auth.ErrRegistrationClosed):
+	case errors.Is(err, auth.ErrEmailTaken):
 		httpx.WriteError(w, r, httpx.CodeConflict)
 	case errors.Is(err, auth.ErrInviteSpent):
 		httpx.WriteFieldError(w, r, "invite")
@@ -357,7 +365,7 @@ func logFailure(r *http.Request, log *slog.Logger, err error) {
 
 // requestCode is `POST /v1/auth/code`. It answers 202 whatever it did, or the
 // status would be the account oracle the service is shaped to avoid.
-func requestCode(deps Deps) http.HandlerFunc {
+func requestCode(log *slog.Logger, service *auth.Service, sender mail.Sender) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Email string `json:"email"`
@@ -367,13 +375,13 @@ func requestCode(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		code, tr, send, err := deps.Auth.RequestCode(r.Context(), body.Email)
+		code, tr, send, err := service.RequestCode(r.Context(), body.Email)
 		if err != nil {
-			writeAuthFailure(w, r, deps.Log, err)
+			writeAuthFailure(w, r, log, err)
 			return
 		}
 		if send {
-			_ = deps.Mail.Send(r.Context(), tr.Email, mail.SignInCode(code, auth.CodeTTL))
+			_ = sender.Send(r.Context(), tr.Email, mail.SignInCode(code, auth.CodeTTL))
 		}
 		w.WriteHeader(http.StatusAccepted)
 	}

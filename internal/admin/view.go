@@ -3,8 +3,6 @@ package admin
 import (
 	"fmt"
 	"strconv"
-
-	"travellog/internal/postgres"
 )
 
 const dayFormat = "2 Jan 2006"
@@ -39,7 +37,7 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
-func sessionRows(in []postgres.SessionRow) []SessionRow {
+func sessionRows(in []Session) []SessionRow {
 	out := make([]SessionRow, 0, len(in))
 	for _, s := range in {
 		out = append(out, SessionRow{
@@ -52,7 +50,7 @@ func sessionRows(in []postgres.SessionRow) []SessionRow {
 	return out
 }
 
-func inviteRows(in []postgres.InviteRow) []InviteRow {
+func inviteRows(in []Invite) []InviteRow {
 	out := make([]InviteRow, 0, len(in))
 	for _, i := range in {
 		out = append(out, InviteRow{

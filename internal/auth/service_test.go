@@ -4,169 +4,12 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
 
 // fakeStore is the Store interface with a map behind it.
-type fakeStore struct {
-	codes      map[string]*SignInCode
-	invites    map[string]bool
-	travellers map[string]storedTraveller // keyed by lower(email)
-	sessions   map[string]storedSession   // keyed by string(tokenHash)
-	nextID     int
-	failWith   error
-	touched    []string
-
-	clock func() time.Time
-}
-
-// fakeUUID is a valid uuid shape that encodes its counter, so a failure
-// message still says which traveller it was about.
-func fakeUUID(n int) string {
-	return fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
-}
-
-func (f *fakeStore) now() time.Time {
-	if f.clock == nil {
-		return time.Time{}
-	}
-	return f.clock()
-}
-
-type storedTraveller struct {
-	Traveller
-}
-
-type storedSession struct {
-	Session
-	traveller Traveller
-}
-
-func newFakeStore() *fakeStore {
-	return &fakeStore{
-		travellers: map[string]storedTraveller{},
-		sessions:   map[string]storedSession{},
-	}
-}
-
-func (f *fakeStore) CreateTraveller(_ context.Context, email string) (Traveller, error) {
-	if f.failWith != nil {
-		return Traveller{}, f.failWith
-	}
-	key := strings.ToLower(email)
-	if _, held := f.travellers[key]; held {
-		return Traveller{}, ErrEmailTaken
-	}
-	f.nextID++
-	tr := Traveller{ID: fakeUUID(f.nextID), Email: email}
-	f.travellers[key] = storedTraveller{Traveller: tr}
-	return tr, nil
-}
-
-func (f *fakeStore) TravellerByEmail(_ context.Context, email string) (Traveller, error) {
-	if f.failWith != nil {
-		return Traveller{}, f.failWith
-	}
-	held, ok := f.travellers[strings.ToLower(email)]
-	if !ok {
-		return Traveller{}, ErrNoTraveller
-	}
-	return held.Traveller, nil
-}
-
-func (f *fakeStore) CreateSession(_ context.Context, travellerID string, tokenHash []byte, expiresAt time.Time) (string, error) {
-	if f.failWith != nil {
-		return "", f.failWith
-	}
-	var owner Traveller
-	for _, held := range f.travellers {
-		if held.ID == travellerID {
-			owner = held.Traveller
-		}
-	}
-	id := "s" + string(rune('a'+len(f.sessions)))
-	f.sessions[string(tokenHash)] = storedSession{
-		Session: Session{
-			ID: id, TravellerID: travellerID,
-			TokenHash:  append([]byte(nil), tokenHash...),
-			LastUsedAt: f.now(),
-			ExpiresAt:  expiresAt,
-		},
-		traveller: owner,
-	}
-	return id, nil
-}
-
-func (f *fakeStore) SessionByTokenHash(_ context.Context, tokenHash []byte) (Session, Traveller, error) {
-	if f.failWith != nil {
-		return Session{}, Traveller{}, f.failWith
-	}
-	held, ok := f.sessions[string(tokenHash)]
-	if !ok {
-		return Session{}, Traveller{}, ErrNoSession
-	}
-	return held.Session, held.traveller, nil
-}
-
-func (f *fakeStore) TouchSession(_ context.Context, travellerID, sessionID string, at, expiresAt time.Time) error {
-	if f.failWith != nil {
-		return f.failWith
-	}
-	f.touched = append(f.touched, travellerID+"/"+sessionID)
-	for key, held := range f.sessions {
-		if held.ID == sessionID {
-			held.LastUsedAt = at
-			held.ExpiresAt = expiresAt
-			f.sessions[key] = held
-		}
-	}
-	return nil
-}
-
-// RevokeSession and RevokeEverySession mirror `update … where revoked_at is
-// NULL`.
-func (f *fakeStore) RevokeSession(_ context.Context, travellerID string, tokenHash []byte) (bool, error) {
-	if f.failWith != nil {
-		return false, f.failWith
-	}
-	held, ok := f.sessions[string(tokenHash)]
-	if !ok || held.TravellerID != travellerID || held.RevokedAt != nil {
-		return false, nil
-	}
-	at := f.now()
-	held.RevokedAt = &at
-	f.sessions[string(tokenHash)] = held
-	return true, nil
-}
-
-func (f *fakeStore) RevokeEverySession(_ context.Context, travellerID string) (int64, error) {
-	if f.failWith != nil {
-		return 0, f.failWith
-	}
-	var moved int64
-	at := f.now()
-	for key, held := range f.sessions {
-		if held.TravellerID != travellerID || held.RevokedAt != nil {
-			continue
-		}
-		held.RevokedAt = &at
-		f.sessions[key] = held
-		moved++
-	}
-	return moved, nil
-}
-
-// TravellerExists is the question, and the fake answers it the way the table
-// does: any row at all, whatever its address.
-func (f *fakeStore) TravellerExists(context.Context) (bool, error) {
-	if f.failWith != nil {
-		return false, f.failWith
-	}
-	return len(f.travellers) > 0, nil
-}
 
 const testNow = "2027-10-12T09:00:00Z"
 
@@ -188,7 +31,7 @@ func newTestService(t *testing.T, store Store) *Service {
 // hands the same clock to the fake store.
 func newServiceAtClock(t *testing.T, store Store, now func() time.Time) *Service {
 	t.Helper()
-	if fake, held := store.(*fakeStore); held {
+	if fake, held := store.(*Memory); held {
 		fake.clock = now
 	}
 	return &Service{
@@ -198,7 +41,7 @@ func newServiceAtClock(t *testing.T, store Store, now func() time.Time) *Service
 }
 
 func TestRegisterMintsNoSession(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 
 	if _, err := s.Register(context.Background(), "matt@example.com"); err != nil {
@@ -213,7 +56,7 @@ func TestRegisterMintsNoSession(t *testing.T) {
 }
 
 func TestRegisterLeavesTheNameUnset(t *testing.T) {
-	tr, err := newTestService(t, newFakeStore()).
+	tr, err := newTestService(t, NewMemory()).
 		Register(context.Background(), "matt@example.com")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -225,7 +68,7 @@ func TestRegisterLeavesTheNameUnset(t *testing.T) {
 }
 
 func TestRegisterStoresTheAddressAsTypedAndDoesNotLowercaseIt(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 
 	tr, err := s.Register(context.Background(), "Matt.Marshall@Example.COM")
@@ -240,7 +83,7 @@ func TestRegisterStoresTheAddressAsTypedAndDoesNotLowercaseIt(t *testing.T) {
 }
 
 func TestRegisterWithInviteRefusesWithoutOne(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 
@@ -252,7 +95,7 @@ func TestRegisterWithInviteRefusesWithoutOne(t *testing.T) {
 }
 
 func TestRegisterWithInviteRefusesASpentOne(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	if err := store.MintInvite(ctx, HashInvite("ONCE"), ""); err != nil {
@@ -268,7 +111,7 @@ func TestRegisterWithInviteRefusesASpentOne(t *testing.T) {
 }
 
 func TestTheAddressIsCheckedBeforeTheInvite(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 
 	_, err := s.RegisterWithInvite(context.Background(), "not an address", "")
@@ -280,7 +123,7 @@ func TestTheAddressIsCheckedBeforeTheInvite(t *testing.T) {
 }
 
 func TestRegisterRefusesTheFieldsItCannotUse(t *testing.T) {
-	s := newTestService(t, newFakeStore())
+	s := newTestService(t, NewMemory())
 	ctx := context.Background()
 
 	cases := map[string]struct{ email, passphrase, field string }{
@@ -308,7 +151,7 @@ func TestRegisterRefusesTheFieldsItCannotUse(t *testing.T) {
 }
 
 func TestRegisterNeverReachesTheStoreWithAFieldItRefused(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 
 	if _, err := s.Register(context.Background(), "not an address"); err == nil {
@@ -319,9 +162,9 @@ func TestRegisterNeverReachesTheStoreWithAFieldItRefused(t *testing.T) {
 	}
 }
 
-func signedIn(t *testing.T) (*Service, *fakeStore, Issued) {
+func signedIn(t *testing.T) (*Service, *Memory, Issued) {
 	t.Helper()
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 	if _, err := s.Register(ctx, "matt@example.com"); err != nil {
@@ -430,25 +273,8 @@ func TestAuthenticateRefusesARowWhoseHashDoesNotMatchWhatWasPresented(t *testing
 	}
 }
 
-func (f *fakeStore) MintInvite(_ context.Context, hash []byte, _ string) error {
-	if f.invites == nil {
-		f.invites = map[string]bool{}
-	}
-	f.invites[string(hash)] = false
-	return nil
-}
-
-func (f *fakeStore) ClaimInvite(_ context.Context, hash []byte, _ string) error {
-	spent, held := f.invites[string(hash)]
-	if !held || spent {
-		return ErrInviteSpent
-	}
-	f.invites[string(hash)] = true
-	return nil
-}
-
 func TestTheSessionExpiresATTLFromNow(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	s := newTestService(t, store)
 	ctx := context.Background()
 
@@ -477,7 +303,7 @@ func TestTheSessionExpiresATTLFromNow(t *testing.T) {
 // The assertion is on the error type and not merely on "an error", because an
 // empty store answers an error for every address anyway.
 func TestTheSessionTouchIsPerIntervalAndNotPerRequest(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	clock := at(t, testNow)
 	s := newServiceAtClock(t, store, func() time.Time { return clock })
 	ctx := context.Background()
@@ -525,7 +351,7 @@ func TestTheSessionTouchIsPerIntervalAndNotPerRequest(t *testing.T) {
 }
 
 func TestAStoreFailureIsNotReportedAsBadCredentials(t *testing.T) {
-	store := newFakeStore()
+	store := NewMemory()
 	store.failWith = errors.New("the database went away")
 	s := newTestService(t, store)
 

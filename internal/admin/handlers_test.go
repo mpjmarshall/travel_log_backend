@@ -14,16 +14,15 @@ import (
 
 	"travellog/internal/admin"
 	"travellog/internal/media"
-	"travellog/internal/postgres"
 )
 
 type fakeStore struct {
-	overview   postgres.Overview
-	travellers []postgres.TravellerRow
+	overview   admin.Overview
+	travellers []admin.Traveller
 	total      int
-	detail     postgres.TravellerDetail
-	sessions   []postgres.SessionRow
-	invites    []postgres.InviteRow
+	detail     admin.TravellerDetail
+	sessions   []admin.Session
+	invites    []admin.Invite
 	err        error
 
 	gotQuery  string
@@ -32,28 +31,28 @@ type fakeStore struct {
 	gotID     string
 }
 
-func (f *fakeStore) Overview(context.Context) (postgres.Overview, error) {
+func (f *fakeStore) Overview(context.Context) (admin.Overview, error) {
 	return f.overview, f.err
 }
 
-func (f *fakeStore) Travellers(_ context.Context, q string, limit, offset int) ([]postgres.TravellerRow, int, error) {
+func (f *fakeStore) Travellers(_ context.Context, q string, limit, offset int) ([]admin.Traveller, int, error) {
 	f.gotQuery, f.gotLimit, f.gotOffset = q, limit, offset
 	return f.travellers, f.total, f.err
 }
 
-func (f *fakeStore) Traveller(_ context.Context, id string) (postgres.TravellerDetail, error) {
+func (f *fakeStore) Traveller(_ context.Context, id string) (admin.TravellerDetail, error) {
 	f.gotID = id
 	if f.detail.ID == "" {
-		return postgres.TravellerDetail{}, errors.New("no such traveller")
+		return admin.TravellerDetail{}, errors.New("no such traveller")
 	}
 	return f.detail, f.err
 }
 
-func (f *fakeStore) Sessions(_ context.Context, id string) ([]postgres.SessionRow, error) {
+func (f *fakeStore) Sessions(_ context.Context, id string) ([]admin.Session, error) {
 	return f.sessions, f.err
 }
 
-func (f *fakeStore) Invites(context.Context) ([]postgres.InviteRow, error) {
+func (f *fakeStore) Invites(context.Context) ([]admin.Invite, error) {
 	return f.invites, f.err
 }
 
@@ -111,7 +110,7 @@ func body(t *testing.T, mux *http.ServeMux, path string, c *http.Cookie, headers
 }
 
 func TestTheOverviewDrawsItsFigures(t *testing.T) {
-	store := &fakeStore{overview: postgres.Overview{
+	store := &fakeStore{overview: admin.Overview{
 		Travellers: 13, Trips: 7, Photos: 286, Places: 16,
 		LiveSessions: 4, UnusedInvites: 2, BucketBytes: 5_175_532,
 	}}
@@ -126,7 +125,7 @@ func TestTheOverviewDrawsItsFigures(t *testing.T) {
 }
 
 func TestTheTravellersListPassesTheSearchAndThePageThrough(t *testing.T) {
-	store := &fakeStore{total: 3, travellers: []postgres.TravellerRow{
+	store := &fakeStore{total: 3, travellers: []admin.Traveller{
 		{ID: "id-1", Email: "ada@example.com", Trips: 2, CreatedAt: time.Now()},
 	}}
 	mux, c := pageDeps(t, store)
@@ -144,7 +143,7 @@ func TestTheTravellersListPassesTheSearchAndThePageThrough(t *testing.T) {
 }
 
 func TestAnHtmxRequestGetsTheRowsAndNotTheWholePage(t *testing.T) {
-	store := &fakeStore{total: 1, travellers: []postgres.TravellerRow{
+	store := &fakeStore{total: 1, travellers: []admin.Traveller{
 		{ID: "id-1", Email: "ada@example.com", CreatedAt: time.Now()},
 	}}
 	mux, c := pageDeps(t, store)
@@ -178,8 +177,8 @@ func TestAnUnknownTravellerIsNotFoundRatherThanAnError(t *testing.T) {
 }
 
 func TestTheTravellerPageShowsCountsAndNeverAPhotograph(t *testing.T) {
-	store := &fakeStore{detail: postgres.TravellerDetail{
-		TravellerRow: postgres.TravellerRow{
+	store := &fakeStore{detail: admin.TravellerDetail{
+		Traveller: admin.Traveller{
 			ID: "id-1", Email: "ada@example.com", Trips: 7, Photos: 286,
 			CreatedAt: time.Now(),
 		},
@@ -217,7 +216,7 @@ func TestAFailedReadSaysSoRatherThanDrawingNothing(t *testing.T) {
 }
 
 func TestTheInvitesPageSaysWhichAreUnused(t *testing.T) {
-	store := &fakeStore{invites: []postgres.InviteRow{
+	store := &fakeStore{invites: []admin.Invite{
 		{Note: "for matt", CreatedAt: time.Now()},
 		{Note: "spent one", CreatedAt: time.Now(), Used: true, UsedBy: "ada@example.com"},
 	}}

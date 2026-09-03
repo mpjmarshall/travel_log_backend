@@ -37,7 +37,7 @@ BIN     := bin/api
 # from one that succeeded, and that is the class it guards.
 SLICE   := scripts/slice-arc.sh
 
-.PHONY: build run check fmt up down logs test-db test-s3 migrate slice seed backup
+.PHONY: backup build check down fmt invite logs migrate run seed slice test-db test-s3 up
 
 ## build — compile the server to bin/api
 build:

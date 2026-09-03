@@ -37,10 +37,6 @@ const sessionByTokenHashSQL = `SELECT s.id, s.traveller_id, s.token_hash,
 	FROM sessions s JOIN travellers t ON t.id = s.traveller_id
 	WHERE s.token_hash = $1`
 
-// travellerExistsAtAllSQL is the question, and it is `select 1 … limit 1`
-// Than a count.
-const travellerExistsAtAllSQL = `SELECT 1 FROM travellers LIMIT 1`
-
 // touchSessionSQL names the traveller as well as the session.
 const touchSessionSQL = `UPDATE sessions SET last_used_at = $3, expires_at = $4
 	WHERE id = $1::uuid AND traveller_id = $2::uuid`
@@ -170,19 +166,6 @@ func (s AuthStore) RevokeEverySession(ctx context.Context, travellerID string) (
 		return 0, fmt.Errorf("postgres: counting the revoked sessions: %w", err)
 	}
 	return moved, nil
-}
-
-// TravellerExists answers the question: does this log already have a
-// traveller?
-func (s AuthStore) TravellerExists(ctx context.Context) (bool, error) {
-	var one int
-	switch err := s.DB.QueryRowContext(ctx, travellerExistsAtAllSQL).Scan(&one); {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("postgres: asking whether this log has a traveller: %w", err)
-	}
-	return true, nil
 }
 
 // named is the one place a NULL name becomes a nil pointer.

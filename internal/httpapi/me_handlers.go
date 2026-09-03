@@ -2,11 +2,11 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
-
-	"travellog/internal/auth"
-	"travellog/internal/httpx"
 	"travellog/internal/logbook"
+
+	"travellog/internal/httpx"
 )
 
 // travellerName is the body of `PATCH /v1/me`, and the pointer is the contract
@@ -17,11 +17,10 @@ type travellerName struct {
 
 // travellerBody is the answer, and it is the client's `Traveller` exactly:
 // one key, `name`.
-func patchMe(deps Deps) http.HandlerFunc {
+func patchMe(log *slog.Logger, books logbook.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -35,13 +34,13 @@ func patchMe(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		named, version, err := deps.Logbook.SetTravellerName(r.Context(), traveller.ID, *body.Name)
+		named, version, err := books.SetTravellerName(r.Context(), traveller.ID, *body.Name)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
+		setTag(w, version)
 		httpx.WriteJSON(w, r, http.StatusOK, named)
 	}
 }

@@ -13,9 +13,9 @@ import (
 )
 
 // publicShare resolves a share token and answers the envelope.
-func publicShare(deps Deps) http.HandlerFunc {
+func publicShare(log *slog.Logger, shared logbook.PublicStore, objects media.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		link, err := deps.Public.ShareLink(r.Context(),
+		link, err := shared.ShareLink(r.Context(),
 			logbook.HashShareToken(r.PathValue("token")))
 
 		switch {
@@ -23,22 +23,22 @@ func publicShare(deps Deps) http.HandlerFunc {
 			httpx.WriteError(w, r, httpx.CodeNotFound)
 			return
 		case err != nil:
-			writePublicFailure(w, r, deps.Log, err)
+			writePublicFailure(w, r, log, err)
 			return
 		}
 
-		src, err := deps.Public.PublicLog(r.Context(), link.TravellerID, link.TripID)
+		src, err := shared.PublicLog(r.Context(), link.TravellerID, link.TripID)
 		if err != nil {
-			writePublicFailure(w, r, deps.Log, err)
+			writePublicFailure(w, r, log, err)
 			return
 		}
 
 		envelope, err := logbook.EmitPublic(src, func(objectID string) (string, error) {
-			return deps.Objects.PresignGet(r.Context(),
+			return objects.PresignGet(r.Context(),
 				media.Key{Traveller: link.TravellerID, Object: objectID}, media.Public)
 		})
 		if err != nil {
-			writePublicFailure(w, r, deps.Log, err)
+			writePublicFailure(w, r, log, err)
 			return
 		}
 

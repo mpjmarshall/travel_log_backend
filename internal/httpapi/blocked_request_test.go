@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"travellog/internal/geocode"
 
 	"travellog/internal/auth"
 	"travellog/internal/config"
@@ -152,6 +153,7 @@ func realServer(t *testing.T, db *sql.DB, requestTimeout time.Duration) (*httpte
 
 	mux := http.NewServeMux()
 	httpapi.Mount(mux, httpapi.Deps{
+		Geocode:        noGeocoder{},
 		Auth:           service,
 		Logbook:        postgres.LogbookStore{DB: db},
 		Share:          postgres.ShareStore{DB: db},
@@ -285,4 +287,11 @@ func waitFor(t *testing.T, ok func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("the condition never became true")
+}
+
+// noGeocoder satisfies the port for the legs that never search a city.
+type noGeocoder struct{}
+
+func (noGeocoder) Search(context.Context, string, int) ([]geocode.City, error) {
+	return nil, nil
 }

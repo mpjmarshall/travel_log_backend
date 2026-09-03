@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 )
@@ -16,11 +15,10 @@ import (
 // formatHeader is the negotiation, and it is used in both directions.
 const formatHeader = "X-Logbook-Format"
 
-func readLogbook(deps Deps) http.HandlerFunc {
+func readLogbook(log *slog.Logger, books logbook.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -33,12 +31,12 @@ func readLogbook(deps Deps) http.HandlerFunc {
 
 		ifNoneMatch := r.Header.Get("If-None-Match")
 		var etag string
-		snapshot, err := deps.Logbook.Read(r.Context(), traveller.ID, func(version int64) bool {
+		snapshot, err := books.Read(r.Context(), traveller.ID, func(version int64) bool {
 			etag = tagFor(version)
 			return !httpx.ETagMatches(ifNoneMatch, etag)
 		})
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
@@ -52,7 +50,7 @@ func readLogbook(deps Deps) http.HandlerFunc {
 
 		envelope, err := logbook.Emit(format, *snapshot.Document)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		httpx.WriteJSON(w, r, http.StatusOK, envelope)
@@ -61,11 +59,10 @@ func readLogbook(deps Deps) http.HandlerFunc {
 
 // putTrip is the whole-state upsert on a client-minted key, so it is
 // idempotent by construction and needs no idempotency apparatus.
-func putTrip(deps Deps) http.HandlerFunc {
+func putTrip(log *slog.Logger, books logbook.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -75,26 +72,21 @@ func putTrip(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		id := r.PathValue("id")
-		if body.ID == nil {
-			body.ID = &id
-		}
-		if *body.ID != id {
-			httpx.WriteFieldError(w, r, "id")
+		if !reconcileID(w, r, &body.ID) {
 			return
 		}
 		if err := logbook.ValidateTrip(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		trip, version, err := deps.Logbook.PutTrip(r.Context(), traveller.ID, body)
+		trip, version, err := books.PutTrip(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
+		setTag(w, version)
 		httpx.WriteJSON(w, r, http.StatusOK, logbook.EmitTrip(trip))
 	}
 }

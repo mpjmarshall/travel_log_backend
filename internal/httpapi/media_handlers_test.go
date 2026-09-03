@@ -134,12 +134,10 @@ func (h *harness) uploadBytes(t *testing.T, travellerID, digest string, body []b
 // only route that hands it out.
 func (h *harness) travellerID(t *testing.T, _ string) string {
 	t.Helper()
-	h.store.mu.Lock()
-	defer h.store.mu.Unlock()
-	for _, tr := range h.store.travellers {
-		return tr.ID
+	for _, id := range h.store.TravellerIDs() {
+		return id
 	}
-	t.Fatal("the fake store holds no traveller")
+	t.Fatal("the twin holds no traveller")
 	return ""
 }
 

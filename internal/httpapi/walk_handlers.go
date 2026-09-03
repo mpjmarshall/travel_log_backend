@@ -3,20 +3,19 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 )
 
 // putWalk is `PUT /v1/walks/{id}`: `setWalkName`, `dismissWalk`, and the
 // create.
-func putWalk(deps Deps) http.HandlerFunc {
+func putWalk(log *slog.Logger, walks logbook.WalkStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -25,26 +24,21 @@ func putWalk(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		id := r.PathValue("id")
-		if body.ID == nil {
-			body.ID = &id
-		}
-		if *body.ID != id {
-			httpx.WriteFieldError(w, r, "id")
+		if !reconcileID(w, r, &body.ID) {
 			return
 		}
 		if err := logbook.ValidateWalk(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		walk, version, err := deps.Walks.PutWalk(r.Context(), traveller.ID, body)
+		walk, version, err := walks.PutWalk(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
+		setTag(w, version)
 
 		httpx.WriteJSON(w, r, http.StatusOK, logbook.EmitWalk(walk))
 	}

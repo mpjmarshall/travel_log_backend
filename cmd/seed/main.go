@@ -5,13 +5,10 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -121,13 +118,13 @@ func run() error {
 		return fmt.Errorf("asking the database for a traveller id: %w", err)
 	}
 
-	assets, err := readImagery(filepath.Join(filepath.Dir(o.fixture), "imagery"))
+	assets, err := seed.ReadImagery(filepath.Join(filepath.Dir(o.fixture), "imagery"))
 	if err != nil {
 		return err
 	}
 	fmt.Printf("  %d asset%s, addressed by the sha256 of their own bytes:\n", len(assets), plural(len(assets)))
 	for _, a := range assets {
-		fmt.Printf("    %s  %s  %d bytes\n", a.digest, a.locator, a.size)
+		fmt.Printf("    %s  %s  %d bytes\n", a.Digest, a.Locator, a.Size)
 	}
 
 	if o.skipMedia {
@@ -137,7 +134,7 @@ func run() error {
 		return err
 	}
 
-	document, err := logbook.RewriteAssets(envelope.Logbook, mappingOf(assets))
+	document, err := logbook.RewriteAssets(envelope.Logbook, seed.Mapping(assets))
 	if err != nil {
 		return err
 	}
@@ -149,7 +146,7 @@ func run() error {
 
 	now := time.Now().UTC()
 	traveller := seed.Traveller{ID: travellerID, Email: o.email, CreatedAt: now}
-	dataset, err := seed.FromDocument(traveller, objectsOf(travellerID, assets, now), document)
+	dataset, err := seed.FromDocument(traveller, seed.MediaObjects(travellerID, assets, now), document)
 	if err != nil {
 		return err
 	}
@@ -172,64 +169,9 @@ func run() error {
 	return nil
 }
 
-type asset struct {
-	locator string // what the client's own document calls it
-	path    string // where the bytes are on disk
-	digest  string // the sha256 of those bytes, in hex — computed, never written
-	size    int64
-	kind    string
-	bytes   []byte
-}
-
-// readImagery turns the directory beside the fixture into the asset table.
-func readImagery(dir string) ([]asset, error) {
-	names := []string{"card-ireland.png", "hero-mountain.png"}
-
-	out := make([]asset, 0, len(names))
-	for _, name := range names {
-		path := filepath.Join(dir, name)
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("reading the imagery the captured log addresses: %w", err)
-		}
-		sum := sha256.Sum256(body)
-		out = append(out, asset{
-			locator: "assets/imagery/" + name,
-			path:    path,
-			digest:  hex.EncodeToString(sum[:]),
-			size:    int64(len(body)),
-			kind:    "image/png",
-			bytes:   body,
-		})
-	}
-	return out, nil
-}
-
-func mappingOf(assets []asset) map[string]string {
-	out := make(map[string]string, len(assets))
-	for _, a := range assets {
-		out[a.locator] = a.digest
-	}
-	return out
-}
-
-// objectsOf is the media_objects half, with `uploaded_at` set — which is what
-// makes a seeded object indistinguishable from an uploaded one.
-func objectsOf(travellerID string, assets []asset, at time.Time) []seed.MediaObject {
-	out := make([]seed.MediaObject, 0, len(assets))
-	for _, a := range assets {
-		uploaded := at
-		out = append(out, seed.MediaObject{
-			TravellerID: travellerID, ID: a.digest, ByteSize: a.size,
-			ContentType: a.kind, CreatedAt: at, UploadedAt: &uploaded,
-		})
-	}
-	return out
-}
-
-// uploadAll puts the bytes in the bucket through internal/media's own
-// signing, so the seed's upload is the same capability a phone gets.
-func uploadAll(ctx context.Context, cfg media.Config, travellerID string, assets []asset) error {
+// uploadAll builds the bucket this deployment names and puts the seeded bytes
+// in it, reporting each so an operator sees what a re-run skipped.
+func uploadAll(ctx context.Context, cfg media.Config, travellerID string, assets []seed.Asset) error {
 	if strings.TrimSpace(cfg.InternalEndpoint) == "" || strings.TrimSpace(cfg.Bucket) == "" {
 		return errors.New("-s3-endpoint and -s3-bucket are required unless -skip-media; " +
 			"`make seed` derives all four from the running container")
@@ -245,48 +187,18 @@ func uploadAll(ctx context.Context, cfg media.Config, travellerID string, assets
 		return fmt.Errorf("the bucket %q: %w", cfg.Bucket, err)
 	}
 
-	for _, a := range assets {
-		if err := upload(ctx, store, travellerID, a); err != nil {
-			return err
+	done, err := seed.Upload(ctx, store, http.DefaultClient, travellerID, assets)
+	if err != nil {
+		return err
+	}
+	for _, u := range done {
+		if u.AlreadyThere {
+			fmt.Printf("    %s is already in the bucket (412, write-once) — the bytes are its own address\n", u.Digest)
+			continue
 		}
+		fmt.Printf("    uploaded %s (%d bytes)\n", u.Digest, u.Size)
 	}
 	return nil
-}
-
-func upload(ctx context.Context, store media.Store, travellerID string, a asset) error {
-	key := media.Key{Traveller: travellerID, Object: a.digest}
-	signed, headers, err := store.PresignPut(ctx, key,
-		media.Upload{SHA256: a.digest, ByteSize: a.size, ContentType: a.kind})
-	if err != nil {
-		return fmt.Errorf("signing the upload for %s: %w", a.locator, err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, signed, strings.NewReader(string(a.bytes)))
-	if err != nil {
-		return fmt.Errorf("building the upload for %s: %w", a.locator, err)
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	req.ContentLength = a.size
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("uploading %s: %w", a.locator, err)
-	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-
-	switch {
-	case res.StatusCode == http.StatusPreconditionFailed:
-		fmt.Printf("    %s is already in the bucket (412, write-once) — the bytes are its own address\n", a.digest)
-		return nil
-	case res.StatusCode >= 200 && res.StatusCode < 300:
-		fmt.Printf("    uploaded %s (%d bytes)\n", a.digest, a.size)
-		return nil
-	default:
-		return fmt.Errorf("uploading %s answered %d: %s", a.locator, res.StatusCode, strings.TrimSpace(string(body)))
-	}
 }
 
 // passphraseWords is the alphabet the share ids already use, minus the

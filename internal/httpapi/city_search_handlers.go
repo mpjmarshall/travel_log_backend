@@ -23,9 +23,9 @@ type Geocoder interface {
 	Search(ctx context.Context, q string, limit int) ([]geocode.City, error)
 }
 
-func searchCities(deps Deps) http.HandlerFunc {
+func searchCities(log *slog.Logger, finder Geocoder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if deps.Geocode == nil {
+		if finder == nil {
 			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
@@ -36,9 +36,9 @@ func searchCities(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		found, err := deps.Geocode.Search(r.Context(), q, MaxCitySuggestions)
+		found, err := finder.Search(r.Context(), q, MaxCitySuggestions)
 		if err != nil {
-			deps.Log.Warn("geocode: the search did not answer",
+			log.Warn("geocode: the search did not answer",
 				slog.String("err", err.Error()))
 			httpx.WriteError(w, r, httpx.CodeTimeout)
 			return
