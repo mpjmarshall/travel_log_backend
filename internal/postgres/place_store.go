@@ -367,11 +367,14 @@ const deletePlaceSQL = `DELETE FROM places WHERE traveller_id = $1::uuid AND id 
 var errNoSuchPlace = errors.New("postgres: that place was not in this log")
 
 // RemovePlace is D2, and it answers the whole log.
-func (s PlaceStore) RemovePlace(ctx context.Context, travellerID, placeID string, deletePhotos bool) (logbook.Snapshot, error) {
+func (s PlaceStore) RemovePlace(ctx context.Context, travellerID, placeID string, photos logbook.PhotoDisposition) (logbook.Snapshot, error) {
 	var snap logbook.Snapshot
+	if err := logbook.CheckPhotoDisposition(photos); err != nil {
+		return snap, err
+	}
 
 	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
-		if deletePhotos {
+		if photos == logbook.DeletePhotos {
 			if _, err := tx.ExecContext(ctx, deletePlacesPhotosSQL, travellerID, placeID); err != nil {
 				return fmt.Errorf("postgres: deleting the photographs filed at %s: %w", placeID, err)
 			}

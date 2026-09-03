@@ -118,6 +118,9 @@ type RefileWrite struct {
 // ValidateRefile answers the shape of the ids it was given and says nothing
 // about whether they were given at all.
 func ValidateRefile(r RefileWrite) error {
+	if err := refilePresence(r); err != nil {
+		return err
+	}
 	if r.PlaceID != nil && !idPattern.MatchString(*r.PlaceID) {
 		return InvalidFieldError{Field: "placeId",
 			Why: fmt.Sprintf("%q is not an id", *r.PlaceID)}

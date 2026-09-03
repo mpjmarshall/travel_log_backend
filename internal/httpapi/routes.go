@@ -51,12 +51,12 @@ func Routes(deps Deps) []Route {
 		{http.MethodGet, "/v1/cities/search", searchCities(deps.Log, deps.Geocode), true, LimitTraveller, true},
 		{http.MethodPut, "/v1/cities/{id}", putCity(deps.Log, deps.Cities), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/places/{id}", putPlace(deps.Log, deps.Places), true, LimitTraveller, false},
-		{http.MethodDelete, "/v1/places/{id}", removePlace(deps.Log, deps.places()), true, LimitTraveller, false},
+		{http.MethodDelete, "/v1/places/{id}", removePlace(deps.Log, deps.Places), true, LimitTraveller, false},
 
 		{http.MethodPost, "/v1/photos/snooze", snoozePhotos(deps.Log, deps.Photos), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/photos/{id}", putPhoto(deps.Log, deps.Photos), true, LimitTraveller, false},
 		{http.MethodDelete, "/v1/photos/{id}", deletePhoto(deps.Log, deps.Photos), true, LimitTraveller, false},
-		{http.MethodPost, "/v1/photos/{id}/refile", refilePhoto(deps.Log, deps.photos()), true, LimitTraveller, false},
+		{http.MethodPost, "/v1/photos/{id}/refile", refilePhoto(deps.Log, deps.Photos), true, LimitTraveller, false},
 		{http.MethodPut, "/v1/walks/{id}", putWalk(deps.Log, deps.Walks), true, LimitTraveller, false},
 
 		{http.MethodPut, "/v1/trips/{id}/share", setShareOptions(deps.Log, deps.Share), true, LimitTraveller, false},
@@ -68,7 +68,7 @@ func Routes(deps Deps) []Route {
 		{http.MethodDelete, "/v1/auth/session", revokeSession(deps.Log, deps.Auth), true, LimitTraveller, false},
 
 		{http.MethodPost, "/v1/media", beginMedia(deps.Log, deps.Media, deps.Objects, deps.MediaMaxBytes, deps.Clock()), true, LimitTraveller, true},
-		{http.MethodPost, "/v1/media/{id}/commit", commitMedia(deps.Log, deps.mediaService()), true, LimitTraveller, false},
+		{http.MethodPost, "/v1/media/{id}/commit", commitMedia(deps.Log, deps.Media, deps.Objects), true, LimitTraveller, false},
 		{http.MethodPost, "/v1/media/mint", mintMedia(deps.Log, deps.Media, deps.Objects), true, LimitTraveller, true},
 
 		{http.MethodGet, "/l/{token}", publicShare(deps.Log, deps.Public, deps.Objects), false, LimitPublic, true},

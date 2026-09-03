@@ -99,7 +99,7 @@ func snoozePhotos(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc 
 }
 
 // refilePhoto is `POST /v1/photos/{id}/refile`: M2.2's 'Change'.
-func refilePhoto(log *slog.Logger, service logbook.Service) http.HandlerFunc {
+func refilePhoto(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traveller, held := travellerOf(w, r)
 		if !held {
@@ -123,7 +123,7 @@ func refilePhoto(log *slog.Logger, service logbook.Service) http.HandlerFunc {
 			return
 		}
 
-		refiled, err := service.RefilePhoto(r.Context(), traveller.ID, r.PathValue("id"), body)
+		refiled, err := photos.RefilePhoto(r.Context(), traveller.ID, r.PathValue("id"), body)
 		if err != nil {
 			writeLogbookFailure(w, r, log, err)
 			return

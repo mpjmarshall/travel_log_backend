@@ -81,9 +81,9 @@ func beginMedia(log *slog.Logger, rows logbook.MediaStore, objects media.Store, 
 	}
 }
 
-// commitMedia is `POST /v1/media/{id}/commit` is's first Service operation,
-// The only route in this API that spans the bucket and the database.
-func commitMedia(log *slog.Logger, service logbook.Service) http.HandlerFunc {
+// commitMedia is `POST /v1/media/{id}/commit`: it reconciles what the bucket
+// holds against what the row declares, and is the one rule that is not a store call.
+func commitMedia(log *slog.Logger, rows logbook.MediaStore, objects media.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traveller, held := travellerOf(w, r)
 		if !held {
@@ -96,7 +96,7 @@ func commitMedia(log *slog.Logger, service logbook.Service) http.HandlerFunc {
 			return
 		}
 
-		row, err := service.CommitMedia(r.Context(), traveller.ID, id)
+		row, err := logbook.CommitMedia(r.Context(), rows, objects, traveller.ID, id)
 		if err != nil {
 			writeMediaFailure(w, r, log, err)
 			return

@@ -356,7 +356,7 @@ func TestRemovingAPlaceAndItsPhotographsActuallyRemovesThem(t *testing.T) {
 	}
 	walksBefore := count(t, db, `SELECT count(*) FROM walks`)
 
-	snap, err := store.RemovePlace(context.Background(), tid, "fushimi-inari", true)
+	snap, err := store.RemovePlace(context.Background(), tid, "fushimi-inari", logbook.DeletePhotos)
 	if err != nil {
 		t.Fatalf("RemovePlace: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestKeepingThePhotographsLeavesTheirDateCityAndCaptionAndClearsBothColumns(
 	mustExec(t, db, `UPDATE photos SET caption = 'the torii at dawn' WHERE traveller_id=$1::uuid AND id='p-may'`, tid)
 
 	walksBefore := count(t, db, `SELECT count(*) FROM walks`)
-	if _, err := store.RemovePlace(context.Background(), tid, "fushimi-inari", false); err != nil {
+	if _, err := store.RemovePlace(context.Background(), tid, "fushimi-inari", logbook.KeepPhotos); err != nil {
 		t.Fatalf("RemovePlace: %v", err)
 	}
 
@@ -453,7 +453,7 @@ func TestRemovingAPlaceThatIsNotInTheLogTakesNoPhotographWithIt(t *testing.T) {
 	before := count(t, db, `SELECT count(*) FROM photos`)
 	versionBefore := versionOf(t, db, tid)
 
-	snap, err := store.RemovePlace(context.Background(), tid, "never-pinned", true)
+	snap, err := store.RemovePlace(context.Background(), tid, "never-pinned", logbook.DeletePhotos)
 	if err != nil {
 		t.Fatalf("removing a place that is not there = %v, want a success — the client's "+
 			"own removePlace answers true for an id the log does not hold", err)

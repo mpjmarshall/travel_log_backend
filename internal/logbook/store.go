@@ -53,7 +53,7 @@ type CityStore interface {
 type PlaceStore interface {
 	PutPlace(ctx context.Context, travellerID string, w PlaceWrite) (Place, int64, error)
 
-	RemovePlace(ctx context.Context, travellerID, placeID string, deletePhotos bool) (Snapshot, error)
+	RemovePlace(ctx context.Context, travellerID, placeID string, photos PhotoDisposition) (Snapshot, error)
 }
 
 // PhotoStore is the four photograph routes.

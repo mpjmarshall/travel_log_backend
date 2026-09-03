@@ -242,7 +242,7 @@ func TestD2DeletesTheThirtyPhotographsAndTheNotesWrittenOnThem(t *testing.T) {
 		t.Fatalf("the fixture holds %d captions, want 2", captionsBefore)
 	}
 
-	snap, err := store.RemovePlace(context.Background(), travellerUUID, "fushimi-inari", true)
+	snap, err := store.RemovePlace(context.Background(), travellerUUID, "fushimi-inari", logbook.DeletePhotos)
 	if err != nil {
 		t.Fatalf("RemovePlace: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestD2KeepsTheThirtyPhotographsWithTheirDateCityAndCaption(t *testing.T) {
 		t.Fatalf("read %d photographs, want %d", len(before), fushimiFiled)
 	}
 
-	if _, err := store.RemovePlace(ctx, travellerUUID, "fushimi-inari", false); err != nil {
+	if _, err := store.RemovePlace(ctx, travellerUUID, "fushimi-inari", logbook.KeepPhotos); err != nil {
 		t.Fatalf("RemovePlace: %v", err)
 	}
 
@@ -356,17 +356,17 @@ func TestD2KeepsTheThirtyPhotographsWithTheirDateCityAndCaption(t *testing.T) {
 // The walks are not touched on either branch, and that is `walks` having no
 // `place_id` at all rather than anything Go does.
 func TestD2LeavesTheWalksAloneOnBothBranches(t *testing.T) {
-	for _, deletePhotos := range []bool{true, false} {
+	for _, disposition := range []logbook.PhotoDisposition{logbook.DeletePhotos, logbook.KeepPhotos} {
 		db, store := loadedWithFushimiChecked(t)
 		before := rows(t, db, `SELECT count(*) FROM walks`)
 		if before != 2 {
 			t.Fatalf("the fixture holds %d walks, want 2", before)
 		}
-		if _, err := store.RemovePlace(context.Background(), travellerUUID, "fushimi-inari", deletePhotos); err != nil {
-			t.Fatalf("RemovePlace(deletePhotos=%v): %v", deletePhotos, err)
+		if _, err := store.RemovePlace(context.Background(), travellerUUID, "fushimi-inari", disposition); err != nil {
+			t.Fatalf("RemovePlace(%v): %v", disposition, err)
 		}
 		if got := rows(t, db, `SELECT count(*) FROM walks`); got != before {
-			t.Errorf("deletePhotos=%v: walks %d -> %d", deletePhotos, before, got)
+			t.Errorf("%v: walks %d -> %d", disposition, before, got)
 		}
 	}
 }
