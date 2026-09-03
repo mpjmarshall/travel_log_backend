@@ -120,29 +120,10 @@ func requireWritablePhoto(ctx context.Context, tx *sql.Tx, travellerID, id strin
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		before.isCreate = true
-		for _, missing := range []struct {
-			absent bool
-			field  string
-			why    string
-		}{
-			{w.TripID == nil, "tripId", "a photograph is taken on a trip, and one that is " +
-				"not in this log yet has no trip to leave alone"},
-			{w.CityID == nil, "cityId", "a photograph is taken in a city, and one that is " +
-				"not in this log yet has no city to leave alone"},
-			{w.TakenAt == nil, "takenAt", "a photograph is taken at a moment — it is what " +
-				"M1 and L1 group by — and one that is not in this log yet has none to " +
-				"leave alone"},
-			{w.Asset == nil, "asset", "a photograph IS its asset, and one that is not in " +
-				"this log yet has none to leave alone"},
-		} {
-			if missing.absent {
-				return before, logbook.InvalidFieldError{Field: missing.field, Why: missing.why}
-			}
-		}
 	case err != nil:
 		return before, fmt.Errorf("postgres: reading the photograph %s before writing it: %w", id, err)
 	}
-	return before, nil
+	return before, logbook.CheckPhotoWritable(before.isCreate, w)
 }
 
 func requireTripForPhoto(ctx context.Context, tx *sql.Tx, travellerID, tripID string) error {
@@ -275,9 +256,8 @@ var errNothingSnoozed = errors.New("postgres: none of those photographs is in th
 // SnoozePhotos is N1's 'Later': all-or-nothing in one transaction with one
 // version bump.
 func (s PhotoStore) SnoozePhotos(ctx context.Context, travellerID string, w logbook.SnoozeWrite) ([]logbook.Photo, int64, error) {
-	if w.PhotoIDs == nil || w.Until == nil {
-		return nil, 0, logbook.InvalidFieldError{Field: "photoIds",
-			Why: "a snooze names a group and a date"}
+	if err := logbook.CheckSnoozeWritable(w); err != nil {
+		return nil, 0, err
 	}
 	snoozed := []logbook.Photo{}
 
@@ -359,9 +339,8 @@ const refilePhotoSQL = `UPDATE photos SET place_id = $3, visit_id = $4
 // chose rather than choosing one.
 func (s PhotoStore) RefilePhoto(ctx context.Context, travellerID, photoID string, w logbook.RefileWrite) (logbook.PhotoRefiled, error) {
 	var out logbook.PhotoRefiled
-	if w.PlaceID == nil || w.VisitID == nil {
-		return out, logbook.InvalidFieldError{Field: "visitId",
-			Why: "a re-file names both the pin and the occasion"}
+	if err := logbook.CheckRefileWritable(w); err != nil {
+		return out, err
 	}
 	placeID, visitID := *w.PlaceID, *w.VisitID
 
@@ -374,12 +353,8 @@ func (s PhotoStore) RefilePhoto(ctx context.Context, travellerID, photoID string
 		if err != nil {
 			return err
 		}
-		if placeCity != photo.cityID {
-			return logbook.InvalidFieldError{Field: "placeId",
-				Why: fmt.Sprintf("%q is in %s and the photograph was taken in %s — M2.2 "+
-					"lists the pins in the photograph's OWN city, and moving one between "+
-					"cities is a claim about where somebody was",
-					placeID, placeCity, photo.cityID)}
+		if err := logbook.CheckRefilePlace(placeID, placeCity, photo.cityID); err != nil {
+			return err
 		}
 
 		minted, err := requireOrMintOccasion(ctx, tx, travellerID, refiling{
@@ -426,12 +401,8 @@ func requireOrMintOccasion(ctx context.Context, tx *sql.Tx, travellerID string, 
 	switch err := tx.QueryRowContext(ctx, readVisitForRefileSQL, travellerID, r.visitID).
 		Scan(&heldPlace, &heldTrip); {
 	case errors.Is(err, sql.ErrNoRows):
-		if r.at == nil {
-			return false, logbook.InvalidFieldError{Field: "visitAt",
-				Why: fmt.Sprintf("%q is not an occasion in this log, so this re-file is "+
-					"opening a new one — and an occasion happens at a moment. The client "+
-					"already holds it: `refilePhoto` mints the visit at the photograph's "+
-					"own `takenAt`", r.visitID)}
+		if err := logbook.CheckNewOccasionHasAMoment(r.visitID, r.at); err != nil {
+			return false, err
 		}
 		if _, err := tx.ExecContext(ctx, insertRefiledVisitSQL,
 			travellerID, r.visitID, r.placeID, r.tripID, r.at.Time()); err != nil {
@@ -446,18 +417,8 @@ func requireOrMintOccasion(ctx context.Context, tx *sql.Tx, travellerID string, 
 		return false, fmt.Errorf("postgres: reading the occasion %s: %w", r.visitID, err)
 	}
 
-	if heldPlace != r.placeID {
-		return false, logbook.InvalidFieldError{Field: "visitId",
-			Why: fmt.Sprintf("the occasion %s belongs to %s and this re-file names %s. "+
-				"A visit id is unique across the whole log, so filing to another place's "+
-				"occasion would put the photograph somewhere nobody mentioned",
-				r.visitID, heldPlace, r.placeID)}
-	}
-	if heldTrip != r.tripID {
-		return false, logbook.InvalidFieldError{Field: "visitId",
-			Why: fmt.Sprintf("the occasion %s is on %s and the photograph was taken on %s. "+
-				"A photograph filed to another trip's occasion lands in the wrong year "+
-				"row on P1 and in that trip's cascade", r.visitID, heldTrip, r.tripID)}
+	if err := logbook.CheckOccasionBelongsHere(r.visitID, heldPlace, r.placeID, heldTrip, r.tripID); err != nil {
+		return false, err
 	}
 	return false, nil
 }

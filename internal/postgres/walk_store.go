@@ -130,6 +130,7 @@ type walkBeforeWrite struct {
 	recordedOn     time.Time
 	distanceKm     float64
 	lats, lngs     []float64
+	isCreate       bool
 }
 
 // requireWritableWalk refuses a create missing a not NULL field and names it.
@@ -140,31 +141,11 @@ func requireWritableWalk(ctx context.Context, tx *sql.Tx, travellerID, id string
 			(*float64Slice)(&before.lats), (*float64Slice)(&before.lngs))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		for _, missing := range []struct {
-			absent bool
-			field  string
-			why    string
-		}{
-			{w.TripID == nil, "tripId", "a walk happens on a trip, and one that is not in " +
-				"this log yet has no trip to leave alone"},
-			{w.CityID == nil, "cityId", "a walk happens in a city, and one that is not in " +
-				"this log yet has no city to leave alone"},
-			{w.RecordedOn == nil, "recordedOn", "a walk is a recording of a day, and one " +
-				"that is not in this log yet has no day to leave alone"},
-			{w.DistanceKm == nil, "distanceKm", "a walk that is not in this log yet has no " +
-				"distance to leave alone"},
-			{w.Points == nil, "points", "a walk that is not in this log yet has no track to " +
-				"leave alone, and there is nothing this build could invent — a track is " +
-				"a recording of a day that has passed"},
-		} {
-			if missing.absent {
-				return before, logbook.InvalidFieldError{Field: missing.field, Why: missing.why}
-			}
-		}
+		before.isCreate = true
 	case err != nil:
 		return before, fmt.Errorf("postgres: reading the walk %s before writing it: %w", id, err)
 	}
-	return before, nil
+	return before, logbook.CheckWalkWritable(before.isCreate, w)
 }
 
 // storedWalkName is the name as it goes to the column.

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"travellog/internal/logbook"
@@ -409,25 +408,12 @@ func requireWritableTrip(ctx context.Context, tx *sql.Tx, travellerID, id string
 		Scan(&before.name, &before.started, &before.ended)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if w.Name == nil {
-			return before, logbook.InvalidFieldError{Field: "name",
-				Why: "a trip that is not in this log yet has no name to leave alone"}
-		}
+		before.isCreate = true
 	case err != nil:
 		return before, fmt.Errorf("postgres: reading the trip %s before writing it: %w", id, err)
 	}
-
-	start, end := before.started, before.ended
-	if logbook.Sent(w.Start) {
-		start = nullTimeOf(logbook.Value(w.Start))
-	}
-	if logbook.Sent(w.End) {
-		end = nullTimeOf(logbook.Value(w.End))
-	}
-	if start.Valid && end.Valid && end.Time.Before(start.Time) {
-		return before, logbook.InvalidFieldError{Field: "end", Why: "a trip cannot end before it starts"}
-	}
-	return before, nil
+	return before, logbook.CheckTripWritable(before.isCreate,
+		logbook.TripDates{Start: instantOf(before.started), End: instantOf(before.ended)}, w)
 }
 
 // tripBeforeWrite is's three columns the upsert has to know about the row
@@ -435,6 +421,17 @@ func requireWritableTrip(ctx context.Context, tx *sql.Tx, travellerID, id string
 type tripBeforeWrite struct {
 	name           string
 	started, ended sql.NullTime
+	isCreate       bool
+}
+
+// instantOf is the one conversion the trip date rule needs to be decidable
+// without a database.
+func instantOf(t sql.NullTime) *logbook.Instant {
+	if !t.Valid {
+		return nil
+	}
+	i := logbook.At(t.Time)
+	return &i
 }
 
 func nullTimeOf(i *logbook.Instant) sql.NullTime {
@@ -528,15 +525,9 @@ const setTravellerNameSQL = `UPDATE travellers SET name = $2 WHERE id = $1::uuid
 
 // SetTravellerName is U1's pencil.
 func (s LogbookStore) SetTravellerName(ctx context.Context, travellerID, name string) (logbook.Traveller, int64, error) {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
-			Why: "a traveller needs a name, and an empty one is not a way to clear it"}
-	}
-	if len(trimmed) > logbook.MaxNameBytes {
-		return logbook.Traveller{}, 0, logbook.InvalidFieldError{Field: "name",
-			Why: fmt.Sprintf("%d bytes, and this build takes at most %d",
-				len(trimmed), logbook.MaxNameBytes)}
+	trimmed, err := logbook.CheckTravellerName(name)
+	if err != nil {
+		return logbook.Traveller{}, 0, err
 	}
 
 	version, err := WithTravellerTx(ctx, s.DB, travellerID, func(ctx context.Context, tx *sql.Tx) error {
