@@ -234,6 +234,11 @@ func newMux(db pinger, log *slog.Logger, mounts ...func(*http.ServeMux)) *http.S
 // apiRoutes builds the auth service from the config and answers something
 // that mounts its routes.
 func apiRoutes(cfg config.Config, db *sql.DB, log *slog.Logger, objects media.Store, sender mail.Sender) (func(*http.ServeMux), error) {
+	if db == nil {
+		return nil, errors.New("apiRoutes: the database handle is nil, and every store built " +
+			"on it is a non-nil interface value — so the routes would mount and answer a " +
+			"panic on their first query")
+	}
 	service := &auth.Service{Store: postgres.AuthStore{DB: db}}
 	places := geocode.NewPhoton(geocodeBase, geocodeAgent, &http.Client{
 		Timeout: geocodeTimeout,

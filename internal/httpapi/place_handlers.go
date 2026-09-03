@@ -2,20 +2,19 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 )
 
 // putPlace is `PUT /v1/places/{id}`: C1's pin on a create, and the whole
 // ordered visits array on any write that carries one.
-func putPlace(deps Deps) http.HandlerFunc {
+func putPlace(log *slog.Logger, places logbook.PlaceStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -24,37 +23,31 @@ func putPlace(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		id := r.PathValue("id")
-		if body.ID == nil {
-			body.ID = &id
-		}
-		if *body.ID != id {
-			httpx.WriteFieldError(w, r, "id")
+		if !reconcileID(w, r, &body.ID) {
 			return
 		}
 		if err := logbook.ValidatePlace(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		place, version, err := deps.Places.PutPlace(r.Context(), traveller.ID, body)
+		place, version, err := places.PutPlace(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
+		setTag(w, version)
 
 		httpx.WriteJSON(w, r, http.StatusOK, logbook.EmitPlace(place))
 	}
 }
 
 // removePlace is `DELETE /v1/places/{id}?photos=keep|delete`.
-func removePlace(deps Deps) http.HandlerFunc {
+func removePlace(log *slog.Logger, service logbook.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -67,23 +60,23 @@ func removePlace(deps Deps) http.HandlerFunc {
 
 		photos, err := logbook.ParsePhotoDisposition(r.URL.Query().Get("photos"))
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		snapshot, err := deps.places().RemovePlace(r.Context(), traveller.ID, r.PathValue("id"), photos)
+		snapshot, err := service.RemovePlace(r.Context(), traveller.ID, r.PathValue("id"), photos)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		if snapshot.Document == nil {
-			writeLogbookFailure(w, r, deps.Log, logbook.ErrNoTraveller)
+			writeLogbookFailure(w, r, log, logbook.ErrNoTraveller)
 			return
 		}
 
 		envelope, err := logbook.Emit(format, *snapshot.Document)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 

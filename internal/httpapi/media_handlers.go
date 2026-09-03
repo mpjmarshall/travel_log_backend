@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 	"travellog/internal/media"
@@ -38,11 +37,10 @@ type mintBody struct {
 }
 
 // beginMedia is `POST /v1/media`.
-func beginMedia(deps Deps) http.HandlerFunc {
+func beginMedia(log *slog.Logger, rows logbook.MediaStore, objects media.Store, maxBytes int64, now func() time.Time) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -51,32 +49,32 @@ func beginMedia(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		if err := logbook.ValidateMediaBegin(body, deps.MediaMaxBytes); err != nil {
-			writeMediaFailure(w, r, deps.Log, err)
+		if err := logbook.ValidateMediaBegin(body, maxBytes); err != nil {
+			writeMediaFailure(w, r, log, err)
 			return
 		}
 
-		row, err := deps.Media.BeginMedia(r.Context(), traveller.ID, body)
+		row, err := rows.BeginMedia(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeMediaFailure(w, r, deps.Log, err)
+			writeMediaFailure(w, r, log, err)
 			return
 		}
 
 		answer := beginBody{ID: row.ID, AlreadyExists: row.Committed()}
 		if !answer.AlreadyExists {
-			url, headers, err := deps.Objects.PresignPut(r.Context(),
+			url, headers, err := objects.PresignPut(r.Context(),
 				media.Key{Traveller: traveller.ID, Object: row.ID},
 				media.Upload{SHA256: row.ID, ByteSize: row.ByteSize, ContentType: row.ContentType})
 			if err != nil {
-				writeMediaFailure(w, r, deps.Log, err)
+				writeMediaFailure(w, r, log, err)
 				return
 			}
 			lifetime, err := media.ExpiresIn(url)
 			if err != nil {
-				writeMediaFailure(w, r, deps.Log, err)
+				writeMediaFailure(w, r, log, err)
 				return
 			}
-			expires := deps.Clock()().Add(lifetime)
+			expires := now().Add(lifetime)
 			answer.UploadURL, answer.UploadHeaders, answer.ExpiresAt = url, headers, &expires
 		}
 		httpx.WriteJSON(w, r, http.StatusCreated, answer)
@@ -85,23 +83,22 @@ func beginMedia(deps Deps) http.HandlerFunc {
 
 // commitMedia is `POST /v1/media/{id}/commit` is's first Service operation,
 // The only route in this API that spans the bucket and the database.
-func commitMedia(deps Deps) http.HandlerFunc {
+func commitMedia(log *slog.Logger, service logbook.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
 		id := r.PathValue("id")
 		if err := logbook.ValidateMediaID(id); err != nil {
-			writeMediaFailure(w, r, deps.Log, err)
+			writeMediaFailure(w, r, log, err)
 			return
 		}
 
-		row, err := deps.mediaService().CommitMedia(r.Context(), traveller.ID, id)
+		row, err := service.CommitMedia(r.Context(), traveller.ID, id)
 		if err != nil {
-			writeMediaFailure(w, r, deps.Log, err)
+			writeMediaFailure(w, r, log, err)
 			return
 		}
 		httpx.WriteJSON(w, r, http.StatusOK, mediaBody{
@@ -116,11 +113,10 @@ func commitMedia(deps Deps) http.HandlerFunc {
 
 // mintMedia is `POST /v1/media/mint`: a list of ids, one round trip for a
 // twelve-photograph grid.
-func mintMedia(deps Deps) http.HandlerFunc {
+func mintMedia(log *slog.Logger, rows logbook.MediaStore, objects media.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -130,13 +126,13 @@ func mintMedia(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := logbook.ValidateMediaMint(body); err != nil {
-			writeMediaFailure(w, r, deps.Log, err)
+			writeMediaFailure(w, r, log, err)
 			return
 		}
 
-		rows, err := deps.Media.MediaObjects(r.Context(), traveller.ID, *body.IDs)
+		rows, err := rows.MediaObjects(r.Context(), traveller.ID, *body.IDs)
 		if err != nil {
-			writeMediaFailure(w, r, deps.Log, err)
+			writeMediaFailure(w, r, log, err)
 			return
 		}
 		committed := make(map[string]bool, len(rows))
@@ -148,17 +144,17 @@ func mintMedia(deps Deps) http.HandlerFunc {
 		for _, id := range *body.IDs {
 			state, known := committed[id]
 			if !known {
-				writeMediaFailure(w, r, deps.Log, logbook.ErrNoMediaObject)
+				writeMediaFailure(w, r, log, logbook.ErrNoMediaObject)
 				return
 			}
 			if !state {
-				writeMediaFailure(w, r, deps.Log, logbook.ErrUploadIncomplete)
+				writeMediaFailure(w, r, log, logbook.ErrUploadIncomplete)
 				return
 			}
-			url, err := deps.Objects.PresignGet(r.Context(),
+			url, err := objects.PresignGet(r.Context(),
 				media.Key{Traveller: traveller.ID, Object: id}, media.Private)
 			if err != nil {
-				writeMediaFailure(w, r, deps.Log, err)
+				writeMediaFailure(w, r, log, err)
 				return
 			}
 			urls = append(urls, url)

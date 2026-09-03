@@ -2,19 +2,18 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 )
 
 // deleteTrip answers 200 and the whole logbook, not 204.
-func deleteTrip(deps Deps) http.HandlerFunc {
+func deleteTrip(log *slog.Logger, books logbook.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -25,19 +24,19 @@ func deleteTrip(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		snapshot, err := deps.Logbook.DeleteTrip(r.Context(), traveller.ID, r.PathValue("id"))
+		snapshot, err := books.DeleteTrip(r.Context(), traveller.ID, r.PathValue("id"))
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		if snapshot.Document == nil {
-			writeLogbookFailure(w, r, deps.Log, logbook.ErrNoTraveller)
+			writeLogbookFailure(w, r, log, logbook.ErrNoTraveller)
 			return
 		}
 
 		envelope, err := logbook.Emit(format, *snapshot.Document)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 

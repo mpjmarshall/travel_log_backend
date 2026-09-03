@@ -2,9 +2,9 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 )
@@ -15,11 +15,10 @@ type snoozeBody struct {
 }
 
 // putPhoto is `PUT /v1/photos/{id}`: M2's 'Write a note', and the create.
-func putPhoto(deps Deps) http.HandlerFunc {
+func putPhoto(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -28,43 +27,37 @@ func putPhoto(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		id := r.PathValue("id")
-		if body.ID == nil {
-			body.ID = &id
-		}
-		if *body.ID != id {
-			httpx.WriteFieldError(w, r, "id")
+		if !reconcileID(w, r, &body.ID) {
 			return
 		}
 		if err := logbook.ValidatePhoto(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		photo, version, err := deps.Photos.PutPhoto(r.Context(), traveller.ID, body)
+		photo, version, err := photos.PutPhoto(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, version))
+		setTag(w, version)
 		httpx.WriteJSON(w, r, http.StatusOK, photo)
 	}
 }
 
 // deletePhoto is `DELETE /v1/photos/{id}`: D1, and the only destructive route
 // in this plan that answers 204.
-func deletePhoto(deps Deps) http.HandlerFunc {
+func deletePhoto(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
-		version, err := deps.Photos.DeletePhoto(r.Context(), traveller.ID, r.PathValue("id"))
+		version, err := photos.DeletePhoto(r.Context(), traveller.ID, r.PathValue("id"))
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		if tag := tagFor(version); tag != "" {
@@ -76,11 +69,10 @@ func deletePhoto(deps Deps) http.HandlerFunc {
 
 // snoozePhotos is `POST /v1/photos/snooze`: N1's 'Later', and's second
 // route in this API that takes a collection.
-func snoozePhotos(deps Deps) http.HandlerFunc {
+func snoozePhotos(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -90,13 +82,13 @@ func snoozePhotos(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := logbook.ValidateSnooze(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		photos, version, err := deps.Photos.SnoozePhotos(r.Context(), traveller.ID, body)
+		photos, version, err := photos.SnoozePhotos(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		if tag := tagFor(version); tag != "" {
@@ -107,11 +99,10 @@ func snoozePhotos(deps Deps) http.HandlerFunc {
 }
 
 // refilePhoto is `POST /v1/photos/{id}/refile`: M2.2's 'Change'.
-func refilePhoto(deps Deps) http.HandlerFunc {
+func refilePhoto(log *slog.Logger, service logbook.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -128,17 +119,17 @@ func refilePhoto(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := logbook.ValidateRefile(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		refiled, err := deps.photos().RefilePhoto(r.Context(), traveller.ID, r.PathValue("id"), body)
+		refiled, err := service.RefilePhoto(r.Context(), traveller.ID, r.PathValue("id"), body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, refiled.Version))
+		setTag(w, refiled.Version)
 
 		if refiled.Document == nil {
 			httpx.WriteJSON(w, r, http.StatusOK, refiled.Photo)
@@ -146,7 +137,7 @@ func refilePhoto(deps Deps) http.HandlerFunc {
 		}
 		envelope, err := logbook.Emit(format, *refiled.Document)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		httpx.WriteJSON(w, r, http.StatusOK, envelope)

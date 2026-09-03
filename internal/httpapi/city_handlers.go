@@ -2,20 +2,19 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 
-	"travellog/internal/auth"
 	"travellog/internal/httpx"
 	"travellog/internal/logbook"
 )
 
 // putCity is `PUT /v1/cities/{id}`: createCity, and setTripCities' one
 // reachable case folded into it.
-func putCity(deps Deps) http.HandlerFunc {
+func putCity(log *slog.Logger, cities logbook.CityStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		traveller, held := auth.TravellerFrom(r.Context())
+		traveller, held := travellerOf(w, r)
 		if !held {
-			httpx.WriteError(w, r, httpx.CodeInternal)
 			return
 		}
 
@@ -31,26 +30,21 @@ func putCity(deps Deps) http.HandlerFunc {
 			httpx.WriteErrorFor(w, r, err)
 			return
 		}
-		id := r.PathValue("id")
-		if body.ID == nil {
-			body.ID = &id
-		}
-		if *body.ID != id {
-			httpx.WriteFieldError(w, r, "id")
+		if !reconcileID(w, r, &body.ID) {
 			return
 		}
 		if err := logbook.ValidateCity(body); err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		written, err := deps.Cities.PutCity(r.Context(), traveller.ID, body)
+		written, err := cities.PutCity(r.Context(), traveller.ID, body)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 
-		w.Header().Set("ETag", httpx.FormatETag(logbook.EmitterVersion, written.Version))
+		setTag(w, written.Version)
 
 		if written.Document == nil {
 			httpx.WriteJSON(w, r, http.StatusOK, written.City)
@@ -58,7 +52,7 @@ func putCity(deps Deps) http.HandlerFunc {
 		}
 		envelope, err := logbook.Emit(format, *written.Document)
 		if err != nil {
-			writeLogbookFailure(w, r, deps.Log, err)
+			writeLogbookFailure(w, r, log, err)
 			return
 		}
 		httpx.WriteJSON(w, r, http.StatusOK, envelope)
