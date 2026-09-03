@@ -43,8 +43,8 @@ const readOnePhotoSQL = `SELECT id, trip_id, city_id, taken_at, asset, place_id,
 // PutPhoto is M2's 'Write a note' and the create, inside WithTravellerTx.
 func (s PhotoStore) PutPhoto(ctx context.Context, travellerID string, w logbook.PhotoWrite) (logbook.Photo, int64, error) {
 	var photo logbook.Photo
-	if w.ID == nil {
-		return logbook.Photo{}, 0, logbook.InvalidFieldError{Field: "id", Why: "a write names its photograph"}
+	if err := logbook.CheckWriteID(w.ID); err != nil {
+		return logbook.Photo{}, 0, err
 	}
 	id := *w.ID
 

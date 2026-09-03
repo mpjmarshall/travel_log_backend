@@ -350,8 +350,8 @@ const readOneTripsCitiesSQL = `SELECT city_id FROM trip_cities
 // PutTrip is the whole-state upsert, inside WithTravellerTx.
 func (s LogbookStore) PutTrip(ctx context.Context, travellerID string, w logbook.TripWrite) (logbook.Trip, int64, error) {
 	var trip logbook.Trip
-	if w.ID == nil {
-		return logbook.Trip{}, 0, logbook.InvalidFieldError{Field: "id", Why: "a write names its trip"}
+	if err := logbook.CheckWriteID(w.ID); err != nil {
+		return logbook.Trip{}, 0, err
 	}
 	id := *w.ID
 
