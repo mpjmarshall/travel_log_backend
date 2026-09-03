@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-
-	"travellog/internal/postgres"
 )
 
 // PageSize is how many travellers one page holds.
@@ -14,11 +12,11 @@ const PageSize = 25
 
 // Store is every read the panel makes. cmd/api supplies the postgres one.
 type Store interface {
-	Overview(ctx context.Context) (postgres.Overview, error)
-	Travellers(ctx context.Context, query string, limit, offset int) ([]postgres.TravellerRow, int, error)
-	Traveller(ctx context.Context, id string) (postgres.TravellerDetail, error)
-	Sessions(ctx context.Context, travellerID string) ([]postgres.SessionRow, error)
-	Invites(ctx context.Context) ([]postgres.InviteRow, error)
+	Overview(ctx context.Context) (Overview, error)
+	Travellers(ctx context.Context, query string, limit, offset int) ([]Traveller, int, error)
+	Traveller(ctx context.Context, id string) (TravellerDetail, error)
+	Sessions(ctx context.Context, travellerID string) ([]Session, error)
+	Invites(ctx context.Context) ([]Invite, error)
 }
 
 // page starts the data every template needs, so no handler forgets the token.

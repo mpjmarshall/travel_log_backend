@@ -13,7 +13,6 @@ import (
 
 	"travellog/internal/admin"
 	"travellog/internal/media"
-	"travellog/internal/postgres"
 )
 
 type fakeWriter struct {
@@ -46,9 +45,9 @@ func (f *fakeObjects) Delete(_ context.Context, key media.Key) error {
 	return f.err
 }
 
-func adaDetail() postgres.TravellerDetail {
-	return postgres.TravellerDetail{
-		TravellerRow: postgres.TravellerRow{
+func adaDetail() admin.TravellerDetail {
+	return admin.TravellerDetail{
+		Traveller: admin.Traveller{
 			ID: "id-1", Email: "ada@example.com", Trips: 7, Photos: 286,
 			CreatedAt: time.Now(),
 		},

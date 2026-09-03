@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"travellog/internal/admin"
-	"travellog/internal/postgres"
 )
 
 func templates(t *testing.T) *admin.Templates {
@@ -137,8 +136,8 @@ func TestTheStylesheetColoursLinksItself(t *testing.T) {
 
 func TestOneOfAThingIsSingular(t *testing.T) {
 	data := sample()
-	data.Traveller = &postgres.TravellerDetail{
-		TravellerRow: postgres.TravellerRow{
+	data.Traveller = &admin.TravellerDetail{
+		Traveller: admin.Traveller{
 			ID: "id-1", Email: "ada@example.com", Trips: 1, Photos: 0,
 			CreatedAt: time.Now(),
 		},
