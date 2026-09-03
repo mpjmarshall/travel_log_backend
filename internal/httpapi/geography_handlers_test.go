@@ -163,17 +163,13 @@ func (f *fakeGeography) PutPlace(_ context.Context, _ string, w logbook.PlaceWri
 	return next, f.books.version, nil
 }
 
-func (f *fakeGeography) RemovePlace(_ context.Context, _, placeID string, deletePhotos bool) (logbook.Snapshot, error) {
+func (f *fakeGeography) RemovePlace(_ context.Context, _, placeID string, photos logbook.PhotoDisposition) (logbook.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failWith != nil {
 		return logbook.Snapshot{}, f.failWith
 	}
-	branch := logbook.KeepPhotos
-	if deletePhotos {
-		branch = logbook.DeletePhotos
-	}
-	f.removals = append(f.removals, branch)
+	f.removals = append(f.removals, photos)
 
 	kept := f.books.doc.Places[:0:0]
 	gone := false
@@ -190,19 +186,19 @@ func (f *fakeGeography) RemovePlace(_ context.Context, _, placeID string, delete
 	}
 	f.books.doc.Places = kept
 
-	photos := f.books.doc.Photos[:0:0]
+	keptPhotos := f.books.doc.Photos[:0:0]
 	for _, photo := range f.books.doc.Photos {
 		if photo.PlaceID == nil || *photo.PlaceID != placeID {
-			photos = append(photos, photo)
+			keptPhotos = append(keptPhotos, photo)
 			continue
 		}
-		if deletePhotos {
+		if photos == logbook.DeletePhotos {
 			continue
 		}
 		photo.PlaceID, photo.VisitID = nil, nil
-		photos = append(photos, photo)
+		keptPhotos = append(keptPhotos, photo)
 	}
-	f.books.doc.Photos = photos
+	f.books.doc.Photos = keptPhotos
 
 	f.books.version++
 	doc := f.books.doc

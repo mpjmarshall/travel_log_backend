@@ -151,11 +151,28 @@ func CheckSnoozeWritable(w SnoozeWrite) error {
 	return nil
 }
 
-// CheckRefileWritable refuses half a pair: the pin and the occasion are
-// coherent by this rule and not by the schema.
+// CheckRefileWritable is the store's guard for a caller that is not a handler.
+// Over HTTP the same rule has already answered, through ValidateRefile.
 func CheckRefileWritable(w RefileWrite) error {
-	if w.PlaceID == nil || w.VisitID == nil {
-		return InvalidFieldError{Field: "visitId", Why: "a re-file names both the pin and the occasion"}
+	return refilePresence(w)
+}
+
+// refilePresence is the one implementation of "a re-file names both halves",
+// so the two call sites cannot answer differently.
+func refilePresence(w RefileWrite) error {
+	if w.PlaceID == nil {
+		return InvalidFieldError{Field: "placeId",
+			Why: "a re-file names the pin it is filing to; M2.2 lists the pins in the " +
+				"photograph's own city and there is no 'nowhere' among them"}
+	}
+	if w.VisitID == nil {
+		return InvalidFieldError{Field: "visitId",
+			Why: "a re-file names the OCCASION as well as the pin, and the client is what " +
+				"chooses it — a place can be visited more than once on one trip (the " +
+				"fixture visits Nishiki four times in one day), so a server picking for " +
+				"itself would file the photograph to whichever row the planner returned. " +
+				"Send the id of an existing occasion, or a fresh id and `visitAt` to " +
+				"open a new one"}
 	}
 	return nil
 }
@@ -213,4 +230,15 @@ func CheckClearingVisits(occasions int) error {
 			"this place, which unfiles every photograph filed to them — no control in the "+
 			"client asks for that, so this build refuses it. OMIT the key to leave the "+
 			"visits alone", occasions)}
+}
+
+// CheckPhotoDisposition refuses a removal that never answered D2's question.
+// The zero value is not DeletePhotos, so unchecked it takes the KEEP branch.
+func CheckPhotoDisposition(photos PhotoDisposition) error {
+	switch photos {
+	case KeepPhotos, DeletePhotos:
+		return nil
+	}
+	_, err := ParsePhotoDisposition("")
+	return err
 }

@@ -82,8 +82,10 @@ func TestARefileNamingOnlyHalfThePairIsRefused(t *testing.T) {
 	}
 
 	_, err = store.RefilePhoto(ctx, tid, "p-autumn", logbook.RefileWrite{VisitID: ptr("v-anything")})
-	if got := fieldNamed(err); got != "visitId" {
-		t.Errorf("a re-file naming an occasion and no place named %q, want \"visitId\"", got)
+	if got := fieldNamed(err); got != "placeId" {
+		t.Errorf("a re-file naming an occasion and no place named %q, want \"placeId\" — "+
+			"the store used to answer visitId for both halves while the API answered "+
+			"placeId, and there is one answer now", got)
 	}
 }
 

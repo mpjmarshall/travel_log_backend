@@ -167,16 +167,14 @@ func TestValidateSnoozeRefusesARepeatedId(t *testing.T) {
 	}
 }
 
-// a re-file that names no occasion is refused before any statement runs, and
-// the refusal is the service's.
+// A re-file that names no occasion is refused by the rule the store calls
+// before it opens a transaction.
 func TestARefileThatNamesNoOccasionIsRefusedBeforeAnyStatementRuns(t *testing.T) {
 	store := &countingRefiles{}
-	service := logbook.Service{Photos: store}
 
 	place := "nishiki"
 	var invalid logbook.InvalidFieldError
-	_, err := service.RefilePhoto(t.Context(), "traveller", "ph-45",
-		logbook.RefileWrite{PlaceID: &place})
+	err := logbook.CheckRefileWritable(logbook.RefileWrite{PlaceID: &place})
 	if !errors.As(err, &invalid) || invalid.Field != "visitId" {
 		t.Errorf("a re-file with no visitId = %v, want an InvalidFieldError naming visitId", err)
 	}
@@ -188,17 +186,14 @@ func TestARefileThatNamesNoOccasionIsRefusedBeforeAnyStatementRuns(t *testing.T)
 	}
 
 	visit := "v-nishiki-0"
-	if _, err := service.RefilePhoto(t.Context(), "traveller", "ph-45",
+	if err := logbook.CheckRefileWritable(
 		logbook.RefileWrite{VisitID: &visit}); !errors.As(err, &invalid) || invalid.Field != "placeId" {
 		t.Errorf("a re-file with no placeId = %v, want an InvalidFieldError naming placeId", err)
 	}
 
-	if _, err := service.RefilePhoto(t.Context(), "traveller", "ph-45",
+	if err := logbook.CheckRefileWritable(
 		logbook.RefileWrite{PlaceID: &place, VisitID: &visit}); err != nil {
 		t.Fatalf("a complete re-file: %v", err)
-	}
-	if store.calls != 1 {
-		t.Errorf("the store was reached %d times on a complete body, want 1", store.calls)
 	}
 }
 
@@ -225,45 +220,25 @@ func (c *countingRefiles) RefilePhoto(_ context.Context, _, photoID string, w lo
 	return logbook.PhotoRefiled{Photo: logbook.Photo{ID: photoID}}, nil
 }
 
-// The service passes the occasion the client named straight through.
-func TestTheServicePassesTheOccasionTheClientNamedStraightThrough(t *testing.T) {
-	store := &countingRefiles{}
-	service := logbook.Service{Photos: store}
-
-	place, visit := "nishiki", "v-nishiki-3"
-	at := logbook.At(snoozeUntil)
-	if _, err := service.RefilePhoto(t.Context(), "traveller", "ph-45", logbook.RefileWrite{
-		PlaceID: &place, VisitID: &visit, VisitAt: &at,
-	}); err != nil {
-		t.Fatalf("a complete re-file: %v", err)
-	}
-	if store.last.VisitID == nil || *store.last.VisitID != visit {
-		t.Errorf("the store was handed visitId %v, want %q", store.last.VisitID, visit)
-	}
-	if store.last.PlaceID == nil || *store.last.PlaceID != place {
-		t.Errorf("the store was handed placeId %v, want %q", store.last.PlaceID, place)
-	}
-	if store.last.VisitAt == nil || !store.last.VisitAt.Time().Equal(at.Time()) {
-		t.Errorf("the store was handed visitAt %v, want %v", store.last.VisitAt, at)
-	}
-}
-
-// A malformed id is refused by the validator and A missing one is not.
-func TestValidateRefileChecksShapeAndSaysNothingAboutAbsence(t *testing.T) {
-	bad := "Fushimi Inari"
+// The validator refuses a malformed id and a missing one. Absence was the
+// Service's refusal until the Service was deleted; one rule, one home.
+func TestValidateRefileChecksBothShapeAndPresence(t *testing.T) {
+	bad, ok := "Fushimi Inari", "fushimi-inari"
 	var invalid logbook.InvalidFieldError
-	if err := logbook.ValidateRefile(logbook.RefileWrite{PlaceID: &bad}); !errors.As(err, &invalid) ||
+
+	if err := logbook.ValidateRefile(logbook.RefileWrite{PlaceID: &bad, VisitID: &ok}); !errors.As(err, &invalid) ||
 		invalid.Field != "placeId" {
 		t.Errorf("a placeId that is not an id = %v, want an InvalidFieldError naming placeId", err)
 	}
-	if err := logbook.ValidateRefile(logbook.RefileWrite{VisitID: &bad}); !errors.As(err, &invalid) ||
+	if err := logbook.ValidateRefile(logbook.RefileWrite{PlaceID: &ok, VisitID: &bad}); !errors.As(err, &invalid) ||
 		invalid.Field != "visitId" {
 		t.Errorf("a visitId that is not an id = %v, want an InvalidFieldError naming visitId", err)
 	}
-	if err := logbook.ValidateRefile(logbook.RefileWrite{}); err != nil {
-		t.Errorf("an EMPTY re-file = %v, want nil from the validator — absence is the "+
-			"Service's refusal and putting it here too would be two spellings of "+
-			"one rule", err)
+	if err := logbook.ValidateRefile(logbook.RefileWrite{}); !errors.As(err, &invalid) ||
+		invalid.Field != "placeId" {
+		t.Errorf("an EMPTY re-file = %v, want an InvalidFieldError naming placeId — the "+
+			"presence rule has one implementation and two call sites, so this is not a "+
+			"second spelling of it", err)
 	}
 }
 

@@ -44,7 +44,7 @@ func putPlace(log *slog.Logger, places logbook.PlaceStore) http.HandlerFunc {
 }
 
 // removePlace is `DELETE /v1/places/{id}?photos=keep|delete`.
-func removePlace(log *slog.Logger, service logbook.Service) http.HandlerFunc {
+func removePlace(log *slog.Logger, places logbook.PlaceStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traveller, held := travellerOf(w, r)
 		if !held {
@@ -64,7 +64,7 @@ func removePlace(log *slog.Logger, service logbook.Service) http.HandlerFunc {
 			return
 		}
 
-		snapshot, err := service.RemovePlace(r.Context(), traveller.ID, r.PathValue("id"), photos)
+		snapshot, err := places.RemovePlace(r.Context(), traveller.ID, r.PathValue("id"), photos)
 		if err != nil {
 			writeLogbookFailure(w, r, log, err)
 			return

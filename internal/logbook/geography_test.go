@@ -89,29 +89,20 @@ func TestAMissingPhotosParameterAndAMisspeltOneSayTheSameThing(t *testing.T) {
 	}
 }
 
-// The zero value is not reachable from outside the package.
-func TestTheServiceRefusesADispositionNobodyChose(t *testing.T) {
-	var reached int
-	svc := logbook.Service{Places: countingPlaces{reached: &reached}}
-
-	_, err := svc.RemovePlace(t.Context(), "traveller", "tofuku-ji", logbook.PhotoDisposition(0))
-	if field := fieldOf(t, err); field != "photos" {
-		t.Errorf("the zero disposition = %v, want an invalid_field on photos", err)
+// The zero value is not reachable from outside the package, and the rule that
+// refuses it is what keeps it from arriving as one of the two real answers.
+func TestADispositionNobodyChoseIsRefused(t *testing.T) {
+	if field := fieldOf(t, logbook.CheckPhotoDisposition(logbook.PhotoDisposition(0))); field != "photos" {
+		t.Errorf("the zero disposition = %v, want an invalid_field on photos — without "+
+			"this the zero value reaches the store, where it is not DeletePhotos and so "+
+			"takes D2's KEEP branch: one of the two answers, silently, on a call that "+
+			"chose neither", logbook.CheckPhotoDisposition(logbook.PhotoDisposition(0)))
 	}
-	if reached != 0 {
-		t.Errorf("the store was reached %d times by a call that never answered the "+
-			"question. Delete this guard and the zero value arrives as "+
-			"`deletePhotos == false`, which is D2's KEEP branch — one of the two "+
-			"answers, silently, on a call that chose neither", reached)
-	}
-
-	if _, err := svc.RemovePlace(t.Context(), "traveller", "tofuku-ji", logbook.DeletePhotos); err != nil {
-		t.Fatalf("a real disposition = %v, want it through to the store", err)
-	}
-	if reached != 1 {
-		t.Errorf("the store was reached %d times by a call that chose delete, want 1 — "+
-			"without this the leg above passes against a Service that refuses "+
-			"everything", reached)
+	for _, chosen := range []logbook.PhotoDisposition{logbook.KeepPhotos, logbook.DeletePhotos} {
+		if err := logbook.CheckPhotoDisposition(chosen); err != nil {
+			t.Errorf("%v = %v, want it through — without this the leg above passes "+
+				"against a rule that refuses everything", chosen, err)
+		}
 	}
 }
 

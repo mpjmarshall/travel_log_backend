@@ -55,23 +55,6 @@ func (d Deps) Clock() func() time.Time {
 	return d.Now
 }
 
-// mediaService is the Service, built from its two ports rather than stored as
-// a third field.
-func (d Deps) mediaService() logbook.Service {
-	return logbook.Service{Media: d.Media, Objects: d.Objects}
-}
-
-// places is the same Service built from the port D2's removal needs, and it
-// is a second accessor rather than one that fills every field.
-func (d Deps) places() logbook.Service {
-	return logbook.Service{Places: d.Places}
-}
-
-// photos builds the Service from the port M2.2's re-file needs.
-func (d Deps) photos() logbook.Service {
-	return logbook.Service{Photos: d.Photos}
-}
-
 // credentials is both request bodies.
 type credentials struct {
 	Email  string `json:"email"`

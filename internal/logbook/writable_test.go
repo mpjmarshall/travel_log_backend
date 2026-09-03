@@ -217,3 +217,20 @@ func namedField(err error) string {
 	}
 	return invalid.Field
 }
+
+// The presence rule belongs with the shape rules: it needs no fact from
+// storage, and the handler is what calls it.
+func TestARefileMustNameBothThePinAndTheOccasion(t *testing.T) {
+	if got := namedField(logbook.ValidateRefile(logbook.RefileWrite{VisitID: ptr("v-1")})); got != "placeId" {
+		t.Errorf("a re-file with no pin named %q, want \"placeId\" — M2.2 lists the pins "+
+			"in the photograph's own city and there is no 'nowhere' among them", got)
+	}
+	if got := namedField(logbook.ValidateRefile(logbook.RefileWrite{PlaceID: ptr("p-1")})); got != "visitId" {
+		t.Errorf("a re-file with no occasion named %q, want \"visitId\" — a place can be "+
+			"visited more than once on one trip, so a server picking for itself would "+
+			"file the photograph to whichever row the planner returned", got)
+	}
+	if err := logbook.ValidateRefile(logbook.RefileWrite{PlaceID: ptr("p-1"), VisitID: ptr("v-1")}); err != nil {
+		t.Errorf("a whole re-file = %v, want no error", err)
+	}
+}
