@@ -45,8 +45,8 @@ const attachCitySQL = `INSERT INTO trip_cities (traveller_id, trip_id, city_id, 
 // traveller's advisory lock, and the version bump taken before the body runs.
 func (s CityStore) PutCity(ctx context.Context, travellerID string, w logbook.CityWrite) (logbook.CityWritten, error) {
 	var out logbook.CityWritten
-	if w.ID == nil {
-		return out, logbook.InvalidFieldError{Field: "id", Why: "a write names its city"}
+	if err := logbook.CheckWriteID(w.ID); err != nil {
+		return out, err
 	}
 	id := *w.ID
 

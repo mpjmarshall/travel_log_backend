@@ -76,8 +76,8 @@ const deleteDepartedVisitsSQL = `DELETE FROM visits
 // WithTravellerTx.
 func (s PlaceStore) PutPlace(ctx context.Context, travellerID string, w logbook.PlaceWrite) (logbook.Place, int64, error) {
 	var place logbook.Place
-	if w.ID == nil {
-		return logbook.Place{}, 0, logbook.InvalidFieldError{Field: "id", Why: "a write names its place"}
+	if err := logbook.CheckWriteID(w.ID); err != nil {
+		return logbook.Place{}, 0, err
 	}
 	id := *w.ID
 

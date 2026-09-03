@@ -65,8 +65,8 @@ type WalkStore struct{ DB *sql.DB }
 // PutWalk is N1's two controls and the create, inside WithTravellerTx.
 func (s WalkStore) PutWalk(ctx context.Context, travellerID string, w logbook.WalkWrite) (logbook.Walk, int64, error) {
 	var walk logbook.Walk
-	if w.ID == nil {
-		return logbook.Walk{}, 0, logbook.InvalidFieldError{Field: "id", Why: "a write names its walk"}
+	if err := logbook.CheckWriteID(w.ID); err != nil {
+		return logbook.Walk{}, 0, err
 	}
 	id := *w.ID
 
