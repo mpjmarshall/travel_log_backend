@@ -6851,3 +6851,63 @@ grep -l 'travellog/internal/postgres' internal/admin/*.go | grep -v _test | wc -
 # the twin, and the race the shared mutex makes possible
 go test -race -count=2 ./internal/auth/ ./internal/httpapi/ ./internal/admin/ ./cmd/api/
 ```
+
+### ARCH-1b — the seed's media half, behind the seam that was already there
+
+Candidate 07 of the same review. **The review's premise was half wrong**: it
+said `media.Store` has two adapters and `cmd/seed` does not stand behind the
+seam. `upload` already took a `media.Store`. What could not be exercised is the
+**HTTP PUT after presigning** — `media.Memory`'s URLs are `memory.invalid` by
+construction, a reserved TLD, so the twin cannot serve one. The seam that was
+missing is the bucket, not the store, and the legs supply it with
+`httptest.NewServer`.
+
+`cmd/seed/main.go` goes 349 lines to 261. `ReadImagery`, `Mapping`,
+`MediaObjects` and `Upload` are `internal/seed`'s, with seven legs.
+
+**The digests are `shasum -a 256`'s answer, written as literals**, not this
+package's own recomputation — an expectation computed the way the code computes
+it cannot disagree with it. Both matched when the seed ran for real.
+
+**`Upload` returns what it did rather than printing it.** The command owns what
+an operator reads; the module owns the 412. That is what makes the write-once
+branch assertable at all — as a `[]Uploaded` with `AlreadyThere` set, rather
+than as a line on stdout.
+
+**Two legs are labelled BACKFILL in the file.** `Mapping` and `MediaObjects`
+were written before their tests, which is the horizontal-slicing mistake in
+miniature. Each is mutation-proven instead: nil `uploaded_at` reddens the row
+leg, and collapsing every locator onto one digest reddens the mapping leg —
+**which is the exact defect R4 records the whole-log round trip as blind to**,
+because `RewriteAssets` is applied to both sides of that comparison.
+
+### What running it found, and it is candidate 06 rather than this one
+
+`make seed` on a fresh stack failed before it reached any of this, on a restart
+loop:
+
+```
+{"level":"ERROR","msg":"api: stopping","err":"no mail provider is configured
+ and DEVELOPMENT is not set: mail: the log sender writes sign-in codes to the
+ log and must be asked for by name"}
+```
+
+`DEVELOPMENT` defaults to `0` in `deploy/docker-compose.yml`, and `mail.Sender`
+has **no adapter that delivers mail** — so the api does not come up at all
+unless a deployment asks for the sender that writes credentials to its own log.
+That is the review's candidate 06 arriving in the field rather than on paper,
+and it is **not tracked anywhere**: `grep -i mail docs/BEFORE-A-PUBLIC-DEPLOY.md`
+matches nothing.
+
+### What this leaves guarded by nothing
+
+- **The real bucket.** Every status the upload legs assert is `httptest`'s, not
+  MinIO's. The 412 is what MinIO answers for `If-None-Match: *` and it is
+  asserted here against a server this repository wrote. The arc's A19 is the
+  leg that meets a real bucket, and it does not run `cmd/seed`.
+- **`imageryNames` is a literal pair.** A third file in the bundle is read by
+  nothing and addressed by nothing, silently. Nothing compares the list to the
+  directory.
+- **`cmd/seed/main.go` still has no test**, and that is the point of the split
+  rather than a gap in it: what is left is flags, prompts, printing and the
+  refusals, and `cmd/sweep` is the shape it now matches.
