@@ -138,14 +138,7 @@ func refuseClearingAPlaceThatHasOccasions(ctx context.Context, tx *sql.Tx, trave
 	if err := tx.QueryRowContext(ctx, occasionsAtPlaceSQL, travellerID, placeID).Scan(&occasions); err != nil {
 		return fmt.Errorf("postgres: counting the occasions at %s: %w", placeID, err)
 	}
-	if occasions == 0 {
-		return nil
-	}
-	return logbook.InvalidFieldError{Field: "visits",
-		Why: fmt.Sprintf("an empty visits array is a request to clear all %d occasions at "+
-			"this place, which unfiles every photograph filed to them — no control in "+
-			"the client asks for that, so this build refuses it. OMIT the key to leave "+
-			"the visits alone", occasions)}
+	return logbook.CheckClearingVisits(occasions)
 }
 
 // writeVisits is the four phases, in the order that preserves the filing.
@@ -313,6 +306,7 @@ func refuseDroppingAnOccupiedOccasion(ctx context.Context, tx *sql.Tx, traveller
 type placeBeforeWrite struct {
 	cityID, name string
 	at           logbook.LatLng
+	isCreate     bool
 }
 
 // requireWritablePlace refuses a create missing a not NULL field and names
@@ -323,24 +317,11 @@ func requireWritablePlace(ctx context.Context, tx *sql.Tx, travellerID, id strin
 		Scan(&before.cityID, &before.name, &before.at.Lat, &before.at.Lng)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if w.CityID == nil {
-			return before, logbook.InvalidFieldError{Field: "cityId",
-				Why: "a place belongs to a city, and one that is not in this log yet " +
-					"has no city to leave alone"}
-		}
-		if w.Name == nil {
-			return before, logbook.InvalidFieldError{Field: "name",
-				Why: "a place that is not in this log yet has no name to leave alone"}
-		}
-		if w.Coordinates == nil {
-			return before, logbook.InvalidFieldError{Field: "coordinates",
-				Why: "a place that is not in this log yet has no coordinates to leave " +
-					"alone — C1 pins at the city's centre when the user has not moved it"}
-		}
+		before.isCreate = true
 	case err != nil:
 		return before, fmt.Errorf("postgres: reading the place %s before writing it: %w", id, err)
 	}
-	return before, nil
+	return before, logbook.CheckPlaceWritable(before.isCreate, w)
 }
 
 func readOnePlace(ctx context.Context, tx *sql.Tx, travellerID, placeID string) (logbook.Place, error) {

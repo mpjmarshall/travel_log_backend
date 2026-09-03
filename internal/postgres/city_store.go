@@ -112,9 +112,10 @@ func (s CityStore) PutCity(ctx context.Context, travellerID string, w logbook.Ci
 // cityBeforeWrite is the five columns the upsert has to be able to propose
 // when the body did not carry them.
 type cityBeforeWrite struct {
-	name    string
-	country logbook.Country
-	centre  logbook.LatLng
+	name     string
+	country  logbook.Country
+	centre   logbook.LatLng
+	isCreate bool
 }
 
 // requireWritableCity refuses a create that is missing a not NULL field, and
@@ -126,24 +127,11 @@ func requireWritableCity(ctx context.Context, tx *sql.Tx, travellerID, id string
 			&before.centre.Lat, &before.centre.Lng)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if w.Name == nil {
-			return before, logbook.InvalidFieldError{Field: "name",
-				Why: "a city that is not in this log yet has no name to leave alone"}
-		}
-		if w.Country == nil {
-			return before, logbook.InvalidFieldError{Field: "country",
-				Why: "a city that is not in this log yet has no country to leave alone, " +
-					"and country is derived from the city rather than typed (DEC-59)"}
-		}
-		if w.Centre == nil {
-			return before, logbook.InvalidFieldError{Field: "centre",
-				Why: "a city that is not in this log yet has no centre to leave alone, " +
-					"and C1 pins a new place at it"}
-		}
+		before.isCreate = true
 	case err != nil:
 		return before, fmt.Errorf("postgres: reading the city %s before writing it: %w", id, err)
 	}
-	return before, nil
+	return before, logbook.CheckCityWritable(before.isCreate, w)
 }
 
 // requireTrip names `attachTo` rather than letting trip_cities_trip_fk
