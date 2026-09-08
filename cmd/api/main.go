@@ -210,7 +210,7 @@ func adminPanel(cfg config.Config, db *sql.DB, objects media.Store, log *slog.Lo
 			Sessions: admin.NewSessions(),
 			Now:      time.Now,
 			Log:      log,
-			Dev:      cfg.Development,
+			Dev:      cfg.AdminCookieInsecure,
 			Render:   pages,
 			Store:    postgres.AdminStore{DB: db},
 			Writer:   postgres.AdminStore{DB: db},
@@ -418,9 +418,9 @@ const mailSendTimeout = 15 * time.Second
 // mailer builds the sign-in code sender, detached so delivery time cannot say
 // whether an address has a log here.
 func mailer(cfg config.Config, log *slog.Logger) (mail.Sender, error) {
-	sender, err := mail.NewLogSender(log, cfg.Development)
+	sender, err := mail.NewLogSender(log, cfg.MailLogSender)
 	if err != nil {
-		return nil, fmt.Errorf("no mail provider is configured and DEVELOPMENT is not set: %w", err)
+		return nil, fmt.Errorf("no mail provider is configured and MAIL_LOG_SENDER is not set: %w", err)
 	}
 	return mail.Detached(mail.WithTimeout(sender, mailSendTimeout), log), nil
 }

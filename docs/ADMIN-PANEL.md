@@ -45,7 +45,7 @@ Twenty-nine, counted rather than carried.
 | 11 | **Unset mounts nothing.** No `/admin` routes exist and the API boots exactly as it does today, so no existing stack breaks. |
 | 12 | **No default anywhere**, including development. `compose` passes it through and `.env.example` documents it empty. |
 | 13 | Sessions are **in-memory with a 12-hour idle TTL**. A restart signs the operator out. This breaks under more than one replica, and that is accepted. |
-| 14 | The cookie is `HttpOnly`, `SameSite=Strict`, `Secure`. **`Secure` is dropped only under `DEVELOPMENT=1`** — the same seam the log mail sender already uses. |
+| 14 | The cookie is `HttpOnly`, `SameSite=Strict`, `Secure`. **`Secure` is dropped only under `ADMIN_COOKIE_INSECURE=1`.** It shared `DEVELOPMENT` with the log mail sender until that reuse was split: the log sender is the only way this build boots, so one switch meant the only bootable stack was one whose panel cookie travelled in the clear. |
 | 15 | Brute force is met with **the rate limiter and a lockout**: 10 failures, then 15 minutes. |
 | 16 | CSRF is **`SameSite=Strict` and a per-session token**, carried by htmx through `hx-headers`. |
 | 17 | **No impersonation, ever.** The panel administers accounts and cannot read a log as its owner. `CreateSession` is never called from `internal/admin`. |

@@ -15,16 +15,20 @@ import (
 	"time"
 	"travellog/internal/mail"
 
+	"net/url"
+
+	"travellog/internal/admin"
 	"travellog/internal/auth"
 	"travellog/internal/config"
 	"travellog/internal/httpapi"
 	"travellog/internal/httpx"
+
 	"travellog/internal/media"
 )
 
 func wiredConfig() config.Config {
 	return config.Config{
-		Development:              true,
+		MailLogSender:            true,
 		AuthRateLimitPerMin:      60,
 		TravellerRateLimitPerMin: 600,
 		PublicRateLimitPerMin:    120,
@@ -35,7 +39,7 @@ func wiredConfig() config.Config {
 // The three ceilings come from their own three variables, not from each other.
 func TestTheThreeCeilingsComeFromTheirOwnVariables(t *testing.T) {
 	cfg := config.Config{
-		Development:              true,
+		MailLogSender:            true,
 		AuthRateLimitPerMin:      3,
 		TravellerRateLimitPerMin: 7,
 		PublicRateLimitPerMin:    11,
@@ -368,5 +372,67 @@ func TestApiRoutesRefusesANilDatabase(t *testing.T) {
 	if !strings.Contains(err.Error(), "database") {
 		t.Errorf("the refusal is %q, and it does not name the database, so an "+
 			"operator reading it cannot tell which dependency was missing", err)
+	}
+}
+
+// adminCookie mounts the panel the way run() does and logs in, so the leg sees
+// the cookie the wiring produces rather than the one admin.Deps would.
+func adminCookie(t *testing.T, cfg config.Config) *http.Cookie {
+	t.Helper()
+	mount, err := adminPanel(cfg, unconnected(t), media.NewMemory(), quiet())
+	if err != nil {
+		t.Fatalf("adminPanel: %v", err)
+	}
+	mux := http.NewServeMux()
+	mount(mux)
+
+	form := url.Values{"password": {cfg.AdminPassword}}
+	req := httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == admin.CookieName {
+			return c
+		}
+	}
+	return nil
+}
+
+// The api cannot boot without the log sender, so if one flag drove both, the
+// panel could never run with a Secure cookie.
+func TestPermittingTheLogSenderLeavesTheAdminCookieSecure(t *testing.T) {
+	cfg := wiredConfig()
+	cfg.AdminPassword = "a-long-enough-admin-password"
+	cfg.MailLogSender = true
+	cfg.AdminCookieInsecure = false
+
+	c := adminCookie(t, cfg)
+	if c == nil {
+		t.Fatal("a correct password set no admin session cookie")
+	}
+	if !c.Secure {
+		t.Error("the admin cookie lost Secure while only the log sender was permitted — " +
+			"the mailer and the panel are wired to one switch, so the only configuration " +
+			"that boots is one that hands the panel's session to anyone reading the wire")
+	}
+}
+
+func TestTheCookieSwitchIsWhatRelaxesTheCookie(t *testing.T) {
+	cfg := wiredConfig()
+	cfg.AdminPassword = "a-long-enough-admin-password"
+	cfg.AdminCookieInsecure = true
+
+	c := adminCookie(t, cfg)
+	if c == nil {
+		t.Fatal("a correct password set no admin session cookie")
+	}
+	if c.Secure {
+		t.Error("ADMIN_COOKIE_INSECURE=1 left Secure on, so a panel reached over plain " +
+			"http sets a cookie the browser never sends back and login appears to fail")
+	}
+	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
+		t.Error("the cookie switch relaxes Secure alone, never HttpOnly or SameSite")
 	}
 }
