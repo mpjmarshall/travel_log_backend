@@ -38,7 +38,10 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-travellog}:${POSTGRES_PASSWORD:-travellog}@postgres:5432/${POSTGRES_DB:-travellog}?sslmode=disable
       PORT: "8080"
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      DEVELOPMENT: ${DEVELOPMENT:-0}
+      # Two switches, because they weaken two different things. DEVELOPMENT was
+      # one flag doing both, and the log sender is the only way to boot today.
+      MAIL_LOG_SENDER: ${MAIL_LOG_SENDER:-0}
+      ADMIN_COOKIE_INSECURE: ${ADMIN_COOKIE_INSECURE:-0}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-8}
       DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-4}

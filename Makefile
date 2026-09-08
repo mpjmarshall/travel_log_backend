@@ -213,9 +213,10 @@ seed:
 ## here, which is the correction `make seed` already carries.
 invite:
 	@user="$$($(COMPOSE) exec -T postgres printenv POSTGRES_USER)"; \
+	pass="$$($(COMPOSE) exec -T postgres printenv POSTGRES_PASSWORD)"; \
 	db="$$($(COMPOSE) exec -T postgres printenv POSTGRES_DB)"; \
 	port="$$($(COMPOSE) port postgres 5432 | cut -d: -f2)"; \
-	go run ./cmd/invite -dsn "postgres://$$user:$$user@127.0.0.1:$$port/$$db?sslmode=disable" -note "$(NOTE)"
+	go run ./cmd/invite -dsn "postgres://$$user:$$pass@127.0.0.1:$$port/$$db?sslmode=disable" -note "$(NOTE)"
 
 ## sweep — bucket objects the database no longer references (DEC-21).
 ##

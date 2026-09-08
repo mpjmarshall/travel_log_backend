@@ -19,7 +19,7 @@ const unreachableDB = "postgres://travellog:travellog@127.0.0.1:1/travellog?sslm
 func bootConfig() config.Config {
 	return config.Config{
 		DatabaseURL:              unreachableDB,
-		Development:              false,
+		MailLogSender:            false,
 		DBMaxOpenConns:           1,
 		DBMaxIdleConns:           1,
 		RequestTimeout:           10 * time.Second,
@@ -34,7 +34,7 @@ func TestBootRefusesUndeliverableCodesBeforeItTouchesTheSchema(t *testing.T) {
 
 	err := run(bootConfig(), ":0", log)
 	if err == nil {
-		t.Fatal("run() = nil error with no mail provider and DEVELOPMENT unset")
+		t.Fatal("run() = nil error with no mail provider and MAIL_LOG_SENDER unset")
 	}
 	if !strings.Contains(err.Error(), "mail") {
 		t.Errorf("run() failed for the wrong reason, so the mail check runs after\n"+

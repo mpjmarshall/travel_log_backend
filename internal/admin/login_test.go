@@ -96,18 +96,18 @@ func TestTheRightPasswordSetsAStrictSecureHttpOnlyCookie(t *testing.T) {
 	}
 }
 
-func TestSecureIsDroppedOnlyUnderDevelopment(t *testing.T) {
+func TestSecureIsDroppedOnlyUnderTheCookieSwitch(t *testing.T) {
 	deps, _, _ := loginDeps(true)
 
 	c := cookieOf(t, post(admin.Login(deps), goodPassword))
 	if c == nil {
-		t.Fatal("no cookie under DEVELOPMENT")
+		t.Fatal("no cookie under ADMIN_COOKIE_INSECURE")
 	}
 	if c.Secure {
-		t.Error("Secure stayed on under DEVELOPMENT, so the panel cannot be used over plain http")
+		t.Error("Secure stayed on under ADMIN_COOKIE_INSECURE, so the panel cannot be used over plain http")
 	}
 	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
-		t.Error("DEVELOPMENT relaxes Secure alone, never HttpOnly or SameSite")
+		t.Error("the cookie switch relaxes Secure alone, never HttpOnly or SameSite")
 	}
 }
 

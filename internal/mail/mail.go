@@ -58,8 +58,8 @@ var ErrDevelopmentOnly = errors.New("mail: the log sender writes sign-in codes t
 
 // NewLogSender writes the code to the log so a developer can sign in with no
 // provider. It refuses unless development is asked for by name.
-func NewLogSender(log *slog.Logger, development bool) (Sender, error) {
-	if !development {
+func NewLogSender(log *slog.Logger, permitted bool) (Sender, error) {
+	if !permitted {
 		return nil, ErrDevelopmentOnly
 	}
 	return SenderFunc(func(_ context.Context, to string, m Message) error {

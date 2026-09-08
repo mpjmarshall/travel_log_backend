@@ -60,7 +60,7 @@ func complete() map[string]string {
 
 // optionalVars are read by Load but never required, so they are absent from
 // allVars and must still be cleared or a developer's shell leaks into a run.
-var optionalVars = []string{"ADMIN_PASSWORD"}
+var optionalVars = []string{"ADMIN_PASSWORD", "MAIL_LOG_SENDER", "ADMIN_COOKIE_INSECURE"}
 
 // setEnv makes `vars` the whole of what Load can see.
 func setEnv(t *testing.T, vars map[string]string) {
@@ -365,5 +365,57 @@ func TestAnEmptyEnvironmentDoesNotAskForAdminPassword(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "ADMIN_PASSWORD") {
 		t.Errorf("the error asks for ADMIN_PASSWORD, which is optional:\n%s", err)
+	}
+}
+
+// The two switches DEVELOPMENT used to be. Permitting the log sender is a fact
+// about mail; relaxing the admin cookie is a fact about what is in front.
+func TestTheMailSenderAndTheAdminCookieAreSeparateSwitches(t *testing.T) {
+	env := complete()
+	env["MAIL_LOG_SENDER"] = "1"
+	setEnv(t, env)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load with MAIL_LOG_SENDER=1: %v", err)
+	}
+	if !cfg.MailLogSender {
+		t.Error("MAIL_LOG_SENDER=1 did not permit the log sender, so the api cannot boot at all")
+	}
+	if cfg.AdminCookieInsecure {
+		t.Error("permitting the log sender ALSO relaxed the admin cookie — that is the " +
+			"coupling this splits: the only way to boot is the log sender, so one flag " +
+			"means the panel cannot be run with a Secure cookie")
+	}
+
+	env = complete()
+	env["ADMIN_COOKIE_INSECURE"] = "1"
+	setEnv(t, env)
+
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatalf("Load with ADMIN_COOKIE_INSECURE=1: %v", err)
+	}
+	if !cfg.AdminCookieInsecure {
+		t.Error("ADMIN_COOKIE_INSECURE=1 did not relax the cookie, so a panel reached over " +
+			"plain http sets a cookie the browser will not send back")
+	}
+	if cfg.MailLogSender {
+		t.Error("relaxing the admin cookie ALSO permitted the log sender — sign-in codes " +
+			"would reach the log because of a decision about TLS")
+	}
+}
+
+func TestNeitherSwitchIsOnByDefault(t *testing.T) {
+	setEnv(t, complete())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MailLogSender || cfg.AdminCookieInsecure {
+		t.Errorf("MailLogSender=%v AdminCookieInsecure=%v with neither set; both weaken "+
+			"something and neither may be reached by forgetting a variable",
+			cfg.MailLogSender, cfg.AdminCookieInsecure)
 	}
 }
