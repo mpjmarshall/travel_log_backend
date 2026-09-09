@@ -67,8 +67,8 @@ func deletePhoto(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc {
 	}
 }
 
-// snoozePhotos is `POST /v1/photos/snooze`: N1's 'Later', and's second
-// route in this API that takes a collection.
+// snoozePhotos is `POST /v1/photos/snooze`: the 'Later' control, and the
+// second route in this API that takes a collection of ids.
 func snoozePhotos(log *slog.Logger, photos logbook.PhotoStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traveller, held := travellerOf(w, r)

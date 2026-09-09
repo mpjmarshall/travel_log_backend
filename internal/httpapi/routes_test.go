@@ -202,8 +202,8 @@ func TestTheCapabilityHeadersAreOnTheRowsThatDeclareThem(t *testing.T) {
 	}
 }
 
-// A nil dependency panics at wiring time rather than at's first request,
-// That is the argument already made for the limiter.
+// A nil dependency panics at wiring time rather than at the first request,
+// which is the argument already made for the rate limiter.
 func TestMountRefusesToWireAHalfBuiltAPI(t *testing.T) {
 	full := newHarness(t, options{}).deps
 

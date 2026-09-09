@@ -27,8 +27,8 @@ func RequestIDFrom(ctx context.Context) string {
 	return id
 }
 
-// requestFacts is's two things the access line learns after it has already
-// been entered.
+// requestFacts is the two things the access line learns after it has already
+// been entered: the status written and how long the handler took.
 type requestFacts struct {
 	mu          sync.Mutex
 	travellerID string

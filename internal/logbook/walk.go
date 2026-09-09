@@ -24,8 +24,8 @@ type WalkWrite struct {
 	Dismissed  *bool     `json:"dismissed"`
 }
 
-// ValidateWalk answers's first field that is wrong, and nothing about
-// whether the ids it names exist.
+// ValidateWalk answers with the first field that is wrong, and says nothing
+// about whether the ids it names exist.
 func ValidateWalk(w WalkWrite) error {
 	if w.ID == nil || !idPattern.MatchString(*w.ID) {
 		return InvalidFieldError{Field: "id",

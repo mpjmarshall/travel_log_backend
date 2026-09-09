@@ -1,4 +1,4 @@
-// media_objects, and's two statements the begin route is made of.
+// media_objects, and the two statements the begin route is made of.
 package postgres
 
 import (

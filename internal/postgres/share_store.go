@@ -30,7 +30,7 @@ const revokeLiveLinkSQL = `UPDATE share_links SET revoked_at = now()
 const insertShareLinkSQL = `INSERT INTO share_links (traveller_id, trip_id, token_hash)
 	VALUES ($1::uuid, $2, $3)`
 
-// resetShareFlagsSQL writes's three values by name, and every part of that
+// resetShareFlagsSQL writes the three values by name, and every part of that
 // sentence has been argued about.
 const resetShareFlagsSQL = `UPDATE trips
 	SET share_photos = true, share_notes = true, share_coordinates = false

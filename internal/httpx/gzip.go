@@ -1,5 +1,5 @@
-// gzip, and's two headers that make it safe to put a cache in front of this
-// server.
+// gzip, and the two headers that make it safe to put a cache in front of
+// this server.
 package httpx
 
 import (

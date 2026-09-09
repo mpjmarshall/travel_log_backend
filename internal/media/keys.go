@@ -15,8 +15,8 @@ var digestRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // travellerRe is deliberately narrow: a uuid and nothing else.
 var travellerRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// Address turns one hex digest into's two things a signature needs: the
-// object the path in the bucket and the base64 value of the checksum header.
+// Address turns one hex digest into the two things a signature needs: the
+// object's path in the bucket and the base64 value of the checksum header.
 func Address(traveller, hexDigest string) (path, checksum string, err error) {
 	if !travellerRe.MatchString(traveller) {
 		return "", "", fmt.Errorf("media: %q is not a traveller uuid, and the "+

@@ -767,8 +767,8 @@ func TestEveryForeignKeyChildColumnSetLeadsSomeIndex(t *testing.T) {
 	t.Logf("foreign keys checked: %d, against %d non-partial indexes", total, len(indexes))
 }
 
-// leadsWith reports whether want is exactly the set of's first len(want)
-// columns of have.
+// leadsWith reports whether want and the first len(want) columns of have are
+// the same set.
 func leadsWith(have, want []string) bool {
 	if len(have) < len(want) || len(want) == 0 {
 		return false

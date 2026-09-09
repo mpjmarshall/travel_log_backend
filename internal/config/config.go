@@ -114,7 +114,7 @@ func (l *loader) refuseSilentIdleClamp(cfg Config) {
 	}
 }
 
-// loader accumulates problems instead of returning on's first one.
+// loader accumulates problems instead of returning on the first one.
 type loader struct {
 	problems []string
 	failed   map[string]bool
@@ -248,7 +248,7 @@ func (l *loader) duration(name string, floor, ceiling time.Duration) time.Durati
 	return d
 }
 
-// address parses one of's two bucket addresses and refuses anything
+// address parses one of the two bucket addresses and refuses anything
 // minio.New could not act on.
 func (l *loader) address(name string) string {
 	v := l.required(name)

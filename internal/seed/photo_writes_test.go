@@ -11,8 +11,8 @@ import (
 	"travellog/internal/postgres"
 )
 
-// theFixtureNumbers are's own, re-derived at this working tree by counting
-// Than copied from a report.
+// theFixtureNumbers are this package's own, re-derived at this working tree
+// by counting rather than copied from a report.
 const (
 	fixturePhotos = 284
 	fixtureFiled  = 95

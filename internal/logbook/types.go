@@ -104,8 +104,8 @@ type Walk struct {
 	Dismissed  bool     `json:"dismissed"`
 }
 
-// instantLayout is what the client's own encoder produces, and's three
-// zeroes are the whole reason this type exists.
+// instantLayout is what the client's own encoder produces, and the three
+// millisecond zeroes are the whole reason this type exists.
 const instantLayout = "2006-01-02T15:04:05.000"
 
 // Instant is a time.Time that renders the way the client's encoder does.

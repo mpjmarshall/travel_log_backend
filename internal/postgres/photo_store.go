@@ -1,5 +1,5 @@
-// M2's note, D1's delete, N1's 'Later' and M2.2's 'Change' — and's two
-// columns this file writes in exactly one of its four methods.
+// The note, the delete, 'Later' and 'Change' — and the two filing columns
+// this file writes in exactly one of its four methods.
 package postgres
 
 import (
