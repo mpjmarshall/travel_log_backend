@@ -1,0 +1,97 @@
+# The two tiers `make check` deliberately cannot reach: the built image, and
+# the arc against a live three-service stack from a cold volume. Both need a
+# Docker daemon, both take minutes, and both have only ever run when a human
+# remembered. Nightly and on demand, never on a push.
+name: slice
+
+on:
+  schedule:
+    # 03:17 UTC. Off the hour because the whole world schedules on the hour.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slice
+  cancel-in-progress: false
+
+jobs:
+  slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    # The arc's `gate` phase runs `make check` inside a copy of the repository,
+    # and that copy fails closed without a database exactly as the real gate
+    # does. The arc's own stack is a separate compose project on its own ports
+    # (5464/8085/9005), so nothing here collides with it.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: travellog
+          POSTGRES_PASSWORD: travellog
+          POSTGRES_DB: travellog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U travellog -d travellog"
+          --health-interval 3s
+          --health-timeout 2s
+          --health-retries 20
+
+    env:
+      TEST_DATABASE_URL: postgres://travellog:travellog@127.0.0.1:5432/travellog?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # scripts/slice-arc.sh shells out to these on the HOST. psql and mc run
+      # inside containers and are not needed here. A missing one fails mid-arc
+      # with an assertion message that names the wrong thing, so it is checked
+      # first and named.
+      - name: The tools the arc needs
+        run: |
+          missing=
+          for t in docker jq curl rsync shasum nc make python3; do
+            command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+          done
+          if [ -n "$missing" ]; then
+            echo "scripts/slice-arc.sh needs:$missing" >&2
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq $missing
+          fi
+          docker compose version
+
+      - name: make test-image
+        run: make test-image
+
+      # COMPOSE_PROJECT_NAME IS WHAT LETS THIS RUN AT ALL. Step A0 does
+      # `down -v`, so the arc refuses the default project by design — the
+      # volume it would destroy is the one holding somebody's log. The guard
+      # reads the project name from compose, never from this variable, so
+      # setting it is the only way through and SLICE_DESTROY_VOLUME stays
+      # unset.
+      - name: make slice
+        env:
+          COMPOSE_PROJECT_NAME: ci-slice
+          API_PORT: "8085"
+          POSTGRES_PORT: "5464"
+          MINIO_PORT: "9005"
+          S3_PUBLIC_BASE_URL: http://127.0.0.1:9005
+        run: make slice
+
+      - name: Tear the arc's stack down
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: ci-slice
+          API_PORT: "8085"
+          POSTGRES_PORT: "5464"
+          MINIO_PORT: "9005"
+        run: docker compose -f deploy/docker-compose.yml down -v || true
