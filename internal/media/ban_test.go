@@ -1,4 +1,5 @@
-// The ban, inside `make check` rather than inside A document.
+// The ban on the two presign calls that sign only the host, inside
+// `make check` rather than inside a document.
 package media_test
 
 import (
