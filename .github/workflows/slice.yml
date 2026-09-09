@@ -45,9 +45,9 @@ jobs:
       TEST_DATABASE_URL: postgres://travellog:travellog@127.0.0.1:5432/travellog?sslmode=disable
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           check-latest: true
