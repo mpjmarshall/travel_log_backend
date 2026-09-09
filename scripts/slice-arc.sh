@@ -59,7 +59,6 @@ COMPOSE=(docker compose -f "$REPO/deploy/docker-compose.yml")
 # destroys it at the top, so a fixed address is created exactly once per run and
 # every psql assertion below can name it.
 ARC_EMAIL="arc@travellog.test"
-ARC_PASS="correct-horse-battery-staple"
 ARC_TRIP="kyoto"
 
 # The bucket the api creates at boot, and a canary to put in it. Both are
@@ -522,13 +521,68 @@ in_psql() {
 	"${COMPOSE[@]}" exec -T postgres psql -U travellog -d travellog -tAc "$1"
 }
 
+# AN INVITE IS MINTED BY A COMMAND AND NEVER BY SQL. Registration is
+# invite-only, so the arc has to be let in the way an operator lets somebody in
+# — `cmd/invite` against the stack's own database — and inserting a row by hand
+# would prove the schema rather than the path.
+arc_invite() {
+	local user pass db port
+	user="$("${COMPOSE[@]}" exec -T postgres printenv POSTGRES_USER | tr -d '\r')"
+	pass="$("${COMPOSE[@]}" exec -T postgres printenv POSTGRES_PASSWORD | tr -d '\r')"
+	db="$("${COMPOSE[@]}" exec -T postgres printenv POSTGRES_DB | tr -d '\r')"
+	port="$("${COMPOSE[@]}" port postgres 5432 | sed 's/.*://')"
+	( cd "$REPO" && go run ./cmd/invite \
+		-dsn "postgres://$user:$pass@127.0.0.1:$port/$db?sslmode=disable" \
+		-note "the arc" ) | tr -d '\r' | grep -oE '[0-9A-Z]{16}' | head -1 >"$WORK/invite"
+	[ -s "$WORK/invite" ] || fail "cmd/invite printed no invite the arc could read"
+	ok "invite minted: $(cat "$WORK/invite")"
+}
+
+# THE CODE COMES OUT OF THE CONTAINER LOG, because the log sender is the only
+# mail.Sender that exists — which is also why the whole stack needs
+# MAIL_LOG_SENDER to boot at all. It writes to $WORK/code rather than stdout:
+# `fail` calls `exit`, and inside a command substitution that kills the subshell
+# and lets the arc carry on with an empty answer.
+#
+# THE WAIT IS DETERMINISTIC AND NOT A RETRY. A second request inside
+# CodeRequestInterval is answered 202 with nothing sent, so a caller that simply
+# asked again would poll a log line that is never going to arrive.
+arc_code_requested_at=0
+mailed_code() {
+	local email="$1" base="$2" since before status waited=0 lines
+
+	since=$(( $(date +%s) - arc_code_requested_at ))
+	if [ "$arc_code_requested_at" -ne 0 ] && [ "$since" -lt 61 ]; then
+		printf '     ..  waiting %ss for the sign-in code interval\n' "$(( 61 - since ))"
+		sleep $(( 61 - since ))
+	fi
+
+	before="$("${COMPOSE[@]}" logs --no-log-prefix api 2>/dev/null | grep -c 'mail: not sent, printed' || true)"
+	status="$(req -X POST "$base/v1/auth/code" -H "$JSON_CT" \
+		-d "$(body_json --arg e "$email" '{email:$e}')")"
+	assert_eq 202 "$status" "POST /v1/auth/code for $email"
+	arc_code_requested_at="$(date +%s)"
+
+	while [ "$waited" -lt 20 ]; do
+		lines="$("${COMPOSE[@]}" logs --no-log-prefix api 2>/dev/null | grep 'mail: not sent, printed' || true)"
+		if [ "$(printf '%s' "$lines" | grep -c . || true)" -gt "$before" ]; then
+			printf '%s\n' "$lines" | tail -1 | jq -r .body |
+				grep -oE '[0-9]{6}' | head -1 >"$WORK/code"
+			[ -s "$WORK/code" ] && return 0
+		fi
+		sleep 1
+		waited=$(( waited + 1 ))
+	done
+	fail "no sign-in code reached the api log within 20s for $email"
+}
+
 # THE REQUEST BODIES ARE BUILT BY jq AND NEVER WRITTEN INLINE, AND THAT IS A
 # MEASUREMENT RATHER THAN A STYLE. The first draft wrote
-# `assert_eq 201 "$(req … -d "{\"email\":\"$ARC_EMAIL\",\"passphrase\":…}")" "…"`.
+# `assert_eq 201 "$(req … -d "{\"email\":\"$ARC_EMAIL\",\"invite\":…}")" "…"`.
 # Inside a command substitution that is itself inside a quoted ARGUMENT, bash
 # does not keep the inner double quotes: the braces reached the shell unquoted
 # and BRACE-EXPANDED, so `req` ran TWICE — once with `{"email":…}` and once with
-# `{"passphrase":…}` — the server answered 400 invalid_body to both, and the leg
+# `{"invite":…}` — the server answered 400 invalid_body to both, and the leg
 # reported one failure with the wrong label. The identical line as the right-hand
 # side of an ASSIGNMENT parses correctly, which is what made it look like a
 # server defect. Every status is assigned to a variable first for the same
@@ -539,8 +593,16 @@ phase_arc() {
 	phase "arc — register, sign in, write, read, revalidate, restart, read again"
 	need curl
 	need jq
+	need go
 
-	local code base token auth_header shouty traveller_id url same_address_body
+	# WITHOUT THIS THE API DOES NOT BOOT AND THE ARC ASSERTS NOTHING. The log
+	# sender is the only mail.Sender that exists, compose defaults the switch to
+	# 0 so no deployment writes sign-in codes to its own log by accident, and 0
+	# is a stack that restart-loops. Exported here rather than in the Makefile
+	# for the same reason the default is 0.
+	export MAIL_LOG_SENDER=1
+
+	local code base token auth_header shouty traveller_id url spent_invite_body
 
 	step "A0: docker compose down -v — the volume goes, so what follows is real"
 	refuse_the_live_project
@@ -602,9 +664,14 @@ phase_arc() {
 	# that they were green in `go test` and 404 in the container, because the
 	# image was never rebuilt. A1 is what closes that, and this is what proves
 	# A1 closed it — a 404 here means an image from before VS6.
-	step "A4: POST /v1/auth/register"
+	step "A3b: an invite, minted the way an operator mints one"
+	arc_invite
+	local invite_one invite_two
+	invite_one="$(cat "$WORK/invite")"
+
+	step "A4: POST /v1/auth/register, behind the invite"
 	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
-		-d "$(body_json --arg e "$ARC_EMAIL" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+		-d "$(body_json --arg e "$ARC_EMAIL" --arg i "$invite_one" '{email:$e,invite:$i}')")"
 	assert_eq 201 "$code" "POST /v1/auth/register"
 	assert_eq "$ARC_EMAIL" "$(jqbody .email)" "the registered email"
 	assert_eq null "$(jqbody .name)" "name — null, not absent (the client casts it)"
@@ -612,61 +679,82 @@ phase_arc() {
 	[ -n "$traveller_id" ] && [ "$traveller_id" != null ] || fail "register returned no id"
 	ok "traveller id $traveller_id"
 
-	# DEC-86 CLOSED REGISTRATION AND THAT MOVED WHAT A5 PROVES. It used to
-	# read "the INDEX — not any Go code — is what refuses it", and that is no
-	# longer true of this request: `Service.Register` asks whether ANY
-	# traveller row exists and refuses before the INSERT is ever attempted, so
-	# travellers_email_lower_key is not reached through this route at all. It
-	# is still reached, and the leg that reaches it is
-	# TestASecondRegistrationOfOneAddressInAnotherCasingIsRefused in
-	# internal/postgres, which calls the store directly. Said here because a
-	# step whose comment claims the wrong mechanism is the staleness R2 found
-	# three times in this file.
+	# A5 IS THE DEC-65 INDEX PROOF AGAIN, AND IT WAS NOT FOR ONE RELEASE.
+	# DEC-86 closed registration after the first traveller, so this step became
+	# "registration is closed" and stopped reaching travellers_email_lower_key
+	# at all — Service.Register refused before the INSERT was attempted. 0006
+	# ended the one-traveller rule, so the uppercased duplicate reaches the
+	# functional unique index once more and the INDEX is what refuses it.
+	# Lowercase this request and it passes against a plain b-tree on `email`,
+	# so the case is the assertion and not decoration.
 	#
-	# A6 IS NOW THE ONLY DEC-65 PROOF IN THE ARC, and it is the lookup half:
-	# sign in with the address in a different case and the functional index is
-	# what finds it. Lowercase that request and the step passes against a plain
-	# b-tree on `email`, so the case is the assertion and not decoration.
+	# A FRESH invite is spent on it deliberately. Passing a junk string would
+	# answer 409 just as well, because RegisterWithInvite creates the traveller
+	# BEFORE it claims the invite — so a junk string would prove that the email
+	# conflict is checked first, not that the index refuses the address. The
+	# invite survives the refusal for the same reason, which is what A5b then
+	# leans on.
 	shouty="$(printf '%s' "$ARC_EMAIL" | tr 'a-z' 'A-Z')"
-	step "A5: POST /v1/auth/register, SAME address UPPERCASED — registration is closed"
+	step "A5: POST /v1/auth/register, SAME address UPPERCASED — the INDEX refuses it"
+	arc_invite
+	invite_two="$(cat "$WORK/invite")"
 	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
-		-d "$(body_json --arg e "$shouty" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+		-d "$(body_json --arg e "$shouty" --arg i "$invite_two" '{email:$e,invite:$i}')")"
 	assert_eq 409 "$code" "register $shouty"
 	assert_eq conflict "$(jqbody .code)" "the code"
-	same_address_body="$(cat "$WORK/body")"
 
-	# DEC-86, AND IT IS THE STEP THE OLD A5 COULD NOT MAKE. Ruling 3 is
-	# single-user; before this, a stranger who reached a deployed instance
-	# after the owner had registered got an authenticated account carrying a
-	# 600/min traveller budget and, from R6, a `?photos=delete`. The BYTE
-	# COMPARISON is the half that matters: the security lens flagged
-	# 409-on-duplicate as an enumeration surface, and what closes it is the two
-	# answers being the same answer, not the status alone.
-	step "A5b: POST /v1/auth/register, a DIFFERENT address — closed, and indistinguishable"
+	# AN INVITE IS SINGLE USE, AND SPENT, UNKNOWN AND MISSPELT ARE ONE ANSWER.
+	# ErrInviteSpent is one sentinel by decision: telling them apart says which
+	# codes exist, which is an enumeration surface on a credential an operator
+	# hands out by hand. The BYTE COMPARISON is the half that matters — the
+	# status alone is satisfied by two different sentences.
+	step "A5b: the invite A4 spent cannot be spent again"
 	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
-		-d "$(body_json --arg e "a-total-stranger@example.com" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
-	assert_eq 409 "$code" "register a stranger"
-	assert_eq conflict "$(jqbody .code)" "the code"
-	assert_eq "$same_address_body" "$(cat "$WORK/body")" \
-		"the stranger's refusal, byte for byte against the same-address refusal"
+		-d "$(body_json --arg e "someone-else@travellog.test" --arg i "$invite_one" '{email:$e,invite:$i}')")"
+	assert_eq 422 "$code" "register with the spent invite"
+	assert_eq invite "$(jqbody -r .field)" "  the field it names"
+	spent_invite_body="$(cat "$WORK/body")"
 
-	# AND A MALFORMED BODY IS STILL A 422 NAMING THE FIELD. Registration being
-	# closed must not swallow the answer a client can act on: 409 says stop
-	# trying, and 422 says fix the body.
-	step "A5c: POST /v1/auth/register with a malformed address — still 422, still names the field"
+	step "A5b2: an invite that never existed answers the same bytes"
 	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
-		-d "$(body_json --arg e "not-an-address" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+		-d "$(body_json --arg e "someone-else@travellog.test" '{email:$e,invite:"0000000000000000"}')")"
+	assert_eq 422 "$code" "register with an unknown invite"
+	assert_eq "$spent_invite_body" "$(cat "$WORK/body")" \
+		"the unknown invite's refusal, byte for byte against the spent one"
+
+	# AND A MALFORMED BODY IS STILL A 422 NAMING THE FIELD, and it names the
+	# ADDRESS rather than the invite: checkEmail runs before the invite is
+	# looked at, so a client with two things wrong is told about the one it can
+	# fix without asking anybody.
+	step "A5c: POST /v1/auth/register with a malformed address — 422, and it names email"
+	code="$(req -X POST "$base/v1/auth/register" -H "$JSON_CT" \
+		-d "$(body_json --arg i "$invite_two" '{email:"not-an-address",invite:$i}')")"
 	assert_eq 422 "$code" "register with a malformed address"
 	assert_eq email "$(jqbody .field)" "the field the 422 names"
 
-	step "A6: POST /v1/auth/session, address UPPERCASED — the functional lookup finds it"
+	# A6 IS THE OTHER HALF OF DEC-65 AND THE ONLY PLACE THE MAILED CODE IS
+	# EXERCISED END TO END. Both requests carry the address UPPERCASED, so
+	# `WHERE lower(email) = lower($1)` is what finds the traveller twice: once
+	# to decide whom to mail, once to decide whose code this is.
+	step "A6: POST /v1/auth/code then /v1/auth/session, address UPPERCASED"
+	mailed_code "$shouty" "$base"
+	ok "the code reached the api log: $(cat "$WORK/code")"
 	code="$(req -X POST "$base/v1/auth/session" -H "$JSON_CT" \
-		-d "$(body_json --arg e "$shouty" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+		-d "$(body_json --arg e "$shouty" --arg c "$(cat "$WORK/code")" '{email:$e,code:$c}')")"
 	assert_eq 201 "$code" "POST /v1/auth/session"
 	token="$(jqbody .token)"
 	[ -n "$token" ] && [ "$token" != null ] || fail "sign-in returned no token"
 	ok "token issued, ${#token} characters"
 	auth_header="Authorization: Bearer $token"
+
+	# A CODE IS BURNED ON USE. Replaying the one that just worked is the
+	# difference between a single-use credential and a password with six digits
+	# of entropy, and nothing else in this arc can see it.
+	step "A6b: the same code a second time — burned"
+	code="$(req -X POST "$base/v1/auth/session" -H "$JSON_CT" \
+		-d "$(body_json --arg e "$shouty" --arg c "$(cat "$WORK/code")" '{email:$e,code:$c}')")"
+	assert_eq 401 "$code" "POST /v1/auth/session replaying the used code"
+	assert_eq unauthenticated "$(jqbody .code)" "  its code"
 
 	step "A7: GET /v1/logbook before any write — 200 and NO ETag"
 	code="$(req -H "$auth_header" "$base/v1/logbook")"
@@ -1594,8 +1682,9 @@ phase_arc() {
 	# AND THE ARC GOES ON, so a fresh token is taken. A23 below needs none, but
 	# leaving the run holding a dead credential is how a step added later fails
 	# for a reason that has nothing to do with it.
+	mailed_code "$ARC_EMAIL" "$base"
 	code="$(req -X POST "$base/v1/auth/session" -H "$JSON_CT" \
-		-d "$(body_json --arg e "$ARC_EMAIL" --arg p "$ARC_PASS" '{email:$e,passphrase:$p}')")"
+		-d "$(body_json --arg e "$ARC_EMAIL" --arg c "$(cat "$WORK/code")" '{email:$e,code:$c}')")"
 	assert_eq 201 "$code" "POST /v1/auth/session, after revoking the last one"
 	token="$(jqbody -r .token)"
 	auth_header="Authorization: Bearer $token"
