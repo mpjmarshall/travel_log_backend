@@ -128,3 +128,87 @@ func TestComposeSetsEveryVariableLoadReads(t *testing.T) {
 		}
 	}
 }
+
+// composeServiceBlock is one service's own YAML, by indentation — the same
+// device composeAPIEnvironment uses, one level out.
+func composeServiceBlock(t *testing.T, service string) string {
+	t.Helper()
+	compose := readDeployFile(t, "docker-compose.yml")
+	head := "\n  " + service + ":\n"
+	start := strings.Index(compose, head)
+	if start < 0 {
+		t.Fatalf("deploy/docker-compose.yml declares no %s service", service)
+	}
+	rest := compose[start+len(head):]
+	if end := regexp.MustCompile(`(?m)^  [a-z][a-z0-9_-]*:`).FindStringIndex(rest); end != nil {
+		rest = rest[:end[0]]
+	}
+	if strings.TrimSpace(rest) == "" {
+		t.Fatalf("the %s service block is empty, so this leg would measure nothing", service)
+	}
+	return rest
+}
+
+// interpolatedDefault is `${VAR:-default}`, which is the only shape compose
+// takes a default in.
+var interpolatedDefault = regexp.MustCompile(`\$\{([A-Z0-9_]+):-([^}]*)\}`)
+
+func composeDefaults(t *testing.T, block string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, m := range interpolatedDefault.FindAllStringSubmatch(block, -1) {
+		out[m[1]] = m[2]
+	}
+	if len(out) < 20 {
+		t.Fatalf("parsed %d defaults out of the api service, expected at least 20 — "+
+			"the parse is wrong, so every assertion below would pass while "+
+			"measuring nothing", len(out))
+	}
+	return out
+}
+
+// THE VALUE AND NOT THE PRESENCE. The three legs above assert every variable is
+// SET; this asserts what it is set TO, which nothing did.
+func TestTheShippedDefaultsAreWhatTheyAreDocumentedToBe(t *testing.T) {
+	defaults := composeDefaults(t, composeServiceBlock(t, "api"))
+
+	for _, c := range []struct{ name, want, matters string }{
+		{"S3_PRESIGN_TTL_PUBLIC", "15m",
+			"four sentences of client copy are written against fifteen minutes, and " +
+				"a public share envelope embeds these URLs for anyone holding the link"},
+		{"S3_PRESIGN_TTL_PRIVATE", "2m",
+			"the revocation window: a read capability the phone minted outlives a " +
+				"revoked session by exactly this long"},
+		{"ADMIN_COOKIE_INSECURE", "0",
+			"1 drops Secure from the admin panel's session cookie, and the panel is " +
+				"a second principal over every traveller's log"},
+		{"MAIL_LOG_SENDER", "0",
+			"1 writes every sign-in code to the container log, where anyone who can " +
+				"read logs can sign in as anyone"},
+		{"AUTH_RATE_LIMIT_PER_MIN", "10",
+			"the only bound on unauthenticated work at the credential routes"},
+		{"TRAVELLER_RATE_LIMIT_PER_MIN", "600",
+			"the ceiling a stolen token meets"},
+		{"PUBLIC_RATE_LIMIT_PER_MIN", "120",
+			"the public share read's own bucket, and the only bound on a route with " +
+				"no identity at all"},
+		{"MEDIA_MAX_BYTES", "26214400",
+			"1<<20 refuses an ordinary 5 MB photograph and the suite stays green"},
+		{"REQUEST_TIMEOUT", "15s",
+			"1s makes every sign-in a 503"},
+		{"BIND_HOST", "127.0.0.1",
+			"0.0.0.0 publishes the API to the whole LAN, and the deploy is " +
+				"loopback-bound by decision"},
+	} {
+		got, held := defaults[c.name]
+		if !held {
+			t.Errorf("deploy/docker-compose.yml sets no default for %s on the api "+
+				"service.\n    It matters because %s.", c.name, c.matters)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s defaults to %q, want %q.\n    It matters because %s.",
+				c.name, got, c.want, c.matters)
+		}
+	}
+}
