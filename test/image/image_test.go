@@ -194,13 +194,15 @@ func compose(t *testing.T, project string, args ...string) []string {
 	return append(base, args...)
 }
 
-// composeEnv puts the port overrides in the environment.
+// composeEnv is the arc's ports plus the one switch without which the api
+// cannot boot at all: the log sender is the only mail.Sender that exists.
 func composeEnv(pgPort, apiPort string) []string {
 	return append(os.Environ(),
 		"POSTGRES_PORT="+pgPort,
 		"API_PORT="+apiPort,
 		"MINIO_PORT="+stackMinioPort,
 		"S3_PUBLIC_BASE_URL=http://127.0.0.1:"+stackMinioPort,
+		"MAIL_LOG_SENDER=1",
 	)
 }
 
