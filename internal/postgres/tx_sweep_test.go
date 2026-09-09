@@ -1,4 +1,4 @@
-// The acceptance check for, as a mechanism rather than a discipline.
+// Who may open a transaction, as a mechanism rather than a discipline.
 package postgres
 
 import (

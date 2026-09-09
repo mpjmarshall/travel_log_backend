@@ -106,14 +106,16 @@ counter bumped by writes and is the second half of the ETag. Nothing in Go
 substitutes for referential integrity, and the Go checks that exist name the
 field before the constraint fires.
 
-**Thirteen AST sweeps enforce the architecture.** They are the best thing in the
-repository and the mechanism most likely to go red against correct work. Each
-walks the AST or the import graph rather than grepping: `encoding/json` reaches
-exactly two functions, `os.Getenv` exactly one file, pgx only as a blank import,
-error codes are never literals, no handler takes the whole dependency bag, every
-bare-entity response goes through an emitter, refusals are authored in the
-domain. Exemption lists are asserted by **equality**, so a stale exemption
-reddens too.
+**Thirteen AST sweeps enforce the architecture**, indexed one row each in
+`docs/SWEEPS.md`. They are the best thing here and the mechanism most likely to
+go red against correct work. Each walks the AST or the import graph rather than
+grepping: `encoding/json` reaches exactly two functions, `os.Getenv` exactly one
+file, pgx only as a blank import, error codes are never literals, no handler
+takes the whole dependency bag, every bare-entity response goes through an
+emitter, refusals are authored in the domain. Exemption lists are asserted by
+**equality**, so a stale exemption reddens too. **A new sweep names the shipped
+defect it would have caught, in its own doc comment, and updates that index in
+the same commit** — the gate fails if the count and the rows disagree.
 
 **Four evidence tiers, and only the first is in the gate.** `go test ./...`
 (fast, needs the database); `TRAVELLOG_IMAGE_TESTS=1 make test-image` (the built
@@ -187,6 +189,7 @@ configure. `deploy/.env.example` documents them.
 |---|---|
 | `docs/journal/` | the record, 38 dated sections, verbatim and never edited |
 | `docs/EVIDENCE.md` | mutation proofs at stated commits |
+| `docs/SWEEPS.md` | the thirteen AST sweeps, one row each |
 | `TODO.md` | what is guarded by nothing, and the deployment blockers |
 | `deploy/RUNBOOK.md` | how to deploy it and what it still lacks |
 | `docs/CLIENT-PREREQUISITES.md` | what the client must do; nothing here can check it |

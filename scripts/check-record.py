@@ -24,6 +24,9 @@ MAP_MAX_BYTES = 12288
 MAP_MAX_SECTIONS = 9
 JOURNAL = "docs/journal"
 JOURNAL_MIN_FILES = 10
+SWEEPS = "docs/SWEEPS.md"
+SWEEP_IMPORTS = ('"go/ast"', '"go/parser"')
+SWEEP_MIN_FILES = 5
 
 
 def check_the_map(faults):
@@ -59,10 +62,77 @@ def check_the_journal(faults):
         )
 
 
+def imports_of(path):
+    """The quoted paths inside a Go file's import declaration, and nowhere else.
+
+    Scoped rather than grepped: a comment naming go/ast is not an import, and a
+    sweep is a file that IMPORTS the parser. The repository has seven recorded
+    artefact checks that went red against correct work for exactly that reason.
+    """
+    body = path.read_text()
+    at = body.find("\nimport ")
+    if at < 0:
+        return ""
+    rest = body[at + len("\nimport "):]
+    if rest.lstrip().startswith("("):
+        end = rest.find("\n)")
+        return rest[:end] if end >= 0 else rest
+    return rest.split("\n", 1)[0]
+
+
+def sweep_files():
+    out = []
+    for path in sorted(ROOT.rglob("*_test.go")):
+        if ".git" in path.parts:
+            continue
+        block = imports_of(path)
+        if any(name in block for name in SWEEP_IMPORTS):
+            out.append(str(path.relative_to(ROOT)))
+    return out
+
+
+def check_the_sweeps(faults):
+    """The index and the tree, in both directions.
+
+    A sweep with no row is a rule nobody can find; a row with no sweep is an
+    index describing a guard that has been deleted, which is worse.
+    """
+    found = sweep_files()
+    if len(found) < SWEEP_MIN_FILES:
+        faults.append(
+            f"found {len(found)} sweep file(s), expected at least"
+            f" {SWEEP_MIN_FILES}. The import scan is wrong, so the comparison"
+            f" below would agree with itself while measuring nothing."
+        )
+        return
+    path = ROOT / SWEEPS
+    if not path.exists():
+        faults.append(f"{SWEEPS}: missing, and {len(found)} sweeps are in the tree")
+        return
+    index = path.read_text()
+    for f in found:
+        if f not in index:
+            faults.append(
+                f"{SWEEPS} has no row for {f}, which imports the Go parser."
+                f" A sweep nobody can find is a rule the next person deletes."
+            )
+    for line in index.splitlines():
+        if not line.startswith("| ["):
+            continue
+        named = line.split("`")[1] if "`" in line else ""
+        if named and named not in found:
+            faults.append(
+                f"{SWEEPS} has a row for {named} and no such sweep is in the"
+                f" tree. An index describing a guard that has been deleted is"
+                f" worse than no index."
+            )
+
+
 def main():
     faults = []
     check_the_map(faults)
     check_the_journal(faults)
+    check_the_sweeps(faults)
     for f in faults:
         print(f)
     print(f"{len(faults)} record fault(s)")

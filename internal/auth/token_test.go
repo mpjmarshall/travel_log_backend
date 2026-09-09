@@ -1,4 +1,4 @@
-// Opaque session tokens,, test-first.
+// Opaque session tokens, written test-first.
 package auth
 
 import (
