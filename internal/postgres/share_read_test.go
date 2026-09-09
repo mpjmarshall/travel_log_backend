@@ -15,7 +15,7 @@ const theSharedTrip = "autumn-crossing"
 
 const otherTripToken = "mnpqrstuvwxy"
 
-// sharedFixture extends seeded with's three leaking shapes and a link on
+// sharedFixture extends seeded with the three leaking shapes and a link on
 // the trip under test.
 func sharedFixture(t *testing.T) *logbook.PublicSource {
 	t.Helper()

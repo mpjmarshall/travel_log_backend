@@ -27,8 +27,8 @@ type CityWrite struct {
 	AttachTo   *string  `json:"attachTo"`
 }
 
-// ValidateCity answers's first field that is wrong, and nothing about
-// whether the ids it names exist.
+// ValidateCity answers with the first field that is wrong, and says nothing
+// about whether the ids it names exist.
 func ValidateCity(c CityWrite) error {
 	if c.ID == nil || !idPattern.MatchString(*c.ID) {
 		return InvalidFieldError{Field: "id",
@@ -78,7 +78,7 @@ type PlaceWrite struct {
 	CoverAsset  **string `json:"coverAsset"`
 }
 
-// ValidatePlace answers's first field that is wrong.
+// ValidatePlace answers with the first field that is wrong.
 func ValidatePlace(p PlaceWrite) error {
 	if p.ID == nil || !idPattern.MatchString(*p.ID) {
 		return InvalidFieldError{Field: "id",

@@ -1,4 +1,4 @@
-// The two write contracts, and's three answers `visits` can carry.
+// The two write contracts, and the three answers `visits` can carry.
 package logbook_test
 
 import (

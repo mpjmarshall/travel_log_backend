@@ -19,7 +19,7 @@ type ShareReadStore struct{ DB *sql.DB }
 const shareLinkByHashSQL = `SELECT traveller_id::text, trip_id, revoked_at IS NOT NULL
 	FROM share_links WHERE token_hash = $1`
 
-// publicTripSQL reads the trip and's three switches together, because the
+// publicTripSQL reads the trip and the three switches together, because the
 // switches decide what the rest of the read may publish.
 const publicTripSQL = `SELECT id, name, started_on, ended_on, summary, cover_asset,
 		share_photos, share_notes, share_coordinates

@@ -24,8 +24,8 @@ import (
 
 const clientFixture = "../logbook/testdata/client_sample_log.json"
 
-// The two locators the captured document holds and the sha256 of's two PNGs
-// beside it.
+// The two locators the captured document holds and the sha256 of the two
+// PNGs beside it.
 const (
 	cardDigest = "8dfb203bc0f890655a7545004866da13482af78d21b5c6deb7bd142592a5d3cd"
 	heroDigest = "e66b552e6043510bb5cd474096d18208b1c975556ef1a8cfc565dd63a02835c1"

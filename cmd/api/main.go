@@ -54,7 +54,7 @@ const (
 // bucketTimeout bounds the boot-time bucket check.
 const bucketTimeout = 10 * time.Second
 
-// main parses's two flags, loads the config and dispatches.
+// main parses the binary's two flags, loads the config and dispatches.
 func main() {
 	healthcheck := flag.Bool(
 		"healthcheck",
@@ -290,8 +290,8 @@ func mediaConfig(cfg config.Config) media.Config {
 	}
 }
 
-// mediaStore builds the store and creates its bucket, and's second half is
-// the point.
+// mediaStore builds the store and creates its bucket, and creating the
+// bucket is the half that matters: nothing else in the system makes one.
 func mediaStore(ctx context.Context, cfg config.Config, log *slog.Logger) (media.Store, error) {
 	store, err := media.New(mediaConfig(cfg))
 	if err != nil {

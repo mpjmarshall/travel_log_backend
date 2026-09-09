@@ -1,9 +1,9 @@
-// The one emitter, and's two version numbers that are not the same number.
+// The one emitter, and the two version numbers that are not the same number.
 package logbook
 
 import "errors"
 
-// EmitterVersion is's first half.
+// EmitterVersion is the ETag's first half.
 const EmitterVersion int64 = 2
 
 // FormatVersion is the `"version": 2`.

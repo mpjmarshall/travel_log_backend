@@ -151,8 +151,8 @@ func (m *Memory) fake(method, path string, ttl time.Duration, headers map[string
 	return "https://memory.invalid/" + path + "?" + q.Encode()
 }
 
-// PutWithoutChecksum is what an upload through one of's two banned presign
-// calls leaves behind.
+// PutWithoutChecksum is what an upload through one of the two banned presign
+// calls leaves behind: an object carrying no checksum at all.
 func (m *Memory) PutWithoutChecksum(key Key, up Upload, body []byte) error {
 	path, _, err := Address(key.Traveller, key.Object)
 	if err != nil {

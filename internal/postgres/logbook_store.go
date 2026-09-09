@@ -416,7 +416,7 @@ func requireWritableTrip(ctx context.Context, tx *sql.Tx, travellerID, id string
 		logbook.TripDates{Start: instantOf(before.started), End: instantOf(before.ended)}, w)
 }
 
-// tripBeforeWrite is's three columns the upsert has to know about the row
+// tripBeforeWrite is the three columns the upsert has to know about the row
 // it is replacing.
 type tripBeforeWrite struct {
 	name           string

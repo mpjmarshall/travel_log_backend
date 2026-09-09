@@ -189,7 +189,7 @@ func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 	}
 }
 
-// TestTheShippedBinaryIsReadableAndExecutableByAnyUser is's second half of
+// TestTheShippedBinaryIsReadableAndExecutableByAnyUser is the second half of
 // the numeric-user claim, and it is the half that is easy to miss.
 func TestTheShippedBinaryIsReadableAndExecutableByAnyUser(t *testing.T) {
 	requireDocker(t)

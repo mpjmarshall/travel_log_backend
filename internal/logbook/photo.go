@@ -1,5 +1,5 @@
-// What a photograph write may contain, and's two columns that are not on
-// it.
+// What a photograph write may contain, and the two filing columns that are
+// deliberately not on it.
 package logbook
 
 import (
@@ -24,8 +24,8 @@ type PhotoWrite struct {
 	FiledLater     **Instant `json:"filedLater"`
 }
 
-// ValidatePhoto answers's first field that is wrong, and nothing about
-// whether the ids it names exist.
+// ValidatePhoto answers with the first field that is wrong, and says nothing
+// about whether the ids it names exist.
 func ValidatePhoto(p PhotoWrite) error {
 	if p.ID == nil || !idPattern.MatchString(*p.ID) {
 		return InvalidFieldError{Field: "id",
@@ -81,7 +81,7 @@ type SnoozeWrite struct {
 	Until    *Instant  `json:"until"`
 }
 
-// ValidateSnooze answers's first field that is wrong.
+// ValidateSnooze answers with the first field that is wrong.
 func ValidateSnooze(s SnoozeWrite) error {
 	if s.PhotoIDs == nil {
 		return InvalidFieldError{Field: "photoIds",

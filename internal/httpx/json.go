@@ -1,4 +1,4 @@
-// The only file in this repository that imports encoding/json, and's two
+// The only file in this repository that imports encoding/json, and the two
 // functions in it are the only two that use it.
 package httpx
 

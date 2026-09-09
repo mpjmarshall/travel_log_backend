@@ -80,7 +80,7 @@ type PublicSource struct {
 // Mint turns an object id into a signed URL a stranger can fetch.
 type Mint func(objectID string) (string, error)
 
-// EmitPublic applies the allowlist and's three flags.
+// EmitPublic applies the allowlist and the three sharing flags.
 func EmitPublic(src PublicSource, mint Mint) (Public, error) {
 	out := Public{
 		Version: FormatVersion,

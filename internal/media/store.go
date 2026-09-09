@@ -33,7 +33,7 @@ type Attributes struct {
 	SHA256 string
 }
 
-// Audience picks which of's two presign lifetimes a read URL gets.
+// Audience picks which of the two presign lifetimes a read URL gets.
 type Audience int
 
 const (

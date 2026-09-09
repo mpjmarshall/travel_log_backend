@@ -76,7 +76,7 @@ func unavailable() (reason string, ok bool) {
 	return "", true
 }
 
-// requireDocker is's first line of every leg in this tier.
+// requireDocker is the first line of every leg in this tier.
 func requireDocker(t *testing.T) {
 	t.Helper()
 	if reason, ok := unavailable(); !ok {

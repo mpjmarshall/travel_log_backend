@@ -71,8 +71,8 @@ func New(cfg Config) (*MinIO, error) {
 	}, nil
 }
 
-// client parses one of's two addresses into what minio.New wants: a host,
-// Whether to speak TLS.
+// client parses one of the two addresses into what minio.New wants: a host,
+// and whether to speak TLS.
 func client(address string, cfg Config) (*minio.Client, error) {
 	u, err := url.Parse(strings.TrimSpace(address))
 	if err != nil {

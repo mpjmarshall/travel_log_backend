@@ -50,8 +50,8 @@ func Value[T any](p **T) *T {
 	return *p
 }
 
-// ValidateTrip answers's first field that is wrong, and nothing about
-// whether the ids it names exist.
+// ValidateTrip answers with the first field that is wrong, and says nothing
+// about whether the ids it names exist.
 func ValidateTrip(t TripWrite) error {
 	if t.ID == nil || !idPattern.MatchString(*t.ID) {
 		return InvalidFieldError{Field: "id",
@@ -139,7 +139,7 @@ type MediaBegin struct {
 	ContentType *string `json:"contentType"`
 }
 
-// ValidateMediaBegin answers's first field that is wrong.
+// ValidateMediaBegin answers with the first field that is wrong.
 func ValidateMediaBegin(b MediaBegin, maxBytes int64) error {
 	if b.SHA256 == nil || !assetPattern.MatchString(*b.SHA256) {
 		return InvalidFieldError{Field: "sha256",
@@ -172,7 +172,7 @@ type MediaMint struct {
 // than schema — the same sense MaxNameBytes is.
 const MaxMintIDs = 100
 
-// ValidateMediaMint answers's first thing that is wrong with a mint
+// ValidateMediaMint answers with the first thing that is wrong with a mint
 // request.
 func ValidateMediaMint(m MediaMint) error {
 	if m.IDs == nil {

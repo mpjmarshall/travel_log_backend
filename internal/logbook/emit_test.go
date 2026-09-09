@@ -58,7 +58,7 @@ func emitted(t *testing.T, doc logbook.Document) []byte {
 }
 
 // serverAddedKeys is every key the server emits that the client's own
-// document does not have, named once and read by's three legs below.
+// document does not have, named once and read by the three legs below.
 var serverAddedKeys = []string{"logbook.trips[].shared"}
 
 // The round trip.
@@ -573,7 +573,7 @@ func withContentAddresses(doc logbook.Document) logbook.Document {
 	return doc
 }
 
-// EmitPlace is's second half of the same rule, and the measurement is in
+// EmitPlace is the second half of the same rule, and the measurement is in
 // the failure message.
 func TestAPlacesVisitsAreEmptyRatherThanNull(t *testing.T) {
 	wishlist := logbook.Place{ID: "tofuku-ji", CityID: "kyoto", Name: "Tofuku-ji"}
