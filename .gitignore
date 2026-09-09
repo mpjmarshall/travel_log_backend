@@ -42,3 +42,7 @@ deploy/.env
 
 # `make backup` writes here. The dumps are the record and never the repository.
 /backups/
+
+# Python bytecode, from running the two scripts the gate calls.
+__pycache__/
+*.pyc
