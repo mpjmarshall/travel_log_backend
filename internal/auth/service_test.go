@@ -364,3 +364,61 @@ func TestAStoreFailureIsNotReportedAsBadCredentials(t *testing.T) {
 		t.Errorf("a store failure was swallowed")
 	}
 }
+
+// A refused invite must leave no account: measured on the shipped build, the
+// 422 created one anyway and a code mailed there issued a working token.
+func TestAnInviteThatCannotBeSpentCreatesNoTraveller(t *testing.T) {
+	ctx := context.Background()
+
+	for _, c := range []struct{ name, invite string }{
+		{"an invite that never existed", "NOTAREALINVITE01"},
+		{"an invite already spent", "ONCE"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := NewMemory()
+			s := newTestService(t, store)
+			if c.invite == "ONCE" {
+				if err := store.MintInvite(ctx, HashInvite("ONCE"), ""); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.RegisterWithInvite(ctx, "invited@example.com", "ONCE"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.RegisterWithInvite(ctx, "stranger@example.com", c.invite); !errors.Is(err, ErrInviteSpent) {
+				t.Fatalf("RegisterWithInvite = %v, want ErrInviteSpent", err)
+			}
+			_, err := store.TravellerByEmail(ctx, "stranger@example.com")
+			if !errors.Is(err, ErrNoTraveller) {
+				t.Fatalf("after a refused registration TravellerByEmail = %v, want "+
+					"ErrNoTraveller.\n"+
+					"    The account exists. Registration answered 422 and created it\n"+
+					"    anyway, so the invite gate can be walked straight past: ask for\n"+
+					"    a sign-in code at that address and it issues a bearer token.", err)
+			}
+		})
+	}
+}
+
+// Spending before the create is what makes the gate hold, and its cost is an
+// invite that does not come back — the direction a credential should fail.
+func TestAnInviteIsSpentEvenWhenTheAddressIsTaken(t *testing.T) {
+	store := NewMemory()
+	s := newTestService(t, store)
+	ctx := context.Background()
+	for _, code := range []string{"FIRST", "SECOND"} {
+		if err := store.MintInvite(ctx, HashInvite(code), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := s.RegisterWithInvite(ctx, "matt@example.com", "FIRST"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterWithInvite(ctx, "MATT@example.com", "SECOND"); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("re-registering answered %v, want ErrEmailTaken", err)
+	}
+	if _, err := s.RegisterWithInvite(ctx, "someone@example.com", "SECOND"); !errors.Is(err, ErrInviteSpent) {
+		t.Fatalf("SECOND after the refused registration = %v, want ErrInviteSpent", err)
+	}
+}
