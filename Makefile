@@ -47,11 +47,12 @@ build:
 run:
 	go run ./cmd/api
 
-## check — THE GATE. build, vet, gofmt, test. Run it before every commit.
+## check — THE GATE. build, vet, comments, record, gofmt, test. Before every commit.
 check:
 	go build ./...
 	go vet ./...
 	python3 scripts/check-comments.py
+	python3 scripts/check-record.py
 	@out="$$(gofmt -l . 2>&1)"; st=$$?; \
 	if [ $$st -ne 0 ]; then \
 		echo "gofmt itself failed (exit $$st) — this is a file it cannot PARSE,"; \
