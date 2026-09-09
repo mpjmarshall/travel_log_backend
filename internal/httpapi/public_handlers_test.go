@@ -24,7 +24,7 @@ import (
 // theToken is what the tests mint.
 const theToken = "mnpqrstuvwxy"
 
-// theAllowlist is docs/public-envelope.md §3, typed out.
+// theAllowlist is docs/PUBLIC-ENVELOPE.md §3, typed out.
 var theAllowlist = map[string][]string{
 	"":                     {"cities", "photos", "places", "trip", "version", "walks"},
 	"trip":                 {"cityIds", "coverUrl", "end", "id", "name", "start", "summary"},

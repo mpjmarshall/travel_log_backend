@@ -221,6 +221,18 @@ path_exemption() {
 	return 1
 }
 
+# CASE-SENSITIVELY, BECAUSE `[ -e ]` IS NOT ON macOS AND IS ON LINUX. Two
+# comments named docs/public-envelope.md; the file is docs/PUBLIC-ENVELOPE.md.
+# This phase was green on the developer's machine and red the first time CI ran
+# it — an artefact check that passes on the only machine anybody runs it on.
+exists_with_this_case() {
+	local path="$1" dir base
+	dir="$REPO/$(dirname "$path")"
+	base="$(basename "$path")"
+	[ -d "$dir" ] || return 1
+	ls -1A "$dir" 2>/dev/null | grep -qxF "$base"
+}
+
 phase_record() {
 	phase "record — every path a comment names, and the Makefile's own wiring"
 
@@ -269,7 +281,7 @@ phase_record() {
 	assert_eq 26214400 "$(grep -oE 'MEDIA_MAX_BYTES:-[0-9]+' deploy/docker-compose.yml | grep -oE '[0-9]+$')" \
 		"MEDIA_MAX_BYTES default (client: mediaMaxBytes)"
 
-	step "R1: repo-relative paths named in comments exist"
+	step "R1: repo-relative paths named in comments exist, in the case they are written"
 	local missing=0 candidate
 	# Comments only, and code lines are excluded on purpose: an import path or a
 	# //go:embed pattern is checked by the compiler already, and a glob is not a
@@ -280,7 +292,7 @@ phase_record() {
 		case "$candidate" in
 		*'...'* | *'*'*) continue ;;
 		esac
-		if [ -e "$REPO/$candidate" ]; then continue; fi
+		if exists_with_this_case "$candidate"; then continue; fi
 		if path_exemption "$candidate"; then
 			ok "$candidate — exempt, with a reason in path_exemption"
 			continue
