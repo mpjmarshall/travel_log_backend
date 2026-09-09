@@ -29,7 +29,9 @@ thing that was wrong with it.
    `go test ./...`. **It needs a database**: `make up`, then `make test-db`,
    export the `TEST_DATABASE_URL` it prints. Without it the database tier
    **fails closed on purpose**; `TRAVELLOG_SKIP_DB=1` is the explicit opt-out
-   and it is not a pass.
+   and it is not a pass. Journal entries written before 29 August quote a
+   "without a database" leg count from when the tier merely skipped; those
+   numbers describe a run that no longer happens.
 2. **CI runs the gate.** `.github/workflows/check.yml` on every push and pull
    request, with a real `postgres:17` and `go test -race`.
    `.github/workflows/slice.yml` nightly for the image tier and the arc.
@@ -49,15 +51,14 @@ thing that was wrong with it.
    a new numbered pair with a down file.
 7. **Mutation testing restores by file copy, never `git checkout`.** Snapshot
    with `cp`, assert the file changed, run, restore with `cp`, verify `cmp -s`.
-   A `git checkout` harness against an uncommitted tree no-ops on untracked
-   files and poisons every later mutation; it cost this project a step's
-   implementation once.
-8. **A mutation that does not compile proves nothing**, and looks exactly like
-   one that proved everything.
-9. **An artefact check that matches its own source proves nothing.** The record
+   Against an uncommitted tree `git checkout` no-ops on untracked files and
+   poisons every later mutation. **A mutation that does not change the file, or
+   does not compile, proves nothing** and looks exactly like one that proved
+   everything.
+8. **An artefact check that matches its own source proves nothing.** The record
    has seven greps that went red against correct code. Make sweeps structural —
    AST, parsed catalog, parsed block — not textual.
-10. **Stdlib first.** A new dependency needs a stated reason in the PR.
+9. **Stdlib first.** A new dependency needs a stated reason in the PR.
 
 ## The packages, and what each owns
 
@@ -83,9 +84,13 @@ Derived: `go list -f '{{.ImportPath}}|{{join .Imports ","}}' ./...`, filtered to
 | `cmd/api` | the binary: wiring, `/healthz`, the probe | all of the above |
 | `cmd/invite`, `cmd/seed`, `cmd/sweep` | operator commands | — |
 
-`internal/postgres` imports `internal/admin` in the same direction it imports
-`internal/logbook`: it maps rows to each consumer's own vocabulary, so the
-panel imports no persistence package at all.
+**`internal/postgres` is the hub, and that is a decision.** It imports
+`internal/admin` in the same direction it imports `internal/logbook` — mapping
+rows into each consumer's own vocabulary, so neither imports a persistence
+package. It is the only package that knows every consumer, and at 3,847
+non-test lines against 1,611 for the next largest it is 2.4x anything else.
+That buys one home for the SQL. **Trigger: a second binary needing persistence
+without the panel**, at which point the mapping moves out.
 
 ## The four load-bearing designs
 
