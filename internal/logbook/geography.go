@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// MaxNoteBytes bounds's two free-text fields — `places.plan` and
-// `visits.note` — and it is this build's policy rather than schema.
+// MaxNoteBytes bounds the two free-text fields — `places.plan` and
+// `visits.note` — and it is this build's policy rather than the schema's.
 const MaxNoteBytes = 4096
 
 // countryCodePattern is the compiled regexp for the flattened country, and it
