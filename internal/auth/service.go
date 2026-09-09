@@ -75,7 +75,9 @@ type Store interface {
 
 	RevokeEverySession(ctx context.Context, travellerID string) (int64, error)
 
-	ClaimInvite(ctx context.Context, hash []byte, travellerID string) error
+	SpendInvite(ctx context.Context, hash []byte) error
+
+	RecordInviteUser(ctx context.Context, hash []byte, travellerID string) error
 
 	IssueCode(ctx context.Context, travellerID string, hash []byte, expiresAt time.Time) error
 
@@ -122,8 +124,8 @@ func (s *Service) Register(ctx context.Context, email string) (Traveller, error)
 	return s.Store.CreateTraveller(ctx, email)
 }
 
-// RegisterWithInvite is Register behind a single-use invite. The claim comes
-// after the create, because the claim records who spent it.
+// RegisterWithInvite is Register behind a single-use invite. The invite is
+// SPENT BEFORE THE ACCOUNT IS MADE, and recording who spent it comes after.
 func (s *Service) RegisterWithInvite(ctx context.Context, email, invite string) (Traveller, error) {
 	if err := checkEmail(email); err != nil {
 		return Traveller{}, err
@@ -132,11 +134,15 @@ func (s *Service) RegisterWithInvite(ctx context.Context, email, invite string) 
 		return Traveller{}, InvalidFieldError{Field: "invite", Why: "an invite is required"}
 	}
 
+	hash := HashInvite(invite)
+	if err := s.Store.SpendInvite(ctx, hash); err != nil {
+		return Traveller{}, err
+	}
 	tr, err := s.Register(ctx, email)
 	if err != nil {
 		return Traveller{}, err
 	}
-	if err := s.Store.ClaimInvite(ctx, HashInvite(invite), tr.ID); err != nil {
+	if err := s.Store.RecordInviteUser(ctx, hash, tr.ID); err != nil {
 		return Traveller{}, err
 	}
 	return tr, nil

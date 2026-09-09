@@ -188,19 +188,30 @@ func (s AuthStore) MintInvite(ctx context.Context, hash []byte, note string) err
 	return nil
 }
 
-// ClaimInvite spends an invite, or answers auth.ErrInviteSpent. One statement,
-// because read-then-write lets two registrations spend the same invite.
-func (s AuthStore) ClaimInvite(ctx context.Context, hash []byte, travellerID string) error {
-	var claimed string
+// SpendInvite marks an invite used, or answers auth.ErrInviteSpent. It runs
+// BEFORE the traveller is created, which is what makes the gate hold.
+func (s AuthStore) SpendInvite(ctx context.Context, hash []byte) error {
+	var claimed []byte
 	err := s.DB.QueryRowContext(ctx, `
-		UPDATE invite_codes SET used_at = now(), used_by = $2
+		UPDATE invite_codes SET used_at = now()
 		WHERE code_hash = $1 AND used_at IS NULL
-		RETURNING code_hash`, hash, travellerID).Scan(&claimed)
+		RETURNING code_hash`, hash).Scan(&claimed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return auth.ErrInviteSpent
 	}
 	if err != nil {
-		return fmt.Errorf("postgres: claiming an invite: %w", err)
+		return fmt.Errorf("postgres: spending an invite: %w", err)
+	}
+	return nil
+}
+
+// RecordInviteUser writes who spent an invite. Provenance and not a gate:
+// used_at is the spent marker, and deleting an account nulls used_by.
+func (s AuthStore) RecordInviteUser(ctx context.Context, hash []byte, travellerID string) error {
+	if _, err := s.DB.ExecContext(ctx, `
+		UPDATE invite_codes SET used_by = $2 WHERE code_hash = $1`,
+		hash, travellerID); err != nil {
+		return fmt.Errorf("postgres: recording who spent an invite: %w", err)
 	}
 	return nil
 }

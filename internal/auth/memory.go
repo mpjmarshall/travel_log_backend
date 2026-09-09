@@ -253,7 +253,7 @@ func (m *Memory) AcceptInvite(code string) {
 	m.standing[string(HashInvite(code))] = true
 }
 
-func (m *Memory) ClaimInvite(_ context.Context, hash []byte, _ string) error {
+func (m *Memory) SpendInvite(_ context.Context, hash []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.standing[string(hash)] {
@@ -264,6 +264,10 @@ func (m *Memory) ClaimInvite(_ context.Context, hash []byte, _ string) error {
 		return ErrInviteSpent
 	}
 	m.invites[string(hash)] = true
+	return nil
+}
+
+func (m *Memory) RecordInviteUser(_ context.Context, _ []byte, _ string) error {
 	return nil
 }
 
