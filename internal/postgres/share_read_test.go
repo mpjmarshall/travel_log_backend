@@ -1,5 +1,5 @@
 // The three row rules, against a real PostgreSQL where a row either exists or
-// does not (docs/public-envelope.md §5).
+// does not (docs/PUBLIC-ENVELOPE.md §5).
 package postgres
 
 import (
