@@ -2,13 +2,25 @@
 
 ## Before exploring, read this
 
-**`CLAUDE.md`, at the repo root.** It is the context document, it is long
-(~6,600 lines here, ~3,000 in the client), and it is deliberately the single
-authority. Read `TODO.md` next for what is open.
+**`CLAUDE.md`, at the repo root — the MAP.** Under 12 KB, and it describes the
+system as it is today: the ground rules, the package graph, the four
+load-bearing designs, how authentication works, and the environment. Read it
+first and read all of it. `scripts/check-record.py` fails the gate if it grows,
+because it reached 414 KB once by being both things at once.
 
-**There is no `CONTEXT.md` and no `docs/adr/`, and neither should be created.**
-The skills' default layout expects both; this project resolved the same need
-differently and earlier, and adding them would split the record.
+**`docs/journal/` — the RECORD.** 38 sections, moved out of `CLAUDE.md`
+verbatim and numbered by their position, which is what dates them. It is
+append-only and contradicts itself by design: each section says what was true
+when it was written. Do not edit a section here. When the map and the journal
+disagree, the map is right about the code and the journal is right about the
+reasoning.
+
+Then `TODO.md` for what is open.
+
+**There is still no `CONTEXT.md` and no `docs/adr/`, and neither should be
+created.** The skills' default layout expects both; the map/journal split
+resolves the same need and adding either would make a third place for a
+decision to live.
 
 ## Where each kind of claim already lives
 
@@ -20,7 +32,8 @@ surface would make it worse.
 
 | kind of claim | its home |
 |---|---|
-| what was decided, and what was declined | `CLAUDE.md`, 'Decisions taken' / 'Decisions deferred' |
+| how the system works today | `CLAUDE.md`, the map |
+| what was decided, what was declined, and what it was measured against | `docs/journal/`, in the section for the step that decided it |
 | what is open | `TODO.md`, as a checkbox with its evidence |
 | a measurement at a stated commit | `docs/EVIDENCE.md` |
 | a ruling with its reasoning | `docs/rulings-v3-pending.json` (DEC-nn) |

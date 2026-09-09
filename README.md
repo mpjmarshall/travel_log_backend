@@ -70,7 +70,7 @@ From the governing spec, and they are hard:
 - `log/slog`, structured JSON
 - Multi-stage build into `scratch`
 
-Three deliberate divergences are recorded in `CLAUDE.md`: the Go build image, the
+Three deliberate divergences are recorded in `docs/journal/`: the Go build image, the
 `go.mod` directive, and a fourth compose service for object storage.
 
 **PostgreSQL 15 is a hard floor** — the schema uses column-list `ON DELETE SET NULL`,
@@ -134,6 +134,8 @@ four tests that *could not* fail were found that way.
 
 ## Read next
 
-**`CLAUDE.md`** — the record. Conventions, decisions with their costs, and what is
-guarded by nothing. Then `docs/rulings-v3-pending.json`, which overrides the plan
-wherever they disagree, and `docs/HANDOFF.md`.
+**`CLAUDE.md`** — the map: the ground rules, the package graph, the four
+load-bearing designs, how authentication works today, and the environment. Under
+12 KB, and the gate keeps it there. Then `docs/journal/` for the record —
+decisions with their costs, dated by position and never edited — and
+`docs/rulings-v3-pending.json`, which overrides the plan wherever they disagree.
