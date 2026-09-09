@@ -59,10 +59,12 @@ secrets/
 .netrc
 .aws/
 
-# Version control and its history.
+# Version control and its history, and the workflows that drive it. The
+# runner checks the tree out itself; stage 1 compiles cmd/ and internal/.
 .git
 .gitignore
 .dockerignore
+.github/
 
 # Build output. `/api` is what `go build ./...` — the first command of
 # `make check` — leaves in the current directory on every run.

@@ -1,0 +1,78 @@
+# The gate, on a machine. `make check` is the only gate this project has and it
+# has always been manual, so every leg was as fresh as the last time somebody
+# ran it. Nothing here is new work: it is the four commands the Makefile
+# already runs, plus the race detector, which the record says is green by hand
+# and has never been in a gate.
+name: check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: travellog
+          POSTGRES_PASSWORD: travellog
+          POSTGRES_DB: travellog
+        ports:
+          - 5432:5432
+        # `-h 127.0.0.1` AND NOT A BARE pg_isready. Without it the probe asks
+        # the UNIX SOCKET, and the official entrypoint runs a bootstrap server
+        # on the socket only while it finishes initdb — so the check passes
+        # while TCP still refuses. Measured in this repository at VS1-FIXES:
+        # twelve samples healthy-while-refused, against zero with the host.
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U travellog -d travellog"
+          --health-interval 3s
+          --health-timeout 2s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The gate calls scripts/check-comments.py, so a runner without python3
+      # fails at a step that looks like a comment problem.
+      - name: The tools the gate needs
+        run: |
+          go version
+          python3 --version
+          gofmt --help >/dev/null 2>&1 || true
+
+      # THE DATABASE TIER MUST RUN, NOT SKIP. internal/postgres fails closed
+      # without this variable and TRAVELLOG_SKIP_DB is the explicit opt-out; a
+      # CI that sets it is a green badge over an unrun half of the suite. It is
+      # deliberately not set anywhere in this file.
+      - name: make check
+        env:
+          TEST_DATABASE_URL: postgres://travellog:travellog@127.0.0.1:5432/travellog?sslmode=disable
+        run: make check
+
+      # Not part of `make check` by decision — the gate stays fast and
+      # Docker-free. The limiter's lost update is caught without it because the
+      # count comes out wrong; the DATA RACE itself is only ever reported here.
+      - name: go test -race
+        env:
+          TEST_DATABASE_URL: postgres://travellog:travellog@127.0.0.1:5432/travellog?sslmode=disable
+        run: |
+          go test -race -count=2 \
+            ./internal/httpx/ ./internal/auth/ ./internal/httpapi/ \
+            ./internal/admin/ ./cmd/api/
