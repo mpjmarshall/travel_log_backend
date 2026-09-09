@@ -25,7 +25,7 @@ import (
 // Large enough that the fixture bytes fit.
 const testMediaMaxBytes = int64(1 << 20)
 
-// fakeMedia is media_objects, and it honours's two rules the real statement
+// fakeMedia is media_objects, and it honours the two rules the real statement
 // honours.
 type fakeMedia struct {
 	mu       sync.Mutex

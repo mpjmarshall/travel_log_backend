@@ -171,7 +171,7 @@ func TestRuntimeImageEntrypointIsTheBinary(t *testing.T) {
 	}
 }
 
-// TestRuntimeImageCarriesTheCABundle guards's first scratch compensation as
+// TestRuntimeImageCarriesTheCABundle guards the first scratch compensation as
 // an artefact.
 func TestRuntimeImageCarriesTheCABundle(t *testing.T) {
 	requireDocker(t)

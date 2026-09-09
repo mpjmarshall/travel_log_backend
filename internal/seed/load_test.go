@@ -396,8 +396,8 @@ func rowCounts(t *testing.T, db *sql.DB) map[string]int {
 	return out
 }
 
-// documentDifferences renders's first n places where two documents
-// disagree, by path.
+// alignByID sorts every top-level list by id, so a positional diff compares
+// the same entity on both sides rather than travel order against id order.
 func alignByID(doc logbook.Document) logbook.Document {
 	out := doc
 	out.Trips = sortedCopy(doc.Trips, func(v logbook.Trip) string { return v.ID })
@@ -423,6 +423,8 @@ func idsOf[T any](in []T, id func(T) string) []string {
 	return out
 }
 
+// documentDifferences renders the first n places where two documents
+// disagree, by path.
 func documentDifferences(t *testing.T, want, got logbook.Document, n int) []string {
 	t.Helper()
 	return differences(t, toAny(t, want), toAny(t, got), "logbook", n)

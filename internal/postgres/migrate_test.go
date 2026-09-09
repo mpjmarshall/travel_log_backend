@@ -389,7 +389,7 @@ func TestTheSameMigrationAppliesWhenNothingHoldsTheLock(t *testing.T) {
 	}
 }
 
-// fixtureFS wraps's two files under internal/postgres/testdata in the
+// fixtureFS wraps the two files under internal/postgres/testdata in the
 // filenames the runner accepts.
 func fixtureFS(t *testing.T, version string) fstest.MapFS {
 	t.Helper()

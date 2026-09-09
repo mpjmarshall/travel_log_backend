@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The mechanism that keeps's three hand-written bodies honest.
+// The mechanism that keeps the three hand-written bodies honest.
 func TestThePrebuiltBodiesEqualWhatTheEncoderProduces(t *testing.T) {
 	for _, c := range []Code{CodeTimeout, CodeInternal, CodeUnsupportedRoute} {
 		rec := httptest.NewRecorder()

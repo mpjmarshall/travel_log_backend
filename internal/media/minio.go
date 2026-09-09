@@ -41,7 +41,7 @@ type MinIO struct {
 
 var _ Store = (*MinIO)(nil)
 
-// New builds's two clients this package needs.
+// New builds the two clients this package needs: one for each address.
 func New(cfg Config) (*MinIO, error) {
 	if strings.TrimSpace(cfg.Bucket) == "" {
 		return nil, errors.New("media: no bucket name")
