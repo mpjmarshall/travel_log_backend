@@ -57,6 +57,10 @@ type photonAnswer struct {
 	} `json:"features"`
 }
 
+// language asks Photon for English names. Without it a place answers in its
+// own script: Kyoto came back only as 京都市, and was stored that way.
+const language = "en"
+
 // Search answers the places matching q, or an error. An empty query asks
 // nobody: it would spend somebody else's quota to answer nothing.
 func (p *Photon) Search(ctx context.Context, q string, limit int) ([]City, error) {
@@ -68,6 +72,7 @@ func (p *Photon) Search(ctx context.Context, q string, limit int) ([]City, error
 	ask := p.base + "/api/?" + url.Values{
 		"q":     {q},
 		"limit": {strconv.Itoa(limit)},
+		"lang":  {language},
 	}.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ask, nil)

@@ -107,6 +107,23 @@ func TestTheLimitIsPassedOn(t *testing.T) {
 	}
 }
 
+func TestNamesAreAskedForInEnglish(t *testing.T) {
+	var asked string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			asked = r.URL.Query().Get("lang")
+			_, _ = w.Write([]byte(`{"features":[]}`))
+		}))
+	t.Cleanup(server.Close)
+
+	_, _ = geocode.NewPhoton(server.URL, "t/1", server.Client()).
+		Search(context.Background(), "Kyoto", 5)
+	if asked != "en" {
+		t.Errorf("lang reached the geocoder as %q, want en: without it Kyoto "+
+			"answers only as 京都市", asked)
+	}
+}
+
 func TestASlowGeocoderDoesNotHangTheRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
